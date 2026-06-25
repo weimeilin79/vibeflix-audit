@@ -1,104 +1,177 @@
+"""Sourcing Orchestrator — ADK 2.0 graph Workflow (the coordinator / router).
+
+Graph shape::
+
+    START -> ingest -> ( brand_style ‖ ip_counsel ‖ storyline )
+                     -> merge (JoinNode) -> compile_ui
+                     -> sourcing_gate (HITL) -> finalize
+
+`ingest` normalizes the audit request and seeds workflow state; the three
+domain LlmAgents fan out in parallel (each calling its MCP tools); a JoinNode
+fans their structured reports back in; `compile_ui` assembles the A2UI canvas
+payload; `sourcing_gate` is a human-in-the-loop interrupt that only triggers
+when the requested volume exceeds the vendor cap.
+"""
+
 import json
-from agents.brand_style.agent import BrandStyleComplianceAgent
-from agents.ip_counsel.agent import IPCounselAgent
-from agents.storyline.agent import FranchiseStorylineAgent
+import os
 
-# In a real environment: from google.adk.orchestrators.coordinator import Coordinator
-# SourcingOrchestrator acts as the Graph coordinator routing details parallelly.
+from dotenv import load_dotenv
+from pydantic import BaseModel
+from google.genai import types
 
-class SourcingOrchestrator:
-    def __init__(self):
-        self.style_agent = BrandStyleComplianceAgent()
-        self.legal_agent = IPCounselAgent()
-        self.storyline_agent = FranchiseStorylineAgent()
+# Load the orchestrator's Vertex AI / project configuration from its local .env.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-    def execute_workflow(self, payload: dict) -> dict:
-        """
-        Runs the multi-agent execution pipeline:
-        1. Parse design elements via CV (mcp-vision-analyzer)
-        2. Brand Style agent checks typography compliance
-        3. Legal IP agent checks exclusivity rights and clearance
-        4. Franchise Storyline agent checks scripts, canon lore, and spoiler embargoes
-        5. Orchestrator invokes mcp-ui-renderer tool schema to display dynamic views
-        """
-        image_path = payload.get("image_path", "grogu_mockup_box.png")
-        target_market = payload.get("target_market", "North America")
-        volume = payload.get("volume", 15000)
+from google.adk.workflow import Workflow, JoinNode, node
+from google.adk.agents.context import Context
+from google.adk.events.event import Event
+from google.adk.events.request_input import RequestInput
 
-        # 1. Parse mockup design elements
-        parsed_data = {
-            "status": "success",
-            "image_file": image_path,
-            "detected_logos": ["star_wars_logo"],
-            "extracted_text": [
-                {"text": "STAR WARS", "font": "Outfit-Bold", "color": "#10b981"},
-                {"text": "THE CHILD", "font": "SpaceGrotesk" if target_market == "North America" else "Outfit", "color": "#ffffff"}
-            ]
+from agents.brand_style.agent import brand_style_agent
+from agents.ip_counsel.agent import ip_counsel_agent
+from agents.storyline.agent import storyline_agent
+
+# Authorized primary-vendor ceiling — mirrors mcp_market.check_sku_volume_caps
+# (`authorized_max_skus`). Volume above this triggers the HITL sourcing gate.
+VENDOR_VOLUME_CAP = 25000
+SECONDARY_ADDENDUM = "SC-7798-EU"
+
+
+class AuditInput(BaseModel):
+    """START input schema — parsed from the user message JSON."""
+
+    image_path: str = "grogu_mockup_box.png"
+    target_market: str = "North America"
+    volume: int = 15000
+
+
+def ingest(node_input: AuditInput) -> Event:
+    """Capture the request, seed shared state, and emit a brief for the agents."""
+    brief = (
+        f"Audit mockup '{node_input.image_path}' for the {node_input.target_market} "
+        f"market at a production volume of {node_input.volume} units."
+    )
+    return Event(
+        output=brief,
+        state={
+            "image_path": node_input.image_path,
+            "target_market": node_input.target_market,
+            "volume": node_input.volume,
+        },
+    )
+
+
+# Fan-in: collects the three agents' outputs into a dict keyed by agent name.
+merge = JoinNode(name="merge_reports")
+
+
+def compile_ui(ctx: Context, node_input: dict) -> Event:
+    """Assemble the A2UI canvas payload from the three merged agent reports."""
+    style_report = node_input.get("brand_style_compliance_agent", {})
+    legal_report = node_input.get("ip_counsel_agent", {})
+    storyline_report = node_input.get("franchise_storyline_agent", {})
+
+    target_market = ctx.state.get("target_market", "North America")
+    volume = ctx.state.get("volume", 0)
+    blocked = legal_report.get("status") == "blocked"
+
+    a2ui_payload = {
+        "a2ui_version": "2.0",
+        "canvas_layout": {
+            "container": "procurement_audit_viewport",
+            "components": [
+                {
+                    "type": "remediation_form",
+                    "fields": [
+                        {
+                            "id": "target_market",
+                            "value": target_market,
+                            "status": "blocked" if blocked else "clear",
+                        },
+                        {"id": "production_volume", "value": volume},
+                    ],
+                }
+            ],
+        },
+    }
+
+    aggregate = {
+        "style_report": style_report,
+        "legal_report": legal_report,
+        "storyline_report": storyline_report,
+        "a2ui_payload": a2ui_payload,
+    }
+    return Event(output=aggregate, state={"audit_result": aggregate})
+
+
+@node(name="sourcing_gate", rerun_on_resume=True)
+async def sourcing_gate(ctx: Context, node_input: dict):
+    """Human-in-the-loop sourcing-cap override (Scenario 3).
+
+    Passes through when volume is within the vendor cap. Otherwise it interrupts
+    and asks the user to choose: 'A' to split the excess to a secondary addendum
+    contract, or 'B' to cap at the vendor limit and cancel the excess.
+    """
+    result = dict(node_input)
+    volume = int(ctx.state.get("volume", 0))
+
+    if volume <= VENDOR_VOLUME_CAP:
+        result["sourcing"] = {
+            "status": "auto_finalized",
+            "volume": volume,
+            "cap": VENDOR_VOLUME_CAP,
         }
+        yield Event(output=result)
+        return
 
-        # 2. Brand style checks
-        style_guidelines = {
-            "official_name": "The Child (Grogu)",
-            "allowed_fonts": ["Outfit", "Inter"]
-        }
-        style_report = self.style_agent.analyze_mockup(parsed_data, style_guidelines)
-
-        # 3. Legal IP clearances
-        exclusivity_data = {
-            "has_conflict": True if target_market == "North America" else False,
-            "conflicting_partner": "Hasbro Inc." if target_market == "North America" else None
-        }
-        customs_data = {"registration_status": "Valid"}
-        ecom_data = {"status": "Secure - No leaks detected."}
-        
-        legal_report = self.legal_agent.evaluate_clearance(
-            character_id="grogu",
-            territory=target_market,
-            exclusivity_data=exclusivity_data,
-            customs_data=customs_data,
-            ecom_data=ecom_data
+    excess = volume - VENDOR_VOLUME_CAP
+    if not ctx.resume_inputs:
+        yield RequestInput(
+            interrupt_id="sourcing_cap_override",
+            message=(
+                f"Production volume {volume} exceeds the primary vendor cap "
+                f"{VENDOR_VOLUME_CAP}. Choose 'A' to split the excess {excess} "
+                f"units to Addendum Contract {SECONDARY_ADDENDUM}, or 'B' to cap "
+                f"at {VENDOR_VOLUME_CAP} units and cancel the excess."
+            ),
+            response_schema={"type": "string", "enum": ["A", "B"]},
         )
+        return
 
-        # 4. Sourcing script & storyline check (The Storyline Agent Node)
-        storyline_report = self.storyline_agent.verify_storyline_compliance(
-            character_id="grogu",
-            design_concept="Grogu in hover-pram"
-        )
-
-        # 5. UI Painting display JSON schema generation (Invoked directly by the Orchestrator)
-        a2ui_payload = self.compile_ui_layout(style_report, legal_report, storyline_report, target_market, volume)
-
-        return {
-            "style_report": style_report,
-            "legal_report": legal_report,
-            "storyline_report": storyline_report,
-            "a2ui_payload": a2ui_payload
+    choice = str(ctx.resume_inputs.get("sourcing_cap_override", "B")).strip().upper()
+    if choice == "A":
+        result["sourcing"] = {
+            "status": "split_addendum",
+            "primary_units": VENDOR_VOLUME_CAP,
+            "addendum_contract": SECONDARY_ADDENDUM,
+            "addendum_units": excess,
         }
-
-    def compile_ui_layout(self, style_report: dict, legal_report: dict, storyline_report: dict, target_market: str, volume: int) -> dict:
-        """
-        Orchestration Display Layer: Assembles the layout payload using mcp-ui-renderer tool models.
-        """
-        components = [
-            {
-                "type": "remediation_form",
-                "fields": [
-                    {
-                        "id": "target_market",
-                        "value": target_market,
-                        "status": "blocked" if legal_report.get("status") == "blocked" else "clear"
-                    },
-                    {
-                        "id": "production_volume",
-                        "value": volume
-                    }
-                ]
-            }
-        ]
-        return {
-            "a2ui_version": "2.0",
-            "canvas_layout": {
-                "container": "procurement_audit_viewport",
-                "components": components
-            }
+    else:
+        result["sourcing"] = {
+            "status": "capped",
+            "primary_units": VENDOR_VOLUME_CAP,
+            "cancelled_units": excess,
         }
+    yield Event(output=result)
+
+
+def finalize(node_input: dict):
+    """Emit a human-readable summary for the UI and the final result payload."""
+    summary = json.dumps(node_input, indent=2)
+    yield Event(content=types.Content(role="model", parts=[types.Part.from_text(text=summary)]))
+    yield Event(output=node_input)
+
+
+root_agent = Workflow(
+    name="sourcing_orchestrator",
+    input_schema=AuditInput,
+    edges=[
+        ("START", ingest),
+        (ingest, (brand_style_agent, ip_counsel_agent, storyline_agent)),
+        ((brand_style_agent, ip_counsel_agent, storyline_agent), merge),
+        (merge, compile_ui),
+        (compile_ui, sourcing_gate),
+        (sourcing_gate, finalize),
+    ],
+)

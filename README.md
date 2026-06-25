@@ -54,19 +54,30 @@ npm run dev
 
 The UI sandbox will be active at [http://localhost:3000](http://localhost:3000).
 
-### 2. Multi-Agent Backend (Python/FastAPI)
+### 2. Multi-Agent Backend (Python/FastAPI + ADK 2.0)
 
-Set up a virtual environment, install requirements, and run the server:
+The agents are built on the **ADK 2.0 graph Workflow API**, which is pre-GA, so
+dependencies must be installed with prereleases allowed. ADK 2.0 requires
+**Python ≥ 3.11**. Set up a virtual environment, install requirements, and run
+the server **from the repository root** (the backend uses absolute `agents.*`
+package imports):
 
 ```bash
-cd ../agents
 python3 -m venv venv
 source venv/bin/activate
-uv pip install -r requirements.txt || pip install -r requirements.txt
-python app.py
+uv pip install --prerelease=allow -r agents/requirements.txt || pip install --pre -r agents/requirements.txt
+python -m agents.app
 ```
 
-Runs on port `8000`.
+Runs on port `8000`. Gemini-backed agents need credentials — set
+`GOOGLE_API_KEY` (AI Studio) or `GOOGLE_GENAI_USE_VERTEXAI=1` with
+`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (Vertex AI) in the environment.
+
+**Workflow graph:** `START → ingest → (brand_style ‖ ip_counsel ‖ storyline) →
+merge → compile_ui → sourcing_gate (HITL) → finalize`. Each domain agent is an
+`LlmAgent` that calls its MCP server(s) as tools. When production volume exceeds
+the vendor cap (25,000), `sourcing_gate` interrupts; resolve it via
+`POST /api/audit/resume` with `{"session_id": ..., "choice": "A"|"B"}`.
 
 ### 3. MCP Servers
 

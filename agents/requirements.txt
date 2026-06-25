@@ -1,5 +1,10 @@
+# ADK 2.0 Workflow API is pre-GA — install with prereleases allowed, e.g.:
+#   pip install --pre -r requirements.txt
+#   uv pip install --prerelease=allow -r requirements.txt
 fastapi>=0.110.0
 uvicorn>=0.28.0
 pydantic>=2.6.0
+python-dotenv>=1.0.0
 mcp>=0.1.0
-google-adk>=2.0.0
+google-adk>=2.0.0a1
+google-genai>=1.0.0
