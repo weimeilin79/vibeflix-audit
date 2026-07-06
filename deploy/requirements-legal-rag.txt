@@ -1,0 +1,14 @@
+# Deployment-only requirements — provisioning the Legal RAG corpus.
+#
+# Used by deploy/setup_legal_rag.{sh,py} to CREATE the Vertex AI RAG Engine corpus
+# (rag_managed_vertex_vector_search) and IMPORT resource/legal/docs/ into it, via the
+# Agent Platform 2.0 SDK.
+#
+# NOT needed at runtime: the legal agent RETRIEVES via a plain REST :retrieveContexts
+# call signed with ADC (google.auth only — already present), so the agent image stays
+# lean. Install this only where you run the one-time setup script (a venv / CI job):
+#     pip install -r deploy/requirements-legal-rag.txt
+#
+google-cloud-aiplatform>=1.71.0   # provides the `agentplatform` 2.0 rag client
+pandas>=2.0                        # required by agentplatform's rag module
+python-dotenv>=1.0                 # setup_legal_rag.py loads config from deploy/.env

@@ -720,23 +720,27 @@ export default function App() {
                 {/* ADK 2.0 Mesh Coordination Card */}
                 <div className="canvas-panel" style={{ flex: 1 }}>
                   <h3 className="panel-title" style={{ fontSize: '0.95rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                    <GitBranch size={16} style={{ color: 'var(--accent-blue)' }} /> Parallel Multi-Agent Auditing Mesh (ADK 2.0)
+                    <GitBranch size={16} style={{ color: 'var(--accent-blue)' }} /> Multi-Agent Auditing Mesh (ADK 2.0)
                   </h3>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three autonomous compliance agents running concurrently:
+                    Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three domain compliance agents running concurrently — and Vendor &amp; Licensing hands off to a <strong>Legal Clearance agent</strong>:
                   </p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginTop: '0.5rem' }}>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: '#1a73e8', display: 'block', marginBottom: '0.2rem' }}>🎨 Style Agent</strong>
                       Uses CV tool models to verify fonts, layout parameters, and swatch compliance instantly.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: '#ea4335', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal IP Agent</strong>
-                      Scans exclusivity matrices and region contracts to prevent infringement conflicts.
+                      <strong style={{ color: '#ea4335', display: 'block', marginBottom: '0.2rem' }}>⚖️ Vendor &amp; Licensing</strong>
+                      Scans exclusivity + trademark, recommends eligible vendors, and onboards new ones.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: '#34a853', display: 'block', marginBottom: '0.2rem' }}>🎬 Storyline Agent</strong>
                       Audits design assets against canonical scripts and active release timeline embargoes.
+                    </div>
+                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                      <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance</strong>
+                      Vendor &amp; Licensing hands off to it on onboarding. Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
                     </div>
                   </div>
                 </div>
@@ -757,81 +761,92 @@ export default function App() {
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', margin: '0.5rem 0' }}>
                   {/* Inserted SVG Workflow Diagram */}
-                  <svg width="100%" height="210" viewBox="0 0 800 210" style={{ background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--glass-border)', padding: '0.5rem' }}>
+                  <svg width="100%" height="230" viewBox="0 0 820 270" style={{ background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--glass-border)', padding: '0.5rem' }}>
                     <defs>
                       <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                         <path d="M 0 2 L 10 5 L 0 8 z" fill="var(--text-muted)" />
                       </marker>
                     </defs>
 
-                    {/* Background paths */}
-                    <path d="M 120 105 L 250 50" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 120 105 L 250 105" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 120 105 L 250 160" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
+                    {/* edges (solid) */}
+                    <path d="M 102 134 L 165 35" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 102 134 L 165 102" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 102 134 L 165 200" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 313 35 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 313 102 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 313 200 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 538 119 L 578 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    <path d="M 686 119 L 718 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                    {/* legal hand-off from Vendor & Licensing (dashed) */}
+                    <path d="M 245 122 L 258 128" stroke="var(--accent-purple)" strokeWidth="1.5" fill="none" strokeDasharray="3 3" markerEnd="url(#arrow)" />
 
-                    <path d="M 390 50 L 520 105" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 390 105 L 520 105" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 390 160 L 520 105" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
+                    {/* animated active flow */}
+                    <path d="M 102 134 L 165 102" stroke="#1a73e8" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                    <path d="M 313 102 L 420 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                    <path d="M 538 119 L 578 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                    <path d="M 686 119 L 718 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
 
-                    <path d="M 640 105 L 710 105" stroke="var(--glass-border)" strokeWidth="2" fill="none" markerEnd="url(#arrow)" />
-
-                    {/* Dotted paths representing active flow */}
-                    <path d="M 120 105 L 250 50" stroke="#1a73e8" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 120 105 L 250 105" stroke="#1a73e8" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 120 105 L 250 160" stroke="#1a73e8" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-
-                    <path d="M 390 50 L 520 105" stroke="#34a853" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 390 105 L 520 105" stroke="#34a853" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 390 160 L 520 105" stroke="#34a853" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-
-                    <path d="M 640 105 L 710 105" stroke="#34a853" strokeWidth="2" fill="none" strokeDasharray="6 6" className="animated-flow" />
-
-                    {/* Node 1: Ingestion */}
-                    <g transform="translate(30, 70)">
-                      <rect width="90" height="70" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.08))' }} />
-                      <text x="45" y="28" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Mockup Ingestion</text>
-                      <text x="45" y="44" fill="var(--accent-purple)" fontSize="8" fontWeight="bold" textAnchor="middle">Ingest assets</text>
-                      <text x="45" y="58" fill="var(--text-muted)" fontSize="7" textAnchor="middle">Computer Vision</text>
+                    {/* Ingestion */}
+                    <g transform="translate(12, 105)">
+                      <rect width="90" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
+                      <text x="45" y="25" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold" textAnchor="middle">Mockup Ingestion</text>
+                      <text x="45" y="39" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Ingest assets</text>
+                      <text x="45" y="51" fill="var(--text-muted)" fontSize="7" textAnchor="middle">Computer Vision</text>
                     </g>
 
-                    {/* Node 2A: Style Agent */}
-                    <g transform="translate(250, 22)">
-                      <rect width="140" height="46" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">Brand Style Agent</text>
-                      <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">Verify fonts, hex swatches</text>
-                      <circle cx="130" cy="23" r="4" fill="#34a853" />
+                    {/* Brand Style */}
+                    <g transform="translate(165, 15)">
+                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎨 Brand Style</text>
+                      <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">fonts · swatches · medium</text>
+                      <circle cx="138" cy="12" r="3.5" fill="#34a853" />
                     </g>
 
-                    {/* Node 2B: Legal IP */}
-                    <g transform="translate(250, 82)">
-                      <rect width="140" height="46" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">Legal IP Agent</text>
-                      <text x="10" y="32" fill="#ea4335" fontSize="7" fontWeight="bold">Territory & contracts checks</text>
-                      <circle cx="130" cy="23" r="4" fill="#fbbc05" />
+                    {/* Vendor & Licensing */}
+                    <g transform="translate(165, 82)">
+                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">⚖️ Vendor &amp; Licensing</text>
+                      <text x="10" y="32" fill="#ea4335" fontSize="7" fontWeight="bold">exclusivity · trademark · vendors</text>
+                      <circle cx="138" cy="12" r="3.5" fill="#fbbc05" />
                     </g>
 
-                    {/* Node 2C: Storyline Lore */}
-                    <g transform="translate(250, 142)">
-                      <rect width="140" height="46" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">Storyline Lore Agent</text>
-                      <text x="10" y="32" fill="#34a853" fontSize="7" fontWeight="bold">Script spoiler leak checks</text>
-                      <circle cx="130" cy="23" r="4" fill="#34a853" />
+                    {/* Legal Clearance — hangs off Vendor & Licensing */}
+                    <g transform="translate(198, 128)">
+                      <rect width="120" height="38" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
+                      <text x="10" y="17" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance</text>
+                      <text x="10" y="30" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
                     </g>
 
-                    {/* Node 3: Orchestrator & HITL Decision */}
-                    <g transform="translate(520, 70)">
-                      <rect width="120" height="70" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
-                      <text x="60" y="24" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Remediation Mesh</text>
-                      <text x="60" y="40" fill="var(--color-warning)" fontSize="8" fontWeight="bold" textAnchor="middle">& HITL Decision</text>
-                      <text x="60" y="56" fill="var(--text-muted)" fontSize="7" textAnchor="middle" >Option A / B override</text>
+                    {/* Storyline */}
+                    <g transform="translate(165, 180)">
+                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎬 Storyline Lore</text>
+                      <text x="10" y="32" fill="#34a853" fontSize="7" fontWeight="bold">canon · spoiler embargo</text>
+                      <circle cx="138" cy="12" r="3.5" fill="#34a853" />
                     </g>
 
-                    {/* Node 4: Sourcing Contract Dispatch */}
-                    <g transform="translate(710, 70)">
-                      <rect width="80" height="70" rx="6" fill="var(--bg-card)" stroke="var(--color-success)" strokeWidth="2" />
-                      <text x="40" y="28" fill="var(--text-dark)" fontSize="10" fontWeight="bold" textAnchor="middle">Sourcing</text>
-                      <text x="40" y="44" fill="var(--color-success)" fontSize="8" fontWeight="bold" textAnchor="middle">Contracts Issued</text>
-                      <text x="40" y="58" fill="var(--text-muted)" fontSize="7" textAnchor="middle">PO Dispatched</text>
+                    {/* Orchestrator */}
+                    <g transform="translate(420, 90)">
+                      <rect width="118" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
+                      <text x="59" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Orchestrator</text>
+                      <text x="59" y="37" fill="var(--color-warning)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Remediation + HITL</text>
+                      <text x="59" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">A / B override</text>
+                    </g>
+
+                    {/* UI Renderer (A2UI) */}
+                    <g transform="translate(578, 90)">
+                      <rect width="108" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
+                      <text x="54" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer</text>
+                      <text x="54" y="37" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
+                      <text x="54" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">reports → surface</text>
+                    </g>
+
+                    {/* Sourcing */}
+                    <g transform="translate(718, 90)">
+                      <rect width="88" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-success)" strokeWidth="2" />
+                      <text x="44" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Sourcing</text>
+                      <text x="44" y="37" fill="var(--color-success)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Contracts</text>
+                      <text x="44" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">PO dispatched</text>
                     </g>
                   </svg>
                 </div>

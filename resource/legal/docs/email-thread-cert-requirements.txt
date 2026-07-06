@@ -1,0 +1,24 @@
+From: Tomás Herrera <tomas.herrera@vibeflix.example>
+To: Legal Ops <legal-ops@vibeflix.example>
+Subject: RE: RE: FW: cert requirements for plush??
+Date: Fri, 8 Mar 2024 16:42
+
+> > > Does anyone actually know what certs a PLUSH product needs before we can execute?
+> > For toys in general it's ASTM F963 (US) and EN71 (EU). Plush probably CPSIA too?
+> Actually CPSIA is for the hard-goods / vinyl stuff. Plush is ASTM F963 + EN71. Not CPSIA.
+
+Confirming with the lab but I'm 90% sure Priya is right:
+
+  - PLUSH            -> ASTM F963 + EN71
+  - VINYL / ACTION   -> the full set: ASTM F963 + EN71 + CPSIA
+  - APPAREL          -> totally different, that's OEKO-TEX (textiles), not the toy standards
+
+If a required cert is "missing" we do NOT block the whole thing — Legal just *requests* it
+and in our environment it's granted same-day (it's basically a formality). The one that
+actually stops us cold is the licensee's safety-certification ID, but that's a different
+issue, ask Marcus.
+
+— T
+
+--
+Tomás Herrera · Legal Ops · ext. 4471

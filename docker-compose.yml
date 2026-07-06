@@ -126,7 +126,17 @@ services:
       A2A_PROTOCOL: http
       PORT: "8005"
       MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
-    volumes: *gcloud-adc
+      # Legal knowledge base (search_legal_docs). Local keyword retriever over the
+      # mounted docs by default; set RAG_CORPUS (from deploy/setup_legal_rag.py) to use
+      # Vertex AI RAG Engine instead.
+      LEGAL_DOCS_DIR: /app/legal-docs
+      # Vertex AI RAG Engine corpus (from deploy/setup_legal_rag.py). Set → search_legal_docs
+      # uses Vertex retrieval; unset → the local keyword retriever over LEGAL_DOCS_DIR.
+      RAG_CORPUS: ${RAG_CORPUS:-}
+      RAG_LOCATION: ${RAG_LOCATION:-us-central1}
+    volumes:
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - ./resource/legal/docs:/app/legal-docs:ro
     depends_on: [mcp_licensing]
 
   storyline:

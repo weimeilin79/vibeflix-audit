@@ -27,6 +27,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "legal-clearance"
 
+# RAG over the scattered legal "tribal knowledge" docs (resource/legal/docs). Local
+# keyword retriever by default; Vertex AI RAG Engine when RAG_CORPUS is set.
+try:
+    from agents.legal.legal_kb import search_legal_docs
+except ImportError:  # when loaded from the agent dir (e.g. adk web)
+    from legal_kb import search_legal_docs
+
 
 def _ref(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:4].upper()}"
@@ -98,6 +105,8 @@ legal_agent = LlmAgent(
         skill_toolset.SkillToolset(
             skills=[load_skill_from_dir(_SKILL_DIR)],
             additional_tools=[
+                # RAG the (undefined) process out of the scattered legal docs.
+                search_legal_docs,
                 draft_license_amendment,
                 verify_certifications,
                 request_certification,

@@ -1,0 +1,38 @@
+legal-stuff-dont-lose-this.txt
+(Marcus Bell's handoff dump — I'm leaving the team, please actually read this)
+2024-12-03
+
+Nobody ever wrote down the real end-to-end legal workflow, so here it is from memory
+before it walks out the door with me:
+
+CONTEXT
+  - Vendor Clearance onboards a vendor to a NEW product category, then calls the Legal
+    agent to clear + execute the licensing contract.
+
+THE TWO THINGS LEGAL DOESN'T HAVE AND MUST GO GET
+  (a) ROYALTY TIER  -> ASK THE VENDOR CLEARANCE AGENT. it's on the vendor record
+      (annual-volume band). do not guess, Finance will find you.
+  (b) SAFETY CERT ID -> ASK THE USER / licensee. this one is special: it is NOT in any
+      vendor record, a HUMAN has to type it in, and the question propagates all the way
+      back UP to whoever started the audit, then the answer comes back down.
+      ^^^ this is the #1 thing that breaks onboardings. everyone forgets it exists.
+
+THE ACTUAL SEQUENCE (once it has both facts)
+  license amendment (LA-###)
+    -> certifications (request any that are missing; granted same-day in our env)
+    -> customs / HS code + recordation
+    -> royalty rate (tier from clearance, rate card from Finance)
+    -> product-liability insurance (USD 5,000,000 — NOT 2M, the 2019 SOP is wrong)
+    -> EXECUTE the contract -> upsert to the registry -> LC-#### number.
+
+WHERE THE "PROCESS" ACTUALLY LIVES (lol)
+  there is no single process doc. it's:
+    - this file
+    - jane's personal checklist
+    - the confluence WIP page (half stale)
+    - ana's royalty rate card v3
+    - sofia's risk/insurance memo (RISK-2022-0047)
+    - kenji's HS code spreadsheet
+    - a cursed 3-year email thread about plush certs
+    - the 2019 SOP that's mostly superseded
+  piece it together. good luck. — M

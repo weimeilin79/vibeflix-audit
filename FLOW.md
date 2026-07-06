@@ -1,7 +1,7 @@
 # Vendor & Licensing Clearance — flow
 
 How an audit flows through the mesh, with a focus on the `vendor_clearance` agent and
-its private `legal` sub-service.
+the `legal` agent it hands off to.
 
 ---
 
@@ -9,7 +9,7 @@ its private `legal` sub-service.
 
 The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ storyline**. The
 `legal` agent is **not** dispatched by the orchestrator and is **not** in readiness —
-it is reachable only *from* `vendor_clearance` (only that service has `LEGAL_A2A_URL`).
+`vendor_clearance` hands off to it (only that service has `LEGAL_A2A_URL`).
 
 ```
                             ┌──────────── app (:8000) ────────────┐
@@ -21,7 +21,7 @@ it is reachable only *from* `vendor_clearance` (only that service has `LEGAL_A2A
    fans out to      │             │ │ clearance  │ │         │ │            │
    these 3          └──┬───────┬──┘ └─┬────┬───┬─┘ └─────────┘ └────────────┘
                        │       │      │    │   │
-             mcp_brand │  mcp_ │ mcp_ │ mcp│   │  A2A  (PRIVATE — only vendor_clearance
+             mcp_brand │  mcp_ │ mcp_ │ mcp│   │  A2A  (hand-off — only vendor_clearance
               _style   │ vision│ lic. │ mkt│   └──────►  has LEGAL_A2A_URL) ────────┐
                                                                                     ▼
                                                               ┌──────────────────────────┐
@@ -93,9 +93,14 @@ three `ClearanceReport.status` values: `cleared` / `blocked` / `needs_input`.
 
 ---
 
-## 3. Inside `legal` (asks for what it's missing, then executes)
+## 3. Inside `legal` (RAG-discovers the process, asks for what it's missing, executes)
 
-Legal always replies with ONE JSON object — `ask_vendor`, `needs_user`, or `done`:
+There is **no defined legal workflow** — the process is scattered across the docs in
+`resource/legal/docs/`. The agent **RAG-discovers** it with **`search_legal_docs`**
+(local keyword retriever by default; Vertex AI RAG Engine when `RAG_CORPUS` is set),
+reconstructing the steps + the two facts it must ask for, and reconciling contradictions
+(e.g. the 2022 risk memo's $5M insurance supersedes the 2019 SOP's $2M). It then replies
+with ONE JSON object — `ask_vendor`, `needs_user`, or `done`:
 
 ```
    receive {vendor, character, category, territory, (royalty tier?), (safety cert?)}
@@ -154,9 +159,10 @@ it left off."
 
 **How the node knows legal is needed (no guessing):** it does NOT rely on the reasoner
 emitting a signal or on string-matching `add_category_approved`. It runs legal when a
-**fact in the event log** says a category was onboarded — the reasoner actually called
-`update_vendor` and the vendor came back `cleared` — OR when we're **resuming a legal
-Q&A** (a `legal_safety_cert` was echoed into the report; see §5 Flow B). Params
+**fact in the event log** says a vendor was onboarded for a category — the reasoner
+actually called **`create_vendor`** (a NEW vendor) or **`update_vendor`** (a NEW category
+on an existing vendor) and the vendor came back `cleared` — OR when we're **resuming a
+legal Q&A** (a `legal_safety_cert` was echoed into the report; see §5 Flow B). Params
 (vendor/character/category/territory) are read from the reasoner's real
 `check_vendor_eligibility` call args. A normal cleared result (no onboarding, no
 pending answer) never triggers legal.
@@ -309,11 +315,11 @@ A2UI panels (`_stream_audit`):
 ```
 {event:"graph", op:"plan",   nodes:[{id,label,run}]}          // all workflows (run + reused)
 {event:"graph", op:"status", id, status}                      // per node, as its panel fills
-{event:"graph", op:"status", id:"legal", parent:"vendor_clearance_agent", status}  // private sub-node
+{event:"graph", op:"status", id:"legal", parent:"vendor_clearance_agent", status}  // legal sub-node
 ```
 
 Graph shape: `Orchestrator → (each workflow)`, plus `vendor_clearance → Legal` when the
-private legal agent acts. Node colors: running (blue, pulsing) · cleared/compliant
+legal agent acts. Node colors: running (blue, pulsing) · cleared/compliant
 (green) · blocked (red) · needs_input (amber) · reused (dashed grey). It's **plan-driven**
 like the panels — adding a workflow to `_AGENTS` makes it appear with no frontend change.
 Verified: plan builds the nodes, each lights up as its agent returns, and the `legal`

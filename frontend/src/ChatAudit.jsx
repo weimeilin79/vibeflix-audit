@@ -257,7 +257,9 @@ export default function ChatAudit() {
   // transcript entry, so a re-run appends below instead of overwriting the last.
   const runStream = async (request, fallbackPhase) => {
     setBusy(true); setPhase('running'); setFields(null);
-    setGraph({ orchestrator: { id: 'orchestrator', label: 'Orchestrator', status: 'running' } });
+    // Keep prior nodes across a re-run (only orchestrator flips to running); the plan
+    // decides which workflows actually re-run — the rest keep their last state.
+    setGraph((g) => ({ ...(g || {}), orchestrator: { id: 'orchestrator', label: 'Orchestrator', status: 'running' } }));
     const surfaceId = `audit-${++runSeq.current}`;
     push({ role: 'surface', surfaceId });
     try {
@@ -284,8 +286,13 @@ export default function ChatAudit() {
           } else if (d.event === 'graph') {
             if (d.op === 'plan') {
               setGraph((g) => {
-                const next = { orchestrator: (g?.orchestrator) || { id: 'orchestrator', label: 'Orchestrator', status: 'running' } };
-                for (const n of d.nodes) next[n.id] = { id: n.id, label: n.label, parent: 'orchestrator', status: n.run ? 'running' : 'reused' };
+                const next = { ...(g || {}), orchestrator: (g?.orchestrator) || { id: 'orchestrator', label: 'Orchestrator', status: 'running' } };
+                for (const n of d.nodes) {
+                  const prev = next[n.id];
+                  // run → running; not run → keep whatever state it was left in (don't relabel "reused").
+                  next[n.id] = { id: n.id, label: n.label, parent: 'orchestrator',
+                    status: n.run ? 'running' : (prev?.status || 'pending') };
+                }
                 return next;
               });
             } else if (d.op === 'status') {
@@ -345,7 +352,7 @@ export default function ChatAudit() {
   const reset = () => {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
-    setFields(null); setSessionId(null); setPhase('start');
+    setFields(null); setSessionId(null); setPhase('start'); setGraph(null);
   };
   const uploadImage = async (fileObj) => {
     if (!fileObj) return;

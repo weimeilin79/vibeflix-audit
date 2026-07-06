@@ -1,0 +1,14 @@
+#licensing-ops   (Slack export · 2024-01-22)
+
+[09:02] jane.liu: quick q — what royalty do we put for a brand-new vinyl figure vendor?
+[09:03] ana.finance: 12% is the default. but CHECK THE RATE CARD, high-volume bands are lower
+[09:03] ana.finance: Tier 1 (<50k units/yr) = 12%, Tier 2 (50k–250k) = 10%, Tier 3 (>250k) = 8%
+[09:04] jane.liu: and where do i get the vendor's tier / volume band?
+[09:05] ana.finance: from the vendor clearance side — the annual-volume band is on the vendor record
+[09:07] david.okafor: ^^ THIS is why i keep saying the Legal agent should just QUERY vendor
+        clearance for the tier instead of guessing. it already has the data.
+[09:08] priya.nair: also don't forget premium/resin gets a +2% uplift on top of the tier
+[09:10] marcus.bell: friendly reminder the contract CANNOT execute until the licensee gives
+        us the safety-cert ID. i've now asked 3 separate times that we write this down 🙃
+[09:11] jane.liu: lol i just keep it in my own checklist at this point
+[09:12] david.okafor: same. that's the problem.

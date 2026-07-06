@@ -195,13 +195,15 @@ def _tool_call_args(ctx: Context, tool_name: str) -> dict | None:
 
 
 def _needs_legal(ctx: Context, report: dict) -> dict | None:
-    """Legal runs when a category was just onboarded (the reasoner actually called
-    `update_vendor` — a fact in the event log) OR when we're RESUMING a legal Q&A (the
-    user answered legal's question, so the reasoner echoed a `legal_safety_cert` into the
-    report). On the Flow-B resume the category is already added, so `update_vendor` won't
-    recur — the echoed answer is what tells us to re-enter legal. Params come from the
-    reasoner's real `check_vendor_eligibility` call args."""
-    onboarded = _tool_call_args(ctx, "update_vendor") is not None
+    """Legal runs when a vendor was just onboarded for a category — either a NEW vendor
+    (`create_vendor`) or a NEW category on an existing vendor (`update_vendor`), both
+    facts in the event log — OR when we're RESUMING a legal Q&A (the user answered legal's
+    question, so the reasoner echoed a `legal_safety_cert` into the report). On the Flow-B
+    resume the category is already added, so the onboarding tool won't recur — the echoed
+    answer is what re-enters legal. Params come from the reasoner's real
+    `check_vendor_eligibility` call args."""
+    onboarded = (_tool_call_args(ctx, "update_vendor") is not None
+                 or _tool_call_args(ctx, "create_vendor") is not None)
     resuming = bool(report.get("legal_safety_cert"))
     if report.get("status") != "cleared" or not (onboarded or resuming):
         return None

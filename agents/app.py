@@ -9,6 +9,7 @@ human-in-the-loop sourcing gate interrupts; the response then carries
 
 import os
 import json
+import time
 import uuid
 import asyncio
 
@@ -446,7 +447,7 @@ def _legal_graph_event(author: str, report: dict) -> dict | None:
         status = "needs_input"
     else:
         return None
-    return {"event": "graph", "op": "status", "id": "legal", "label": "Legal",
+    return {"event": "graph", "op": "status", "id": "legal", "label": "⚖️ Legal Clearance",
             "parent": author, "status": status}
 
 
@@ -592,13 +593,16 @@ _AGENT_SERVICES = [
 
 
 async def _probe_agent(svc: dict) -> dict:
-    """Fetch an agent's /healthz (reachability + its MCP handshake results)."""
+    """Fetch an agent's /healthz (reachability + its MCP handshake results). Logs the
+    per-agent outcome + latency so you can see exactly which one is down/slow."""
     comp = {"name": svc["name"], "label": svc["label"], "critical": svc.get("critical", True),
             "reachable": False, "ok": False, "mcp": []}
     base = os.environ.get(svc["env"], "").rstrip("/")
     if not base:
         comp["error"] = f"{svc['env']} not set"
+        print(f"[ready] {svc['name']:16} ❌ {comp['error']}", flush=True)
         return comp
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
             resp = await client.get(f"{base}/healthz")
@@ -609,6 +613,15 @@ async def _probe_agent(svc: dict) -> dict:
         comp["ok"] = bool(data.get("ok", False))
     except Exception as e:
         comp["error"] = f"{type(e).__name__}: {str(e)[:140]}"
+    ms = int((time.monotonic() - t0) * 1000)
+    if comp["ok"]:
+        mark = "✅ ok"
+    elif comp["reachable"]:
+        bad_mcp = [m.get("name") for m in comp["mcp"] if not m.get("ok")]
+        mark = f"⚠️  reachable but NOT ok (bad MCP: {bad_mcp or '—'})"
+    else:
+        mark = f"❌ UNREACHABLE ({comp.get('error', '?')})"
+    print(f"[ready] {svc['name']:16} {mark}  [{ms}ms] @ {base}", flush=True)
     return comp
 
 
@@ -620,8 +633,12 @@ async def ready():
     until every critical agent + its MCP servers are healthy. All agents —
     including the ui_renderer — are critical, so any one being down locks the UI.
     """
+    t0 = time.monotonic()
     components = list(await asyncio.gather(*(_probe_agent(s) for s in _AGENT_SERVICES)))
     critical_ok = all(c["ok"] for c in components if c.get("critical", True))
+    down = [c["name"] for c in components if not c["ok"]]
+    print(f"[ready] → {'READY' if critical_ok else 'NOT READY'} in {int((time.monotonic()-t0)*1000)}ms"
+          + (f" · blocking: {down}" if down else ""), flush=True)
     return {"ready": critical_ok, "components": components}
 
 

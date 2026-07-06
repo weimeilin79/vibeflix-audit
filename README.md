@@ -14,17 +14,19 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
    - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
    - **Franchise Storyline & Lore Agent (Lore)**: Checks script databases, lore canon compliance, and screens for script leak/spoiler threats.
+   - **Legal Clearance Agent**: Reachable only from Vendor & Licensing. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
 
-### 9-service distributed mesh
+### 10-service distributed mesh
 
 The orchestrator (a deterministic Workflow graph) fans out to the three domain
 agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
-The app also calls a fourth agent — **ui_renderer** — over A2A to paint the result
-as A2UI. Every box is its own container/instance.
+The app also calls **ui_renderer** over A2A to paint the result as A2UI. A dedicated
+**`legal` agent** (:8005) sits behind Vendor Clearance — vendor_clearance hands off to it;
+it's not in the orchestrator's fan-out. Every box is its own container/instance.
 
 ```
                     ┌─────────── app container (:8000) ───────────┐
@@ -45,9 +47,18 @@ as A2UI. Every box is its own container/instance.
   brand_style → mcp_brand_style + mcp_vision_ui · vendor_clearance → mcp_licensing + mcp_market
 ```
 
+Plus a dedicated **`legal` agent (:8005)** that **vendor_clearance hands off to** (A2A) —
+it clears + executes the licensing contract for a newly-onboarded vendor×category and
+RAGs its process from `resource/legal/docs/`. It's not in the orchestrator fan-out or the
+readiness gate. See **[FLOW.md](FLOW.md)** for the full vendor_clearance → legal flow.
+
 The audit **streams**: `POST /api/audit/stream` (SSE) pushes A2UI `surfaceUpdate`
-messages as the graph runs — the plan appears instantly, then each panel fills in
-as its workflow returns (see *A2UI streaming* below).
+messages as the graph runs — the plan appears instantly, then each panel fills in as its
+workflow returns (see *A2UI streaming* below). Alongside the panels, the app emits
+structured **`graph` events** that drive a **live workflow graph in the right pane** —
+`Orchestrator → each workflow`, plus **`⚖️ Legal Clearance`** under Vendor Clearance when
+legal fires — each node lighting up with its status (running · cleared · blocked ·
+needs-input · failed). See **[FLOW.md](FLOW.md) §7**.
 
 See **[deploy/README.md](deploy/README.md)** for the env contract and Cloud Run / Agent Engine deployment.
 
@@ -57,16 +68,19 @@ See **[deploy/README.md](deploy/README.md)** for the env contract and Cloud Run 
 
 ```
 vibeflix/
-├── frontend/                   # React app (A2UI renderer & sandbox dashboard)
-├── agents/                     # ADK 2.0 agents (app container + 4 A2A services)
+├── frontend/                   # React app (A2UI renderer + live workflow graph)
+├── agents/                     # ADK 2.0 agents (app container + 5 A2A services)
 │   ├── app.py                  # FastAPI: frontend + orchestrator/ui_renderer A2A client + SSE stream
 │   ├── a2ui_surface.py         # App-side A2UI assembly (panels → surface) + streaming builders + fallback
 │   ├── orchestrator/           # Sourcing Orchestrator — deterministic Workflow graph (raw reports out)
 │   ├── ui_renderer/            # A2UI presenter A2A service (:8004) — skills/render-a2ui/ (reports → panels)
 │   ├── brand_style/            # Brand Style agent (A2A server) — skills/brand-compliance-audit/
 │   ├── vendor_clearance/       # Vendor & Licensing Clearance agent — skills/vendor-clearance/
-│   └── storyline/              # Franchise Storyline & Lore agent — skills/canon-check/
+│   ├── storyline/              # Franchise Storyline & Lore agent — skills/canon-check/
+│   └── legal/                  # Legal Clearance agent (:8005) — skills/legal-clearance/
+│                               #   + legal_kb.py (search_legal_docs: local / Vertex RAG)
 │                               #   (each agent's procedure = a versioned ADK Skill / SKILL.md)
+├── resource/legal/docs/        # 10 scattered "tribal knowledge" legal docs (the RAG corpus source)
 ├── mcp_servers/                # Decoupled MCP servers (one running instance each)
 │   ├── mcp_vision_ui/          # Mockup parse + A2UI canvas helpers
 │   ├── mcp_brand_style/        # Brand compliance checks (typo, printed-medium, asset-source)
@@ -78,7 +92,8 @@ vibeflix/
 │                               # deployable): mcp_clients, schema_guard, image_input,
 │                               # memory, serve_a2a, registry. Extras: [agents] / [mcp].
 ├── deploy/                     # Dockerfiles (app/agent/mcp) + Cloud Run / Agent Engine guide
-├── docker-compose.yml          # Local 9-service topology
+│                               #   + setup_legal_rag.py (provision the legal RAG corpus)
+├── docker-compose.yml          # Local 10-service topology (+ legal :8005)
 └── run_local.sh                # compose wrapper (up / down / smoke / logs / frontend / mesh)
 ```
 
@@ -170,6 +185,46 @@ category, **and** no active exclusivity contract locks that category × territor
   NA), Super7 (Gremlins vinyl, EU), Bandai (Stitch vinyl, APAC), Funko (E.T. blind box,
   EU), Mattel (Minions plush, NA) — plus a couple **expired** ones (Funko/Grogu,
   Mattel/Little Green Men) that correctly no longer block.
+
+### Legal knowledge base — RAG over "tribal knowledge" (`resource/legal/docs`)
+
+The Legal Clearance agent models a **common enterprise problem**: there is *no* official,
+defined legal workflow. The process lives scattered across documents written by different
+people over years — a stale wiki, a contradictory email thread, meeting notes, a Slack
+export, a departing employee's brain dump. No single document has the whole picture. The
+agent has to **reconstruct the process via RAG** (Vertex AI RAG Engine) instead of
+following a hardcoded checklist.
+
+The 10 seed documents in `resource/legal/docs/` (deliberately messy, overlapping, and
+partly out-of-date):
+
+| doc | format | what it (partially) reveals |
+|------------------------------------|-------------------------------|--------------------------------------------------------------------|
+| confluence-licensing-onboarding.md | wiki WIP                      | the 6 steps, but "ask Priya", TODOs, stale                         |
+| email-thread-cert-requirements.txt | email chain                   | certs per category (plush vs vinyl vs apparel), contradictions     |
+| q3-legal-sync-notes.md             | meeting notes                 | $5M insurance, "ask for royalty tier", the safety-cert action item |
+| slack-export-licensing-ops.txt     | Slack                         | royalty tiers 12/10/8%, +2% premium, "query clearance for tier"    |
+| insurance-risk-memo.md             | formal memo                   | $5M rule, rider process, supersedes the SOP                        |
+| logistics-hs-codes.md              | spreadsheet                   | HS codes per category, recordation                                 |
+| royalty-rate-card.md               | rate card v3                  | tier table + modifiers, "don't default to 12%"                     |
+| SOP-license-amendments-2019.md     | outdated SOP                  | the sequence, but $2M (wrong), Schedule B "never attached"         |
+| janes-onboarding-checklist.md      | personal notes                | the closest thing to a full workflow, incomplete                   |
+| legal-stuff-dont-lose-this.txt     | departing-employee brain dump | ties it all together + the two "must ask" facts                    |
+
+The legal agent queries these via a **`search_legal_docs`** tool (an in-agent
+`FunctionTool` in `agents/legal/legal_kb.py` — legal is the only consumer, so no separate
+MCP server is needed). Two retrievers, chosen by env:
+
+- **default (offline):** a self-contained keyword retriever over the mounted docs — works
+  in CI / locally with zero cloud setup.
+- **`RAG_CORPUS` set:** **Vertex AI RAG Engine** `:retrieveContexts` via a **direct REST
+  call** signed with ADC (`google.auth` only — no SDK/`pandas` in the agent image),
+  against a corpus backed by the **RAG-managed Vertex AI Vector Search** store.
+
+Provision the corpus with **`deploy/setup_legal_rag.sh`** (wraps `setup_legal_rag.py`):
+it stages the docs to GCS, creates the corpus (`rag_managed_vertex_vector_search` +
+`text-embedding-005`), imports them, and prints the `RAG_CORPUS` to set on the legal
+agent. Flipping from the local retriever to Vertex is a config change, not a code change.
 
 ---
 
@@ -302,6 +357,38 @@ Because every tool parameter is described in its schema (allowed territories,
 categories, statuses, character IDs, and the `create_vendor` JSON shape), the agent
 knows exactly what to pass for each call.
 
+#### Testing the Legal Agent
+
+`legal` is called only by `vendor_clearance` in the mesh, but you can drive it directly
+with `adk web`. It RAGs the (undefined) process from `resource/legal/docs/` via its
+`search_legal_docs` tool and executes the contract via `mcp_licensing.upsert_contract`.
+Start `mcp_licensing` (shell 1: `./run_local.sh mcp`), then:
+
+```bash
+cd ~/Desktop/work/vibeflix-audit
+source .venv/bin/activate
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+# search_legal_docs retriever: unset RAG_CORPUS → local keyword search over the docs;
+# set it (from deploy/setup_legal_rag.py) → Vertex AI RAG Engine.
+export LEGAL_DOCS_DIR="$PWD/resource/legal/docs"
+# export RAG_CORPUS=projects/…/locations/us-central1/ragCorpora/…   # optional: use Vertex
+adk web agents/legal
+```
+
+Open http://127.0.0.1:8000, pick **legal**. Because there's no vendor_clearance to answer
+its `ask_vendor` question and no user for its `needs_user` question, provide those two
+facts in your prompt:
+
+- *"What certifications does Apparel need, and what's the insurance minimum?"* → the agent
+  calls `search_legal_docs` and reconstructs the answer from the scattered docs
+  (reconciling the $5M risk memo vs the 2019 SOP's $2M).
+- *"Run legal clearance for vendor VND-1002, character grogu, category Apparel, territory
+  Europe. Royalty tier: Tier 2. Safety cert id: UL-778812."* → with both facts supplied it
+  runs the checklist (amendment → certs → customs → royalty → insurance) and
+  `upsert_contract` → returns `{"status":"done","contract_id":"LC-####"}`.
+- Omit the royalty tier → it returns `{"status":"ask_vendor", …}`; omit the safety-cert id
+  → `{"status":"needs_user", …}` — the same hand-offs it uses inside the mesh.
+
 #### Test the orchestrator with `adk web` (no Docker)
 
 The orchestrator is a graph whose nodes are `RemoteA2aAgent` references, so it
@@ -389,6 +476,35 @@ a real **A2UI v0.9 surface** (`Column`/`Card`/`Text`/`Divider`), rendered by the
 official **`@a2ui/react`** renderer. It's **generic** — one panel per `*_report`, so
 adding a workflow needs no render change. If ui_renderer is unreachable, a rule-based
 fallback keeps the UI working.
+
+#### How A2UI is used — three layers
+
+A2UI is a **wire protocol** with an official **client-side** renderer. The mesh uses the
+library where it exists and hand-builds the protocol where it doesn't:
+
+```
+ui_renderer (LLM, :8004)  ──A2A──►  Presentation { panels }         # CONTENT only (title/status/lines)
+                                          │
+app.py ──► agents/a2ui_surface.py ──► A2UI { root, components, data} # PROTOCOL JSON (Column/Card/Text/Divider)
+                                          │  surfaceUpdate / beginRendering  (SSE)
+browser ──► @a2ui/react + @a2ui/web_core ──► rendered panels         # the official A2UI RENDERER
+```
+
+- **Client (frontend) — uses A2UI's library.** `@a2ui/react` + `@a2ui/web_core`
+  (`A2UIProvider` / `A2UIRenderer` / `useA2UI().processMessages`) render the surfaces.
+  This is where A2UI's published library actually lives — it's a *client renderer*.
+- **Server (app) — no Python A2UI library exists**, so `agents/a2ui_surface.py` emits the
+  A2UI wire format directly as plain dicts (`{root, components, data}` +
+  `surfaceUpdate`/`beginRendering`). It's imported by **`app.py` only** — the app-side
+  A2UI serializer.
+- **Agent (`ui_renderer`) — deliberately does NOT emit A2UI.** It returns a tiny
+  `Presentation` schema (panels) via `output_schema`; `a2ui_surface` deterministically
+  maps that → A2UI. **Why:** having an LLM generate the full nested, id-referenced A2UI
+  tree is exactly the kind of large structured output that triggers Gemini's
+  `set_model_response` "malformed function call" — a small schema is reliable, and the
+  protocol/layout is owned by deterministic code. So the name is really *presenter*: the
+  model decides **what to say**, `a2ui_surface` decides the **A2UI shape**, `@a2ui/react`
+  **renders** it.
 
 Two paths:
 - **`POST /api/audit`** — runs the graph once (the orchestrator's `recovery` node
