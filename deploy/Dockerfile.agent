@@ -1,0 +1,30 @@
+# Domain-agent service — one self-contained image PER agent.
+# The agent is selected at build time via the AGENT build-arg
+# (brand_style / ip_counsel / storyline), so each image contains only that
+# agent's code + the shared vibeflix-common package (no sibling agents).
+# Build context = repo root:
+#   docker build -f deploy/Dockerfile.agent --build-arg AGENT=brand_style .
+# syntax=docker/dockerfile:1
+
+FROM python:3.12-slim
+ARG AGENT
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8001 \
+    A2A_AGENT=${AGENT}
+
+COPY agents/requirements.txt agents/requirements.txt
+RUN pip install --pre -r agents/requirements.txt
+
+# Shared helpers (serve_a2a launcher, mcp_clients, schema_guard, image_input).
+COPY packages/vibeflix-common ./vibeflix-common
+RUN pip install ./vibeflix-common --no-deps
+
+# Only this agent's code (agents/<AGENT>/), plus the namespace __init__.
+COPY agents/__init__.py agents/__init__.py
+COPY agents/${AGENT}/ agents/${AGENT}/
+
+EXPOSE 8001
+# serve_a2a (from the package) builds the A2A app for $A2A_AGENT; honors $PORT.
+CMD ["sh", "-c", "uvicorn vibeflix_common.serve_a2a:app --host 0.0.0.0 --port ${PORT}"]

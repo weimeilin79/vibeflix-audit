@@ -1,7 +1,10 @@
+import os
 import sys
 import json
 import time
 from mcp.server.fastmcp import FastMCP
+
+from vibeflix_common.registry import registry_get
 
 mcp = FastMCP("Market Operations & Telemetry")
 
@@ -26,12 +29,15 @@ def check_sku_volume_caps(contract_id: str) -> str:
     Checks the volume fields of the active production request against the 
     upper limits agreed upon in the master contract.
     """
-    # Contract volume limits simulation
-    return json.dumps({
+    # Contract volume limits — from Firestore policy when configured, else default.
+    fallback = {
         "contract_id": contract_id,
         "authorized_max_skus": 25000,
-        "current_sourcing_cap_rules": "Volume overrides > 25,000 trigger structural splitter agent workflows to split capacity into distinct addendums."
-    })
+        "current_sourcing_cap_rules": "Volume overrides > 25,000 trigger structural splitter agent workflows to split capacity into distinct addendums.",
+    }
+    caps = registry_get("market_policy", "sourcing_caps", fallback)
+    caps["contract_id"] = contract_id
+    return json.dumps(caps)
 
 @mcp.tool()
 def capture_audit_map(interaction_payload: str) -> str:
@@ -49,4 +55,18 @@ def capture_audit_map(interaction_payload: str) -> str:
     return json.dumps(log_entry)
 
 if __name__ == "__main__":
-    mcp.run()
+    # stdio for local agent-spawned use; streamable-http when run as a service.
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "stdio":
+        mcp.run()
+    else:
+        mcp.settings.host = os.environ.get("HOST", "0.0.0.0")
+        mcp.settings.port = int(os.environ.get("PORT", "9003"))
+        # Internal mesh: agents reach this server by service name (not localhost),
+        # so the Host header isn't localhost — disable MCP DNS-rebinding protection
+        # (else the streamable-http handshake returns 421 Misdirected Request).
+        from mcp.server.transport_security import TransportSecuritySettings
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        )
+        mcp.run(transport=transport)

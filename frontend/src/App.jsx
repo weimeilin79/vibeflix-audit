@@ -1,9 +1,80 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Upload, Send, Shield, AlertTriangle, AlertCircle, CheckCircle, 
+import {
+  Upload, Send, Shield, AlertTriangle, AlertCircle, CheckCircle,
   MapPin, Sliders, Play, RefreshCw, BarChart2, Terminal, Info,
-  ArrowRight, GitBranch, Layers, Check, Database, RefreshCw as LoopIcon, HelpCircle, XCircle, MessagesSquare
+  ArrowRight, GitBranch, Layers, Check, Database, RefreshCw as LoopIcon, HelpCircle, XCircle, MessagesSquare, Satellite
 } from 'lucide-react';
+import ChatAudit from './ChatAudit';
+
+// Backend base URL. Empty = same origin (the app container's FastAPI serves both
+// the static frontend and /api). Set VITE_API_URL for the Vite dev server (e.g.
+// http://localhost:8000) when running the frontend separately from the backend.
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
+// ---------------------------------------------------------------------------
+// A2UI renderer
+// Walks the `a2ui_payload.canvas_layout` schema emitted by the Sourcing
+// Orchestrator's compile_ui node and paints matching React components. The
+// agent decides the layout; the frontend just renders whatever it is handed.
+// ---------------------------------------------------------------------------
+function A2UIField({ field }) {
+  const blocked = field.status === 'blocked';
+  const cleared = field.status === 'clear';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: '1 1 180px' }}>
+      <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>
+        {field.id}
+      </label>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem',
+        padding: '0.5rem 0.75rem', borderRadius: '0.4rem', fontSize: '0.85rem', fontWeight: 600,
+        background: 'var(--bg-secondary)',
+        border: `1px solid ${blocked ? 'var(--color-danger)' : cleared ? 'var(--color-success)' : 'var(--glass-border)'}`,
+        color: blocked ? 'var(--color-danger)' : 'var(--text-main)'
+      }}>
+        <span>{typeof field.value === 'number' ? field.value.toLocaleString() : String(field.value)}</span>
+        {field.status && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}>
+            {blocked ? <><AlertCircle size={12} /> blocked</> : <><CheckCircle size={12} /> {field.status}</>}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function A2UIComponent({ component }) {
+  if (component.type === 'remediation_form') {
+    return (
+      <div className="canvas-panel" style={{ padding: '0.85rem' }}>
+        <h3 className="panel-title" style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+          <Sliders size={14} /> remediation_form
+        </h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+          {(component.fields || []).map((f, i) => <A2UIField key={f.id || i} field={f} />)}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="canvas-panel" style={{ padding: '0.85rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+      Unsupported A2UI component: <code>{component.type}</code>
+    </div>
+  );
+}
+
+function A2UICanvas({ payload }) {
+  if (!payload || !payload.canvas_layout) return null;
+  const { container, components = [] } = payload.canvas_layout;
+  return (
+    <div data-container={container} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+        a2ui v{payload.a2ui_version} · container <code>{container}</code>
+      </div>
+      {components.map((c, i) => <A2UIComponent key={i} component={c} />)}
+    </div>
+  );
+}
 
 export default function App() {
   // Navigation / Tabs
@@ -461,6 +532,73 @@ export default function App() {
     }
   };
 
+  // ---- Live backend audit (real ADK orchestrator via /api/audit) ----
+  // liveStatus: 'idle' | 'running' | 'hitl' | 'done' | 'error'
+  const [liveStatus, setLiveStatus] = useState('idle');
+  const [liveResult, setLiveResult] = useState(null);
+  const [liveError, setLiveError] = useState(null);
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveHitlMessage, setLiveHitlMessage] = useState(null);
+  // The vendor image LINK the orchestrator audits (gs:// or https). brand_style's
+  // asset-source gate + vision extraction key off this.
+  const [imageUri, setImageUri] = useState('gs://vibeflix-approved-assets/vendor_request.jpg');
+
+  const applyLiveResponse = (data) => {
+    if (data && data.hitl_required) {
+      setLiveSession(data.session_id);
+      setLiveHitlMessage(data.message);
+      setLiveStatus('hitl');
+    } else {
+      setLiveResult(data);
+      setLiveStatus('done');
+      addLog("Orchestrator", "Live backend audit returned a2ui_payload. Rendering agent-painted canvas.");
+    }
+  };
+
+  const runLiveAudit = async () => {
+    setLiveStatus('running');
+    setLiveError(null);
+    setLiveResult(null);
+    setLiveHitlMessage(null);
+    setLiveSession(null);
+    addLog("Orchestrator", `POST ${API_BASE}/api/audit — image_uri=${imageUri}, market=${targetMarket}, volume=${productionVolume}`);
+    try {
+      const res = await fetch(`${API_BASE}/api/audit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_path: mockupFile,
+          image_uri: imageUri,
+          target_market: targetMarket,
+          volume: productionVolume,
+        }),
+      });
+      if (!res.ok) throw new Error(`Backend responded ${res.status}: ${await res.text()}`);
+      applyLiveResponse(await res.json());
+    } catch (err) {
+      setLiveError(String(err.message || err));
+      setLiveStatus('error');
+      addLog("Orchestrator", `Live audit failed (backend offline?): ${err.message || err}`);
+    }
+  };
+
+  const resolveLiveHitl = async (choice) => {
+    setLiveStatus('running');
+    addLog("Orchestrator", `POST ${API_BASE}/api/audit/resume — sourcing override choice "${choice}"`);
+    try {
+      const res = await fetch(`${API_BASE}/api/audit/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: liveSession, choice }),
+      });
+      if (!res.ok) throw new Error(`Backend responded ${res.status}: ${await res.text()}`);
+      applyLiveResponse(await res.json());
+    } catch (err) {
+      setLiveError(String(err.message || err));
+      setLiveStatus('error');
+    }
+  };
+
   return (
     <div className="app-container">
       
@@ -490,7 +628,7 @@ export default function App() {
               className={`tab-btn ${activeTab === 'canvas' ? 'active' : ''}`}
               onClick={() => setActiveTab('canvas')}
             >
-              <Sliders size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Interactive Simulator UI
+              <Sliders size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Live Audit Console
             </button>
             <button 
               className={`tab-btn ${activeTab === 'usecase' ? 'active' : ''}`}
@@ -529,97 +667,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Front & Top User Entry Dashboard Section (Only shown in Tab 1 / Simulator UI) */}
-      {activeTab === 'canvas' && (
-        <section className="top-user-entry">
-          <div className="entry-row" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-            
-            {/* Preset Scenario Selectors Center */}
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-              <button 
-                className={`preset-btn ${activeScenario === 'clean' ? 'primary' : ''}`} 
-                onClick={() => triggerScenario('clean')}
-                disabled={flowState === 'uploading' || flowState === 'negotiating'}
-                title="Scenario 1: Clean release with zero guidelines infractions."
-              >
-                🟢 Scenario 1: Clean (Pass)
-              </button>
-              <button 
-                className={`preset-btn ${activeScenario === 'collab' ? 'primary' : ''}`} 
-                onClick={() => triggerScenario('collab')}
-                disabled={flowState === 'uploading' || flowState === 'negotiating'}
-                title="Scenario 2: Exclusivity conflicts resolved autonomously via inter-agent negotiation."
-              >
-                🟡 Scenario 2: Agent Mesh (Collab)
-              </button>
-              <button 
-                className={`preset-btn ${activeScenario === 'hitl' ? 'primary' : ''}`} 
-                onClick={() => triggerScenario('hitl')}
-                disabled={flowState === 'uploading' || flowState === 'negotiating'}
-                title="Scenario 3: Capped limits requiring Human-in-the-loop overrides."
-              >
-                🔵 Scenario 3: Overrides (HITL)
-              </button>
-              <button 
-                className={`preset-btn ${activeScenario === 'fail' ? 'primary' : ''}`} 
-                onClick={() => triggerScenario('fail')}
-                disabled={flowState === 'uploading' || flowState === 'negotiating'}
-                title="Scenario 4: Character script leak blocks releases completely."
-              >
-                🔴 Scenario 4: Spoilers (Fail)
-              </button>
-              
-              <span style={{ borderLeft: '1px solid var(--glass-border)', margin: '0 0.5rem' }}></span>
-              
-              <button 
-                className="preset-btn"
-                onClick={() => {
-                  setFlowState('idle');
-                  setActiveScenario(null);
-                  setTargetMarket('North America');
-                  setProductionVolume(15000);
-                  setShowSliderGuardrail(false);
-                  setShowAddendumSuccess(false);
-                  setChatLogs(["System active. Workspace reset. Ready for kickoff..."]);
-                  setNegotiationLogs([]);
-                  addLog("Orchestrator", "Workspace variables reset.");
-                  setCurrentRunLogged(false);
-                }}
-              >
-                🔄 Reset Canvas
-              </button>
-            </div>
-
-            {/* Prompt input field */}
-            <form onSubmit={handlePromptSubmit} className="prompt-bar-container" style={{ minWidth: '300px' }}>
-              <input 
-                type="text"
-                className="top-textarea"
-                placeholder="Or type prompt command (e.g. 'run scenario 2')..."
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-              />
-              <button type="submit" className="icon-btn" style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)' }}>
-                <Send size={16} />
-              </button>
-            </form>
-            
-          </div>
-
-          {/* Action log feed row */}
-          <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', padding: '0.2rem 0' }}>
-            {chatLogs.slice(-2).map((log, idx) => (
-              <div key={idx} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--glass-border)', padding: '0.35rem 0.75rem', borderRadius: '0.35rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}>
-                <Info size={12} style={{ color: 'var(--accent-purple)' }} />
-                <span>{log}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
       {/* Main Workspace Body */}
-      <div className="workspace-body" style={{ gridTemplateColumns: activeTab === 'canvas' ? '1fr 1.2fr' : '1fr' }}>
+      <div className="workspace-body" style={{ gridTemplateColumns: '1fr', ...(activeTab === 'canvas' ? { gridTemplateRows: '1fr', minHeight: 0 } : {}) }}>
         
         {activeTab === 'usecase' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '100%', height: '100%', overflowY: 'auto' }}>
@@ -790,7 +839,7 @@ export default function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
                   <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>💻 System Ready to Run:</span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setActiveTab('canvas')}>
-                    Go to Interactive Simulator UI ➔
+                    Go to Live Audit Console ➔
                   </span>
                 </div>
               </div>
@@ -1031,871 +1080,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'canvas' && (
-          <>
-            {/* Left Column: Adaptive Remediation & Viewport */}
-            <div className="workspace-column">
-              
-              {/* Mockup Box front panel Viewport */}
-              <div className="canvas-panel">
-                <h3 className="panel-title">
-                  <span>🖼️ Prototype Box Viewport</span>
-                </h3>
-                
-                <div className="mockup-display">
-                  {flowState === 'idle' ? (
-                    <div className="mockup-placeholder">
-                      <Upload size={28} style={{ color: 'var(--accent-purple)' }} />
-                      <div>
-                        <p style={{ fontWeight: 600 }}>Mockup Packaging Display Panel</p>
-                        <p style={{ fontSize: '0.75rem', marginTop: '0.2rem', color: 'var(--text-muted)' }}>
-                          Click a Preset Scenario button at the top to ingest mockup box designs
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem', width: '100%' }}>
-                      
-                      <div style={{
-                        width: '180px',
-                        height: '240px',
-                        background: 'var(--bg-card)',
-                        border: '2px solid var(--glass-border)',
-                        borderRadius: '8px',
-                        position: 'relative',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        padding: '0.85rem',
-                        boxShadow: 'var(--box-shadow-premium)'
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ 
-                            fontSize: '0.55rem', 
-                            color: storylineStatus === 'Compliant' ? 'var(--color-success)' : 'var(--color-danger)', 
-                            fontWeight: 800, 
-                            border: '1px solid',
-                            borderColor: storylineStatus === 'Compliant' ? 'var(--color-success)' : 'var(--color-danger)',
-                            padding: '1px 3px', 
-                            borderRadius: '3px' 
-                          }}>
-                            {storylineStatus === 'Compliant' ? 'STAR WARS' : 'BLOCKED'}
-                          </span>
-                          <span style={{ fontSize: '0.45rem', color: 'var(--text-muted)' }}>VINYL FIGURE</span>
-                        </div>
-
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0.4rem 0', background: 'var(--bg-tertiary)', borderRadius: '4px' }}>
-                          <div style={{ fontSize: '2.5rem' }}>
-                            {storylineStatus === 'Compliant' ? '👽' : '🎬'}
-                          </div>
-                        </div>
-
-                        <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '0.45rem', color: 'var(--text-muted)' }}>POP SERIES #339</div>
-                          <div style={{ 
-                            fontSize: '0.8rem', 
-                            fontWeight: 700, 
-                            color: 'var(--text-dark)', 
-                            fontFamily: fontStyle === 'SpaceGrotesk' ? 'SpaceGrotesk' : 'Outfit', 
-                            letterSpacing: '0.05em' 
-                          }}>
-                            {storylineStatus === 'Compliant' ? 'THE CHILD' : 'SCRIPT LEAK'}
-                          </div>
-                        </div>
-
-                        {/* Render active warning overlays when flowState is warning or negotiating */}
-                        {['warning', 'negotiating'].includes(flowState) && (
-                          <>
-                            {/* Overlay for Font Typo (SpaceGrotesk) */}
-                            {fontStyle === 'SpaceGrotesk' && (
-                              <div 
-                                className="warning-overlay-box" 
-                                style={{ top: '190px', left: '10px', width: '160px', height: '28px' }}
-                              >
-                                <span className="warning-tooltip" style={{ top: '-25px' }}>Typo (SpaceGrotesk)</span>
-                              </div>
-                            )}
-
-                            {/* Overlay for Exclusivity conflict (North America exclusivity locks) */}
-                            {targetMarket === 'North America' && (
-                              <div 
-                                className="warning-overlay-box danger" 
-                                style={{ top: '8px', left: '8px', width: '164px', height: '224px' }}
-                              >
-                                <span className="warning-tooltip" style={{ top: '80px' }}>NA Exclusive Block (Hasbro)</span>
-                              </div>
-                            )}
-
-                            {/* Overlay for Lore Spoiler (Season 4 Lightsaber) */}
-                            {storylineStatus === 'Spoiler Flagged' && (
-                              <div 
-                                className="warning-overlay-box danger" 
-                                style={{ top: '40px', left: '10px', width: '160px', height: '110px' }}
-                              >
-                                <span className="warning-tooltip" style={{ top: '-25px', background: 'var(--color-danger)', color: 'white' }}>Lore Spoiler (S4 Lightsaber)</span>
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {flowState === 'failed' && (
-                          <div 
-                            className="warning-overlay-box danger" 
-                            style={{ top: '8px', left: '8px', width: '164px', height: '224px' }}
-                          >
-                            <span className="warning-tooltip" style={{ top: '45%', background: 'var(--color-danger)', color: 'white' }}>LORE OVERRIDE (Lightsaber Spoiler)</span>
-                          </div>
-                        )}
-                      </div>
-                      
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Sequential Canvas Parameter Remediations */}
-              <div className="canvas-panel">
-                <h3 className="panel-title">
-                  <span>⚡ Adaptive Remediation Canvas</span>
-                </h3>
-
-                {flowState === 'idle' && (
-                  <div style={{ padding: '1rem 0', color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center' }}>
-                    Select a Preset Scenario at the top to begin parameters verification.
-                  </div>
-                )}
-
-                {flowState === 'uploading' && (
-                  <div style={{ padding: '1rem 0', color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                    <RefreshCw size={14} className="spin" style={{ animation: 'spin 2s linear infinite' }} />
-                    <span>Ingesting mockup box design...</span>
-                  </div>
-                )}
-
-                {flowState === 'analyzing' && (
-                  <div style={{ padding: '1rem 0', color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                    <RefreshCw size={14} className="spin" style={{ animation: 'spin 2s linear infinite' }} />
-                    <span>Running Parallel Style, Legal Exclusivity & Storyline Checks...</span>
-                  </div>
-                )}
-
-                {/* SCENARIO 2: ACTIVE DYNAMIC AGENT NEGOTIATION SCREEN */}
-                {flowState === 'negotiating' && (
-                  <div style={{ display: 'flex', flex1: 1, flexDirection: 'column', gap: '0.5rem', animation: 'slideIn 0.3s ease-out' }}>
-                    <div className="risk-card warning" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <MessagesSquare size={16} className="spin" style={{ animation: 'spin 4s linear infinite', color: 'var(--color-warning)' }} />
-                      <div style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>Active Mesh Negotiation Stream (No Human HITL)</div>
-                    </div>
-                    
-                    <div style={{ 
-                      background: 'var(--bg-secondary)', 
-                      border: '1px solid var(--glass-border)', 
-                      borderRadius: '0.5rem', 
-                      padding: '0.75rem', 
-                      display: 'flex', 
-                      flexDirection: 'column', 
-                      gap: '0.5rem',
-                      maxHeight: '200px',
-                      overflowY: 'auto'
-                    }}>
-                      {negotiationLogs.map((nLog, idx) => (
-                        <div key={idx} style={{ fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '0.25rem', animation: 'slideIn 0.3s' }}>
-                          <span style={{ color: 'var(--accent-purple)', fontWeight: 'bold', marginRight: '0.4rem' }}>
-                            {nLog.agent}:
-                          </span>
-                          <span style={{ color: 'var(--text-dark)' }}>{nLog.message}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {['warning', 'resolved', 'completed', 'failed'].includes(flowState) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    
-                    {/* INPUT 1: Target territory (rendered base on IP exclusivity checks) */}
-                    {flowState === 'warning' && (
-                      <div style={{ animation: 'slideIn 0.3s ease-out' }}>
-                        <div className="risk-card">
-                          <div className="risk-title text-danger">
-                            <AlertCircle size={14} /> Legal Exclusivity Collision (North America)
-                          </div>
-                          <p className="risk-desc">
-                            Hasbro Inc. holds exclusive Star Wars stylized vinyl figure rights in NA. Swapping territory clears this block.
-                          </p>
-                        </div>
-
-                        <div className="form-group" style={{ border: '1px dashed var(--color-danger)', padding: '0.75rem', borderRadius: '0.4rem', background: 'rgba(var(--color-danger-rgb), 0.04)' }}>
-                          <label className="form-label">
-                            <span style={{ color: 'var(--color-danger)', fontWeight: 'bold' }}>⚠️ Next Remediation: Select Target Market</span>
-                            <span style={{ color: 'var(--accent-blue)' }}>mcp-legal-contracts</span>
-                          </label>
-                          <select 
-                            className="form-select"
-                            value={targetMarket}
-                            onChange={(e) => setTargetMarket(e.target.value)}
-                            style={{ borderColor: 'var(--color-danger)' }}
-                          >
-                            <option value="North America">North America (Hasbro Exclusive - Blocked)</option>
-                            <option value="Europe">Europe (Non-Exclusive - Cleared)</option>
-                          </select>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* INPUT 2: Production capacity slider (rendered after market check passes) */}
-                    {flowState === 'resolved' && (
-                      <div style={{ animation: 'slideIn 0.3s ease-out' }}>
-                        {showHitlOptions ? (
-                          <div className="risk-card warning" style={{ border: '2px solid var(--color-warning)', background: 'rgba(var(--color-warning-rgb), 0.05)', padding: '1rem' }}>
-                            <div className="risk-title" style={{ color: 'var(--color-warning)', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700 }}>
-                              <Shield size={16} /> Human Decision Required
-                            </div>
-                            <p className="risk-desc" style={{ fontSize: '0.8rem', color: 'var(--text-main)', margin: '0.5rem 0' }}>
-                              Procurement volume of <strong>{productionVolume.toLocaleString()} units</strong> exceeds the hard capacity cap limit of <strong>25,000 units</strong> for primary vendor. Select a remediation path to proceed:
-                            </p>
-                            
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.75rem' }}>
-                              <button 
-                                className="preset-btn primary"
-                                style={{ 
-                                  textAlign: 'left', 
-                                  padding: '0.75rem', 
-                                  background: 'rgba(var(--accent-blue-rgb), 0.06)',
-                                  borderColor: 'var(--accent-blue)',
-                                  borderRadius: '0.35rem',
-                                  fontSize: '0.75rem',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: '0.2rem'
-                                }}
-                                onClick={() => {
-                                  setProductionVolume(25000);
-                                  setShowAddendumSuccess(true);
-                                  setShowSliderGuardrail(false);
-                                  setShowHitlOptions(false);
-                                  addLog("Orchestrator", "User approved capacity split override. Generating Addendum Contract SC-7798-EU.");
-                                  addLog("mcp-procurement-ledger", "Ledger transaction updated. Primary: 25,000 SKUs. Addendum: 15,000 SKUs.");
-                                  setChatLogs(prev => [...prev, "✅ Human Override Selected: Split excess 15,000 units into Addendum Contract SC-7798-EU."]);
-                                }}
-                              >
-                                <span style={{ fontWeight: 'bold', color: 'var(--accent-blue)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                  <Layers size={12} /> Option A: Split Sourcing (Addendum SC-7798-EU)
-                                </span>
-                                <span style={{ color: 'var(--text-muted)' }}>Split excess 15,000 units to secondary manufacturing partner under addendum.</span>
-                              </button>
-
-                              <button 
-                                className="preset-btn"
-                                style={{ 
-                                  textAlign: 'left', 
-                                  padding: '0.75rem', 
-                                  background: 'rgba(var(--color-warning-rgb), 0.06)',
-                                  borderColor: 'var(--color-warning)',
-                                  borderRadius: '0.35rem',
-                                  fontSize: '0.75rem',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: '0.2rem'
-                                }}
-                                onClick={() => {
-                                  setProductionVolume(25000);
-                                  setShowAddendumSuccess(false);
-                                  setShowSliderGuardrail(false);
-                                  setShowHitlOptions(false);
-                                  addLog("Orchestrator", "User selected: Enforce Cap. Sourcing order capped strictly at 25,000 SKUs.");
-                                  addLog("mcp-procurement-ledger", "Capped volume enforced. Primary: 25,000 SKUs. Excess cancelled.");
-                                  setChatLogs(prev => [...prev, "✅ Human Override Selected: Strictly capped volume at 25,000 SKUs (excess cancelled)."]);
-                                }}
-                              >
-                                <span style={{ fontWeight: 'bold', color: 'var(--color-warning)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                  <Sliders size={12} /> Option B: Enforce Cap (25,000 SKUs)
-                                </span>
-                                <span style={{ color: 'var(--text-muted)' }}>Snap volume down to 25,000 units limit. Do not split to addendum.</span>
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="risk-card" style={{ background: 'rgba(var(--accent-blue-rgb), 0.04)', borderColor: 'rgba(var(--accent-blue-rgb), 0.15)' }}>
-                              <div className="risk-title" style={{ color: 'var(--color-success)' }}>
-                                <CheckCircle size={14} /> Style & Legal clearances cleared!
-                              </div>
-                              <p className="risk-desc">
-                                {activeScenario === 'collab' ? (
-                                  "Agents successfully auto-negotiated Europe rerouting & certified Outfit typography replacement."
-                                ) : (
-                                  "All licensing regulations check out. Verify sourcing limits next to finalize release."
-                                )}
-                              </p>
-                            </div>
-
-                            <div className="form-group" style={{ border: '1px dashed var(--color-success)', padding: '0.75rem', borderRadius: '0.4rem', background: 'rgba(var(--accent-blue-rgb), 0.02)' }}>
-                              <label className="form-label">
-                                <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓ Sourcing Allocation Capacity</span>
-                                <span style={{ color: 'var(--accent-blue)' }}>mcp-procurement-ledger</span>
-                              </label>
-                              
-                              <div className="volume-slider-container">
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 600 }}>
-                                  <span>{productionVolume.toLocaleString()} SKUs</span>
-                                  <span style={{ color: 'var(--text-muted)' }}>Limit: 25,000</span>
-                                </div>
-                                
-                                <input 
-                                  type="range" 
-                                  min="5000" 
-                                  max="50000" 
-                                  step="5000" 
-                                  value={productionVolume}
-                                  className="slider-control"
-                                  onChange={(e) => handleVolumeChange(e.target.value)}
-                                />
-
-                                {showSliderGuardrail && (
-                                  <div className="slider-cap-alert">
-                                    <AlertCircle size={12} style={{ flexShrink: 0 }} />
-                                    <span>Volume limit reached. Splitting gap into addendum...</span>
-                                  </div>
-                                )}
-
-                                {showAddendumSuccess && (
-                                  <div className="slider-cap-alert" style={{ color: 'var(--color-success)', background: 'rgba(var(--color-success-rgb), 0.08)', borderColor: 'rgba(var(--color-success-rgb), 0.2)' }}>
-                                    <CheckCircle size={12} style={{ flexShrink: 0 }} />
-                                    <span>Gap volume split to Addendum Contract SC-7798-EU.</span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-
-                    {/* INPUT 3: Ledger receipt transaction details (rendered on final release) */}
-                    {flowState === 'completed' && (
-                      <div style={{ animation: 'slideIn 0.3s ease-out' }}>
-                        <div className="risk-card" style={{ background: 'rgba(var(--color-success-rgb), 0.04)', borderColor: 'rgba(var(--color-success-rgb), 0.2)', padding: '1rem' }}>
-                          <div className="risk-title" style={{ color: 'var(--color-success)', fontSize: '0.9rem' }}>
-                            <CheckCircle size={16} /> Release Transaction Signed
-                          </div>
-                          <div style={{ marginTop: '0.75rem', padding: '0.5rem', background: 'var(--bg-tertiary)', border: '1px solid var(--glass-border)', borderRadius: '0.25rem', fontFamily: 'Courier New', fontSize: '0.7rem', color: 'var(--text-main)' }}>
-                            <div>TRANSACTION: 0x8a92f7c00e12</div>
-                            <div>DESTINATION: Europe</div>
-                            <div>CAPACITY: {productionVolume.toLocaleString()} (Primary)</div>
-                            {showAddendumSuccess && <div>ADDENDUM: 15,000 (Secondary SC-7798-EU)</div>}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* INPUT 4: HARD FAIL LORE SPILL CARD */}
-                    {flowState === 'failed' && (
-                      <div className="risk-card" style={{ background: 'rgba(var(--color-danger-rgb), 0.04)', borderColor: 'rgba(var(--color-danger-rgb), 0.2)' }}>
-                        <div className="risk-title text-danger">
-                          <XCircle size={14} /> Lore Compliance Audit Blocked
-                        </div>
-                        <p className="risk-desc">
-                          Prototype figurine leaks unreleased Season 4 storyline spoilers (Grogu wielding lightsaber). Sourcing release aborted immediately.
-                        </p>
-                      </div>
-                    )}
-
-                    {flowState === 'failed' ? (
-                      <button 
-                        className="preset-btn"
-                        style={{
-                          width: '100%',
-                          padding: '0.75rem',
-                          background: 'rgba(var(--color-danger-rgb), 0.1)',
-                          borderColor: 'rgba(var(--color-danger-rgb), 0.2)',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          color: 'var(--color-danger)',
-                          cursor: 'not-allowed'
-                        }}
-                        disabled
-                      >
-                        <XCircle size={14} /> Sourcing Release Aborted
-                      </button>
-                    ) : (
-                      <button 
-                        className="preset-btn"
-                        style={{
-                          width: '100%',
-                          padding: '0.75rem',
-                          background: (flowState === 'resolved' && !showHitlOptions) ? 'var(--color-success)' : 'var(--bg-tertiary)',
-                          borderColor: (flowState === 'resolved' && !showHitlOptions) ? 'var(--color-success)' : 'var(--glass-border)',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '0.5rem',
-                          color: (flowState === 'resolved' && !showHitlOptions) ? 'white' : 'var(--text-muted)',
-                          cursor: (flowState === 'resolved' && !showHitlOptions) ? 'pointer' : 'not-allowed'
-                        }}
-                        disabled={flowState !== 'resolved' || showHitlOptions}
-                        onClick={() => {
-                          setFlowState('completed');
-                          addLog("Orchestrator", "Sourcing release finalized on ledger registry.");
-                        }}
-                      >
-                        {(flowState === 'resolved' && !showHitlOptions) ? (
-                          <>
-                            <RefreshCw size={14} className="spin" style={{ animation: 'spin 2s linear infinite' }} /> Auto-Finalizing Sourcing Release...
-                          </>
-                        ) : (
-                          <>
-                            <Play size={14} /> Finalize Sourcing Release
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-            {/* Right Column: Predefined Workflow & Inter-Agent Loops Graph */}
-            <div className="workspace-column">
-              
-              <div className="workflow-graph-container" style={{ flex: 1 }}>
-                <h3 className="panel-title">
-                  <GitBranch size={16} style={{ color: 'var(--accent-purple)' }} />
-                  <span>Proposed Multi-Agent Execution Graph</span>
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, justifyContent: 'space-between' }}>
-                  {/* Row 1: Style Agent, Legal Agent, & Storyline Agent running concurrently in 3 parallel columns */}
-                  {/* Relative wrapper for nodes and dynamic arrow connections */}
-                  <div style={{ position: 'relative', width: '100%' }}>
-                    
-                    {/* SVG Connector Arrows Overlay */}
-                    {flowState === 'negotiating' && (
-                      <svg 
-                        viewBox="0 0 300 100" 
-                        preserveAspectRatio="none"
-                        style={{ 
-                          position: 'absolute', 
-                          top: 0, 
-                          left: 0, 
-                          width: '100%', 
-                          height: '100%', 
-                          pointerEvents: 'none', 
-                          zIndex: 10,
-                          overflow: 'visible'
-                        }}
-                      >
-                        <defs>
-                          <style>{`
-                            @keyframes dash {
-                              to {
-                                stroke-dashoffset: -20;
-                              }
-                            }
-                          `}</style>
-                          <marker id="arrow-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--accent-purple)" />
-                          </marker>
-                          <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--color-success)" />
-                          </marker>
-                          <marker id="arrow-danger" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--color-danger)" />
-                          </marker>
-                        </defs>
-
-                        {/* Render active step connecting channels */}
-                        {(() => {
-                          const stepCount = negotiationLogs.length;
-                          if (stepCount === 1) {
-                            return <path d="M 135,35 Q 95,20 65,35" fill="none" stroke="var(--color-danger)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-danger)" style={{ animation: 'dash 1.2s linear infinite' }} />;
-                          } else if (stepCount === 2) {
-                            return <path d="M 235,35 Q 150,5 65,35" fill="none" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-purple)" style={{ animation: 'dash 1.2s linear infinite' }} />;
-                          } else if (stepCount === 3) {
-                            return (
-                              <>
-                                <path d="M 65,35 Q 100,20 135,35" fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-green)" style={{ animation: 'dash 1.2s linear infinite' }} />
-                                <path d="M 65,35 Q 150,5 235,35" fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-green)" style={{ animation: 'dash 1.2s linear infinite' }} />
-                              </>
-                            );
-                          } else if (stepCount === 4) {
-                            return (
-                              <>
-                                <path d="M 165,35 Q 200,20 235,35" fill="none" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-purple)" style={{ animation: 'dash 1.2s linear infinite' }} />
-                                <path d="M 135,35 Q 100,20 65,35" fill="none" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-purple)" style={{ animation: 'dash 1.2s linear infinite' }} />
-                              </>
-                            );
-                          } else if (stepCount === 5) {
-                            return <path d="M 235,35 Q 200,20 165,35" fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arrow-green)" style={{ animation: 'dash 1.2s linear infinite' }} />;
-                          }
-                          return null;
-                        })()}
-                      </svg>
-                    )}
-
-                    {/* HTML Floating Labels to prevent SVG text distortion */}
-                    {flowState === 'negotiating' && (() => {
-                      const stepCount = negotiationLogs.length;
-                      const baseLabelStyle = {
-                        position: 'absolute',
-                        transform: 'translateX(-50%)',
-                        fontSize: '0.9rem',
-                        fontWeight: 'bold',
-                        zIndex: 11,
-                        pointerEvents: 'none',
-                        background: 'var(--bg-card)',
-                        padding: '3px 8px',
-                        borderRadius: '4px',
-                        border: '1px solid var(--glass-border)',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                        whiteSpace: 'nowrap'
-                      };
-
-                      if (stepCount === 1) {
-                        return (
-                          <div style={{ ...baseLabelStyle, left: '33.3%', top: '0px', color: 'var(--color-danger)', borderColor: 'rgba(229, 9, 20, 0.3)' }}>
-                            Exclusivity Block Check
-                          </div>
-                        );
-                      } else if (stepCount === 2) {
-                        return (
-                          <div style={{ ...baseLabelStyle, left: '50%', top: '-20px', color: 'var(--accent-purple)', borderColor: 'rgba(124, 58, 237, 0.3)' }}>
-                            Suggest Replace Spoiler Image
-                          </div>
-                        );
-                      } else if (stepCount === 3) {
-                        return (
-                          <div style={{ ...baseLabelStyle, left: '50%', top: '-20px', color: 'var(--color-success)', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
-                            Font & Image Swapped (Clean)
-                          </div>
-                        );
-                      } else if (stepCount === 4) {
-                        return (
-                          <div style={{ ...baseLabelStyle, left: '50%', top: '-8px', color: 'var(--accent-purple)', borderColor: 'rgba(124, 58, 237, 0.3)' }}>
-                            Reroute: Check Europe Exclusivity
-                          </div>
-                        );
-                      } else if (stepCount === 5) {
-                        return (
-                          <div style={{ ...baseLabelStyle, left: '66.6%', top: '0px', color: 'var(--color-success)', borderColor: 'rgba(16, 185, 129, 0.3)' }}>
-                            Timelines & Embargo Cleared
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', position: 'relative', zIndex: 1 }}>
-                      
-                      {/* Node A: Style Compliance Agent Workflow */}
-                      <div className={`agent-node-card ${
-                        flowState === 'idle' ? '' : (
-                          flowState === 'uploading' || flowState === 'analyzing' ? '' : (
-                            flowState === 'negotiating' ? (
-                              negotiationLogs[negotiationLogs.length - 1]?.agent === 'Brand Style Compliance Agent' ? 'active' : (
-                                fontStyle === 'SpaceGrotesk' ? 'warning' : 'success'
-                              )
-                            ) : (
-                              flowState === 'warning' ? 'warning' : 'success'
-                            )
-                          )
-                        )
-                      }`}>
-                        <div className="node-header">
-                          <span>Style Agent</span>
-                          <span style={{ fontSize: '0.55rem' }}>
-                            {flowState === 'idle' ? '● idle' : (
-                              flowState === 'uploading' || flowState === 'analyzing' ? '● verifying' : (
-                                flowState === 'negotiating' ? (
-                                  negotiationLogs[negotiationLogs.length - 1]?.agent === 'Brand Style Compliance Agent' ? '● negotiating' : (
-                                    fontStyle === 'SpaceGrotesk' ? '⚠️ warning' : '✓ pass'
-                                  )
-                                ) : (
-                                  flowState === 'warning' ? '⚠️ warning' : '✓ pass'
-                                )
-                              )
-                            )}
-                          </span>
-                        </div>
-                        <div className="sub-workflow-list">
-                          <div className={`sub-step ${flowState !== 'idle' ? 'completed' : ''}`}>
-                            {flowState !== 'idle' ? <CheckCircle size={8} /> : <div style={{width: 8}}/>}
-                            <span>Ingest Assets</span>
-                          </div>
-                          <div className={`sub-step ${['analyzing', 'negotiating', 'warning', 'resolved', 'completed', 'failed'].includes(flowState) ? 'completed' : ''}`}>
-                            {['analyzing', 'negotiating', 'warning', 'resolved', 'completed', 'failed'].includes(flowState) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>}
-                            <span>Verify Swatches</span>
-                          </div>
-                          <div className={`sub-step ${
-                            (flowState === 'warning' || (flowState === 'negotiating' && fontStyle === 'SpaceGrotesk')) ? 'active' : (
-                              (['resolved', 'completed', 'failed'].includes(flowState) || (flowState === 'negotiating' && fontStyle === 'Outfit')) ? 'completed' : ''
-                            )
-                          }`} style={{ borderColor: (flowState === 'warning' || (flowState === 'negotiating' && fontStyle === 'SpaceGrotesk')) ? 'var(--color-warning)' : 'transparent' }}>
-                            {(flowState === 'warning' || (flowState === 'negotiating' && fontStyle === 'SpaceGrotesk')) ? <AlertTriangle size={8} className="text-warning" /> : (
-                              (['resolved', 'completed', 'failed'].includes(flowState) || (flowState === 'negotiating' && fontStyle === 'Outfit')) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>
-                            )}
-                            <span>Flag anomalies</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Node B: Legal Clearance & IP Counsel Workflow */}
-                      <div className={`agent-node-card ${
-                        flowState === 'idle' ? '' : (
-                          flowState === 'uploading' || flowState === 'analyzing' ? '' : (
-                            flowState === 'negotiating' ? (
-                              negotiationLogs[negotiationLogs.length - 1]?.agent === 'IP Counsel Agent' ? 'active' : (
-                                targetMarket === 'North America' ? 'warning' : 'success'
-                              )
-                            ) : (
-                              flowState === 'warning' ? 'warning' : 'success'
-                            )
-                          )
-                        )
-                      }`} style={{ borderColor: (flowState === 'warning' || (flowState === 'negotiating' && targetMarket === 'North America' && negotiationLogs[negotiationLogs.length - 1]?.agent !== 'IP Counsel Agent')) ? 'var(--color-danger)' : '' }}>
-                        <div className="node-header">
-                          <span>Legal IP Agent</span>
-                          <span style={{ 
-                            fontSize: '0.55rem', 
-                            color: (flowState === 'warning' || (flowState === 'negotiating' && targetMarket === 'North America' && negotiationLogs[negotiationLogs.length - 1]?.agent !== 'IP Counsel Agent')) ? 'var(--color-danger)' : '' 
-                          }}>
-                            {flowState === 'idle' ? '● idle' : (
-                              flowState === 'uploading' || flowState === 'analyzing' ? '● verifying' : (
-                                flowState === 'negotiating' ? (
-                                  negotiationLogs[negotiationLogs.length - 1]?.agent === 'IP Counsel Agent' ? '● negotiating' : (
-                                    targetMarket === 'North America' ? '⛔ blocked' : '✓ cleared'
-                                  )
-                                ) : (
-                                  flowState === 'warning' ? '⛔ blocked' : '✓ cleared'
-                                )
-                              )
-                            )}
-                          </span>
-                        </div>
-                        <div className="sub-workflow-list">
-                          <div className={`sub-step ${flowState !== 'idle' ? 'completed' : ''}`}>
-                            {flowState !== 'idle' ? <CheckCircle size={8} /> : <div style={{width: 8}}/>}
-                            <span>Check Rights</span>
-                          </div>
-                          <div className={`sub-step ${
-                            (flowState === 'warning' || (flowState === 'negotiating' && targetMarket === 'North America')) ? 'active' : (
-                              (['resolved', 'completed', 'failed'].includes(flowState) || (flowState === 'negotiating' && targetMarket === 'Europe')) ? 'completed' : ''
-                            )
-                          }`} style={{ borderColor: (flowState === 'warning' || (flowState === 'negotiating' && targetMarket === 'North America')) ? 'var(--color-danger)' : 'transparent' }}>
-                            {(flowState === 'warning' || (flowState === 'negotiating' && targetMarket === 'North America')) ? <AlertCircle size={8} style={{ color: 'var(--color-danger)' }} /> : (
-                              (['resolved', 'completed', 'failed'].includes(flowState) || (flowState === 'negotiating' && targetMarket === 'Europe')) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>
-                            )}
-                            <span>Scan Exclusivity</span>
-                          </div>
-                          <div className={`sub-step ${['resolved', 'completed', 'failed'].includes(flowState) ? 'completed' : ''}`}>
-                            {['resolved', 'completed', 'failed'].includes(flowState) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>}
-                            <span>Verify Customs</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Node C: Franchise Storyline & Lore Compliance Agent (AG_Storyline) */}
-                      <div className={`agent-node-card ${
-                        flowState === 'idle' ? '' : (
-                          flowState === 'uploading' || flowState === 'analyzing' ? '' : (
-                            flowState === 'negotiating' ? (
-                              negotiationLogs[negotiationLogs.length - 1]?.agent === 'Franchise Storyline & Lore Agent' ? 'active' : (
-                                storylineStatus === 'Spoiler Flagged' ? 'warning' : 'success'
-                              )
-                            ) : (
-                              flowState === 'failed' ? 'warning' : 'success'
-                            )
-                          )
-                        )
-                      }`} style={{ borderColor: (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged' && negotiationLogs[negotiationLogs.length - 1]?.agent !== 'Franchise Storyline & Lore Agent')) ? 'var(--color-danger)' : '' }}>
-                        <div className="node-header">
-                          <span>Storyline Agent</span>
-                          <span style={{ 
-                            fontSize: '0.55rem', 
-                            color: (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged' && negotiationLogs[negotiationLogs.length - 1]?.agent !== 'Franchise Storyline & Lore Agent')) ? 'var(--color-danger)' : '' 
-                          }}>
-                            {flowState === 'idle' ? '● idle' : (
-                              flowState === 'uploading' || flowState === 'analyzing' ? '● verifying' : (
-                                flowState === 'negotiating' ? (
-                                  negotiationLogs[negotiationLogs.length - 1]?.agent === 'Franchise Storyline & Lore Agent' ? '● negotiating' : (
-                                    storylineStatus === 'Spoiler Flagged' ? '❌ leak' : '✓ consistent'
-                                  )
-                                ) : (
-                                  flowState === 'failed' ? '❌ leak' : '✓ consistent'
-                                )
-                              )
-                            )}
-                          </span>
-                        </div>
-                        <div className="sub-workflow-list">
-                          <div className={`sub-step ${['analyzing', 'negotiating', 'warning', 'resolved', 'completed', 'failed'].includes(flowState) ? 'completed' : ''}`}>
-                            {['analyzing', 'negotiating', 'warning', 'resolved', 'completed', 'failed'].includes(flowState) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>}
-                            <span>Scan Scripts</span>
-                          </div>
-                          <div className={`sub-step ${
-                            (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? 'active' : (
-                              (['resolved', 'completed'].includes(flowState) || (flowState === 'negotiating' && storylineStatus === 'Compliant')) ? 'completed' : ''
-                            )
-                          }`} style={{ borderColor: (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? 'var(--color-danger)' : 'transparent' }}>
-                            {(flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? <AlertCircle size={8} style={{ color: 'var(--color-danger)' }} /> : (
-                              (['resolved', 'completed'].includes(flowState) || (flowState === 'negotiating' && storylineStatus === 'Compliant')) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>
-                            )}
-                            <span>Verify Canon</span>
-                          </div>
-                          <div className={`sub-step ${
-                            (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? 'active' : (
-                              (['resolved', 'completed'].includes(flowState) || (flowState === 'negotiating' && storylineStatus === 'Compliant')) ? 'completed' : ''
-                            )
-                          }`} style={{ borderColor: (flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? 'var(--color-danger)' : 'transparent' }}>
-                            {(flowState === 'failed' || (flowState === 'negotiating' && storylineStatus === 'Spoiler Flagged')) ? <XCircle size={8} style={{ color: 'var(--color-danger)' }} /> : (
-                              (['resolved', 'completed'].includes(flowState) || (flowState === 'negotiating' && storylineStatus === 'Compliant')) ? <CheckCircle size={8} /> : <div style={{width: 8}}/>
-                            )}
-                            <span>Check Embargo</span>
-                          </div>
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-
-                  {/* INTER-AGENT LOOPBACK INDICATOR */}
-                  <div className="loop-feedback-line" style={{ marginTop: '0.5rem' }}>
-                    <span className="loop-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <LoopIcon size={16} className={['warning', 'resolved', 'negotiating'].includes(flowState) ? "spin" : ""} style={{ animation: ['warning', 'resolved', 'negotiating'].includes(flowState) ? 'spin 3s linear infinite' : 'none' }} />
-                      <span>Concurrently verifying multi-agent parameters overrides loopback</span>
-                    </span>
-                  </div>
-
-                  {/* Flow Arrow indicating transition to Sourcing & Dispatch */}
-                  <div className="arrow-flow active" style={{ display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>CONTRACT DISPATCH</div>
-                    <ArrowRight style={{ transform: 'rotate(90deg)' }} />
-                  </div>
-
-                  {/* Row 2: Post-Approval Sourcing & Dispatch */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
-                    {flowState === 'completed' ? (
-                      /* Visual Document Preview Card */
-                      <div className="canvas-panel" style={{ 
-                        background: 'rgba(var(--color-success-rgb), 0.03)',
-                        border: '2px solid var(--color-success)',
-                        boxShadow: 'var(--shadow-neon-success)',
-                        padding: '1rem',
-                        borderRadius: '0.6rem',
-                        animation: 'slideIn 0.4s ease-out'
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem', marginBottom: '0.75rem' }}>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <CheckCircle size={14} /> CERTIFICATE OF COMPLIANCE ISSUED
-                          </span>
-                          <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                            ID: VIBE-LIC-{(activeScenario === 'collab') ? '8841-EU' : ((activeScenario === 'hitl') ? '9012-SPLIT' : '1092-EU')}
-                          </span>
-                        </div>
-
-                        {/* Document Content Details */}
-                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem' }}>
-                          {/* Compliance Certificate Column */}
-                          <div style={{ flex: 1.2, background: 'var(--bg-secondary)', border: '1px dashed var(--glass-border)', padding: '0.6rem', borderRadius: '0.4rem' }}>
-                            <div style={{ fontWeight: 'bold', fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>Licensing Certificate</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.7rem' }}>
-                              <div><strong>Brand:</strong> STAR WARS</div>
-                              <div><strong>Target Route:</strong> {targetMarket}</div>
-                              <div><strong>Approved Font:</strong> {fontStyle}</div>
-                              <div><strong>Status:</strong> <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>CLEARED FOR PRODUCTION</span></div>
-                            </div>
-                            <div style={{ borderTop: '1px solid var(--glass-border)', marginTop: '0.5rem', paddingTop: '0.4rem' }}>
-                              <div style={{ fontSize: '0.55rem', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Digital Agent Signatures</div>
-                              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '0.5rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-success)', padding: '1px 4px', borderRadius: '3px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>✓ Style Compliance</span>
-                                <span style={{ fontSize: '0.5rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-success)', padding: '1px 4px', borderRadius: '3px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>✓ IP Counsel</span>
-                                <span style={{ fontSize: '0.5rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-success)', padding: '1px 4px', borderRadius: '3px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>✓ Storyline Lore</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Associated Contracts Column */}
-                          <div style={{ flex: 1, background: 'var(--bg-secondary)', border: '1px dashed var(--glass-border)', padding: '0.6rem', borderRadius: '0.4rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                            <div>
-                              <div style={{ fontWeight: 'bold', fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>Dispatched Contracts</div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.65rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--accent-blue)' }}>
-                                  <Layers size={10} /> Master Manufacturing Agr.
-                                </div>
-                                <div style={{ color: 'var(--text-muted)', paddingLeft: '0.75rem', fontSize: '0.55rem' }}>
-                                  Hub: {targetMarket} Factory (Signed)
-                                </div>
-                                
-                                {activeScenario === 'hitl' && showAddendumSuccess && (
-                                  <>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--accent-purple)', marginTop: '0.2rem' }}>
-                                      <Layers size={10} /> Addendum Contract SC-7798
-                                    </div>
-                                    <div style={{ color: 'var(--text-muted)', paddingLeft: '0.75rem', fontSize: '0.55rem' }}>
-                                      15,000 SKUs Split Allocation
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                            <div style={{ fontSize: '0.6rem', color: 'var(--color-success)', fontWeight: 'bold', borderTop: '1px solid var(--glass-border)', paddingTop: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.4rem' }}>
-                              <span>🚀 PO dispatched to factories</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Idle / Pending State */
-                      <div className={`agent-node-card ${
-                        flowState === 'failed' ? 'warning' : ''
-                      }`} style={{ borderColor: flowState === 'failed' ? 'var(--color-danger)' : '' }}>
-                        <div className="node-header">
-                          <span>Post-Approval Sourcing & Dispatch</span>
-                          <span>{flowState === 'failed' ? '❌ release frozen' : '● pending audit'}</span>
-                        </div>
-                        <div className="sub-workflow-list" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                          <div className={`sub-step ${flowState === 'failed' ? 'completed' : ''}`}>
-                            {flowState === 'failed' ? <XCircle size={10} style={{ color: 'var(--color-danger)' }} /> : <div style={{width: 10}}/>}
-                            <span>1. Generating Certificate</span>
-                          </div>
-                          <div className={`sub-step ${flowState === 'failed' ? 'completed' : ''}`}>
-                            {flowState === 'failed' ? <XCircle size={10} style={{ color: 'var(--color-danger)' }} /> : <div style={{width: 10}}/>}
-                            <span>2. Dispatching Contracts</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                </div>
-              </div>
-
-              {/* Console log terminal */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '0.4rem' }}>
-                  <Terminal size={12} />
-                  <span>Execution telemetry console logs</span>
-                </div>
-                <div className="console-panel">
-                  {logs.map(log => (
-                    <div key={log.id} className="log-line">
-                      <span className="log-timestamp">[{log.time}]</span>
-                      <span className="log-agent">{log.agent}:</span>
-                      <span>{log.message}</span>
-                    </div>
-                  ))}
-                  <div ref={terminalEndRef} />
-                </div>
-              </div>
-
-            </div>
-          </>
-        )}
+        {activeTab === 'canvas' && <ChatAudit />}
 
         {activeTab === 'contrast' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: '1.5rem', width: '100%', height: '100%', overflowY: 'auto' }}>

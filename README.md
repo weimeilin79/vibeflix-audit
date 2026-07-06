@@ -12,12 +12,44 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 2. **ADK 2.0 Python Agents**: A mesh of independent Python agents:
    - **Sourcing Orchestrator (Router)**: Captures uploads, checks parameters, coordinates state, and invokes display layouts.
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
-   - **Global Market Clearance & IP Counsel Agent (Counsel)**: Verifies region contracts, exclusivity collisions (e.g. Hasbro), and customs trademark registrations.
+   - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
    - **Franchise Storyline & Lore Agent (Lore)**: Checks script databases, lore canon compliance, and screens for script leak/spoiler threats.
-3. **Decoupled MCP Servers**: Structured as 3 independent, containerizable domain servers:
+3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
-   - `mcp_legal`: IP style rules registry, Exclusivity contracts, Customs trademark checkers.
+   - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
+
+### 9-service distributed mesh
+
+The orchestrator (a deterministic Workflow graph) fans out to the three domain
+agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
+The app also calls a fourth agent — **ui_renderer** — over A2A to paint the result
+as A2UI. Every box is its own container/instance.
+
+```
+                    ┌─────────── app container (:8000) ───────────┐
+  browser ◄──SSE───►│  React (static, streaming A2UI renderer)  +  │
+   (live A2UI)      │  FastAPI /api/*  +  Sourcing Orchestrator    │
+                    │  (A2A CLIENT, deterministic — no LLM)        │
+                    └──┬──────────────┬──────────────┬──────────┬──┘
+                  A2A  │         A2A  │         A2A  │     A2A  │ (paint)
+        ┌──────────────▼─┐ ┌──────────▼───────┐ ┌────▼─────┐ ┌──▼──────────┐
+        │  brand_style   │ │ vendor_clearance │ │ storyline│ │ ui_renderer │
+        │     :8001      │ │      :8002       │ │  :8003   │ │   :8004     │
+        └──┬──────────┬──┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
+   HTTP/MCP│          │  HTTP/MCP          │ HTTP/MCP         │  no MCP)    │
+    ┌──────▼──────┐ ┌─▼────────┐ ┌─────────▼────┐ ┌──────────┴───┐
+    │mcp_brand_   │ │mcp_visio │ │mcp_licensing │ │  mcp_market  │  (streamable-HTTP)
+    │style  :9004 │ │n_ui :9001│ │    :9002     │ │    :9003     │
+    └─────────────┘ └──────────┘ └──────────────┘ └──────────────┘
+  brand_style → mcp_brand_style + mcp_vision_ui · vendor_clearance → mcp_licensing + mcp_market
+```
+
+The audit **streams**: `POST /api/audit/stream` (SSE) pushes A2UI `surfaceUpdate`
+messages as the graph runs — the plan appears instantly, then each panel fills in
+as its workflow returns (see *A2UI streaming* below).
+
+See **[deploy/README.md](deploy/README.md)** for the env contract and Cloud Run / Agent Engine deployment.
 
 ---
 
@@ -26,75 +58,361 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 ```
 vibeflix/
 ├── frontend/                   # React app (A2UI renderer & sandbox dashboard)
-├── agents/                     # Independent Python agents (ADK 2.0 + FastAPI Server)
-│   ├── app.py                  # FastAPI proxy backend
-│   ├── orchestrator/           # Sourcing Orchestrator folder (agent.py)
-│   ├── brand_style/            # Brand Style Compliance Agent folder (agent.py)
-│   ├── ip_counsel/             # Global Market Clearance Agent folder (agent.py)
-│   └── storyline/              # Franchise Storyline & Lore Agent folder (agent.py)
-└── mcp_servers/                # Decoupled MCP servers grouped by function
-    ├── mcp_vision_ui/          # Vision analyzer & UI renderer
-    ├── mcp_legal/              # IP guidelines, exclusivity contracts, customs registry
-    └── mcp_market/             # Scrapers, ledger limits, governance logs
+├── agents/                     # ADK 2.0 agents (app container + 4 A2A services)
+│   ├── app.py                  # FastAPI: frontend + orchestrator/ui_renderer A2A client + SSE stream
+│   ├── a2ui_surface.py         # App-side A2UI assembly (panels → surface) + streaming builders + fallback
+│   ├── orchestrator/           # Sourcing Orchestrator — deterministic Workflow graph (raw reports out)
+│   ├── ui_renderer/            # A2UI presenter A2A service (:8004) — skills/render-a2ui/ (reports → panels)
+│   ├── brand_style/            # Brand Style agent (A2A server) — skills/brand-compliance-audit/
+│   ├── vendor_clearance/       # Vendor & Licensing Clearance agent — skills/vendor-clearance/
+│   └── storyline/              # Franchise Storyline & Lore agent — skills/canon-check/
+│                               #   (each agent's procedure = a versioned ADK Skill / SKILL.md)
+├── mcp_servers/                # Decoupled MCP servers (one running instance each)
+│   ├── mcp_vision_ui/          # Mockup parse + A2UI canvas helpers
+│   ├── mcp_brand_style/        # Brand compliance checks (typo, printed-medium, asset-source)
+│   ├── mcp_licensing/          # Vendor + trademark + exclusivity registry (in-memory, CRUD)
+│   └── mcp_market/             # Scrapers, ledger limits, governance logs
+├── packages/
+│   └── vibeflix-common/        # Shared package (installed by every service, so each
+│                               # agent/MCP image is self-contained & independently
+│                               # deployable): mcp_clients, schema_guard, image_input,
+│                               # memory, serve_a2a, registry. Extras: [agents] / [mcp].
+├── deploy/                     # Dockerfiles (app/agent/mcp) + Cloud Run / Agent Engine guide
+├── docker-compose.yml          # Local 9-service topology
+└── run_local.sh                # compose wrapper (up / down / smoke / logs / frontend / mesh)
 ```
+
+---
+
+## 🗄️ Data sources & schemas
+
+Every "fact" the mesh checks lives inside an MCP server. Most are self-contained
+Python data (seeded, so the demo runs with **no external database**); a few can be
+overridden from Firestore when `FIRESTORE_DATABASE` is set.
+
+| Data source | Server | Storage | Writable | Holds |
+|---|---|---|---|---|
+| **Vendors** | `mcp_licensing` | in-memory dict | ✅ create / update | approved manufacturing partners |
+| **Trademarks** | `mcp_licensing` | in-memory dict | seed | IP/trademark registration per character |
+| **Exclusivity contracts** | `mcp_licensing` | in-memory dict | seed | category × territory exclusivity locks |
+| **Brand allowlist / printed media / approved asset sources** | `mcp_brand_style` | canned defaults, Firestore-overridable (`brand_style_registry`) | via Firestore | brand-compliance reference lists |
+| **Mockup parse** | `mcp_vision_ui` | canned CV stub (`_parse`) | — | structural parse of the uploaded mockup |
+| **Sourcing caps** | `mcp_market` | canned default, Firestore-overridable (`market_policy/sourcing_caps`) | via Firestore | primary-vendor volume ceiling (25,000) |
+| **Marketplace scan / audit map** | `mcp_market` | simulated | — | e-com leak scan, telemetry log |
+| **Audit results** | app | Vertex Agent Engine / Firestore when `AGENT_ENGINE_ID` set, else none | ✅ | persisted audit runs |
+
+> **In-memory caveat:** `mcp_licensing`'s stores are per-process, single-instance, and
+> reset on restart — deliberately, so create/update are trivial for the demo. Behind the
+> same tool surface, production would back them with Firestore/Postgres. *(Operational
+> note: restarting an MCP server invalidates its agents' open MCP sessions — restart the
+> dependent agent containers too, or they lose their tools until they reconnect.)*
+
+### `mcp_licensing` schemas
+
+**Vendor** — `get_vendor` · `find_vendors(territory, category, status)` · `create_vendor` · `update_vendor`:
+```jsonc
+{
+  "vendor_id": "VND-1001",                 // assigned (VND-####) if omitted on create; immutable
+  "legal_name": "Shenzhen Apex Collectibles Ltd.",   // required
+  "dba": "Apex Toys",
+  "hq_country": "China",                   // required
+  "operating_territories": ["Asia-Pacific", "North America"],
+  "product_categories": ["Vinyl Figures", "Action Figures", "Blind Box"],
+  "manufacturing_capabilities": ["injection_molding", "hand_painting", "packaging"],
+  "license_tier": "Tier 1 - Approved",     // Tier 1 - Approved | Tier 2 - Conditional | Tier 3 - Probation
+  "status": "active",                      // active | suspended | pending_review
+  "annual_capacity_units": 4500000,
+  "moq": 3000,                             // minimum order quantity
+  "lead_time_days": 55,
+  "certifications": ["ISO 9001", "ICTI Ethical Toy", "ASTM F963"],
+  "compliance_rating": "A",                // A | B | C | D
+  "last_audit": "2025-11-02",
+  "contact": { "name": "...", "email": "...", "phone": "..." },
+  "onboarded": "2021-03-14",
+  "notes": "..."
+}
+```
+
+**Trademark** — `verify_trademark_record(character_id, territory?)`:
+```jsonc
+{
+  "mark": "GROGU", "character_id": "grogu", "owner": "Lucasfilm Ltd. LLC",
+  "registration_number": "US-88765432",
+  "nice_classes": ["Class 28 — Toys & Games", "Class 25 — Apparel"],
+  "jurisdictions": { "North America": "registered", "Latin America": "pending", "…": "unregistered" },
+  "registration_status": "Valid",
+  "customs_recordation": { "US_CBP": true, "EU_customs": true },
+  "filed": "2020-01-10", "renewal_date": "2030-01-10", "status": "active"
+}
+```
+
+**Exclusivity contract** — `scan_global_exclusivity_clauses(character_id, territory)`:
+```jsonc
+{
+  "contract_id": "EXC-4471", "partner": "Hasbro Inc.", "character_id": "grogu",
+  "category": "Stylized Vinyl Figurines / Action Figures",
+  "territory": "North America", "type": "exclusive",
+  "effective": "2023-01-01", "expiration": "2028-12-31",
+  "status": "active"                       // only ACTIVE + unexpired contracts block a release
+}
+```
+
+`check_vendor_eligibility(vendor_id, territory, category)` composes all three: a vendor
+is eligible only when it is `active`, cleared to operate in the territory, makes the
+category, **and** no active exclusivity contract locks that category × territory.
+
+**Seeded data** (edit `mcp_servers/mcp_licensing/server.py` to change):
+- **12 vendors** (`VND-1001`–`1012`) across China, Germany, Mexico, Japan, Türkiye,
+  Poland, Canada, USA, Brazil, Colombia, Argentina, Taiwan — mixed tiers/statuses.
+- **6 trademarks**: Grogu (Lucasfilm), Gremlins (Warner Bros.), E.T. (Universal),
+  Stitch (Disney), Little Green Men (Disney/Pixar), Minions (Universal).
+- **8 exclusivity contracts** — e.g. Hasbro (Grogu vinyl, NA), NECA (Gremlins figures,
+  NA), Super7 (Gremlins vinyl, EU), Bandai (Stitch vinyl, APAC), Funko (E.T. blind box,
+  EU), Mattel (Minions plush, NA) — plus a couple **expired** ones (Funko/Grogu,
+  Mattel/Little Green Men) that correctly no longer block.
 
 ---
 
 ## 🚀 Running Locally
 
-### 1. Frontend (React UI)
-
-Enter the frontend directory, install dependencies, and spin up Vite:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The UI sandbox will be active at [http://localhost:3000](http://localhost:3000).
-
-### 2. Multi-Agent Backend (Python/FastAPI + ADK 2.0)
-
-The agents are built on the **ADK 2.0 graph Workflow API**, which is pre-GA, so
-dependencies must be installed with prereleases allowed. ADK 2.0 requires
-**Python ≥ 3.11**. Set up a virtual environment, install requirements, and run
-the server **from the repository root** (the backend uses absolute `agents.*`
-package imports):
+The system is **distributed**: 9 services (frontend+orchestrator, **4** A2A agents —
+brand_style/vendor_clearance/storyline/**ui_renderer** — and 4 MCP servers) wired together
+with docker compose. The orchestrator + app talk to the agents over **A2A**; the
+domain agents talk to the MCP servers over **streamable-HTTP**.
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-uv pip install --prerelease=allow -r agents/requirements.txt || pip install --pre -r agents/requirements.txt
-python -m agents.app
+gcloud auth application-default login     # agents call Gemini on Vertex AI
+./run_local.sh up                         # build + start all 9 services
+# open http://localhost:8000  →  click "Run Live Audit (Backend)"
 ```
 
-Runs on port `8000`. Gemini-backed agents need credentials — set
-`GOOGLE_API_KEY` (AI Studio) or `GOOGLE_GENAI_USE_VERTEXAI=1` with
-`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` (Vertex AI) in the environment.
+`./run_local.sh smoke` brings the mesh up and POSTs a sample audit;
+`./run_local.sh down` tears it down. The app container builds the React frontend
+and FastAPI serves it on the same origin as `/api/*` (port `8000`).
 
-**Workflow graph:** `START → ingest → (brand_style ‖ ip_counsel ‖ storyline) →
-merge → compile_ui → sourcing_gate (HITL) → finalize`. Each domain agent is an
-`LlmAgent` that calls its MCP server(s) as tools. When production volume exceeds
-the vendor cap (25,000), `sourcing_gate` interrupts; resolve it via
-`POST /api/audit/resume` with `{"session_id": ..., "choice": "A"|"B"}`.
+**Frontend dev loop (optional):** with the mesh running, `./run_local.sh
+frontend` starts Vite on `:3000` against the app API (`VITE_API_URL`).
 
-### 3. MCP Servers
+### Test one agent in isolation (no Docker)
 
-Each group can be executed or run independently via FastMCP or Python:
+To iterate on a single agent without bringing up the whole A2A mesh, start the
+MCP servers locally and run the agent in-process. In one shell:
 
 ```bash
-cd ../mcp_servers/mcp_vision_ui
-python3 -m venv venv && source venv/bin/activate
-uv pip install -r requirements.txt || pip install -r requirements.txt
-python server.py
+./run_local.sh mcp        # starts mcp_vision_ui:9001, mcp_licensing:9002, mcp_market:9003, mcp_brand_style:9004
 ```
+
+In another shell:
+
+```bash
+./run_local.sh test-agent vendor_clearance --market "North America"
+./run_local.sh test-agent brand_style
+./run_local.sh test-agent storyline --volume 40000
+```
+
+`agents/test_agent.py` runs that single agent in-process (no A2A layer), seeds the
+session state it reads, defaults the `MCP_*_URL`s to the local servers, prints
+every tool call, and dumps the structured report. For example, `vendor_clearance`
+against North America calls its `mcp_licensing` + `mcp_market` tools over HTTP and
+returns the real `ClearanceReport`:
+
+```
+→ scan_global_exclusivity_clauses(grogu, North America)   → Hasbro lock (EXC-4471)
+→ verify_trademark_record(grogu, North America)           → registered
+→ find_vendors(North America, Vinyl Figures, active)      → VND-1001, VND-1003
+→ check_vendor_eligibility(VND-1001, North America, …)    → ineligible (Hasbro)
+→ scan_ecom_marketplaces(grogu, North America)            → secure
+status: "blocked" · exclusivity_collision (critical) · 2 vendors, both ineligible
+```
+
+> This confirms ADK 2.3 lets an agent call MCP tools **and** emit its
+> `output_schema` (it injects a `set_model_response` finalizer) — tools and
+> structured output coexist.
+
+#### Testing Brand Style Agent
+
+To poke at a single agent in the ADK web UI, start its MCP server(s) (shell 1:
+`./run_local.sh mcp` — this also installs the shared `vibeflix-common` package
+that the agents import; if you built the venv by hand, run `uv pip install
+./packages/vibeflix-common --no-deps` too), then point `adk web` at that agent's
+folder with the MCP URLs exported:
+
+```bash
+cd ~/Desktop/work/vibeflix-audit
+source .venv/bin/activate
+export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
+export MCP_VISION_UI_URL=http://127.0.0.1:9001/mcp
+adk web agents/brand_style
+```
+
+Open http://127.0.0.1:8000, pick **brand_style**, and chat to watch the tool
+calls and report in the trace view. The **agent** does the extraction itself (its
+own vision on the image via the link — `gs://` by reference, `http(s)` downloaded
++ inlined), then calls **one** deterministic tool on `mcp_brand_style`,
+`run_brand_audit(text, medium, image_uri)`, which runs the whole fixed pipeline in
+code — the agent does **not** orchestrate the individual checks. No MCP server uses
+an LLM. `run_brand_audit` **gates on the asset source**: an unapproved image link
+short-circuits to `status: rejected` (content checks skipped). Output is one
+`output_schema` (`BrandStyleReport`), `status` ∈ `needs_input` | `rejected` |
+`flagged` | `compliant`, with a `question` for the first two.
+
+- *"run a brand compliance audit"* (no image) → the agent **asks** for the image
+  and its link — it will **not** fabricate inputs or call the tool without them.
+- attach/link an **unapproved** image (e.g. a random CDN URL) → `run_brand_audit`
+  returns `rejected`; the agent asks you to supply an **approved** image
+  (`gs://vibeflix-approved-assets/…`).
+- attach an image from an approved source → the agent extracts its text/medium via
+  vision and reports the merged findings.
+
+Export only the `MCP_*_URL`s that agent uses: brand_style needs
+`MCP_BRAND_STYLE_URL` + `MCP_VISION_UI_URL`; `vendor_clearance` needs `MCP_LICENSING_URL` +
+`MCP_MARKET_URL`; `storyline` needs none. Point `adk web` at the **single agent
+folder** (not the
+whole `agents/` dir, which would also try to load the orchestrator and its A2A
+URLs).
+
+#### Testing Vendor Clearance Agent
+
+`vendor_clearance` uses `mcp_licensing` (vendors + trademarks + exclusivity) and
+`mcp_market` (marketplace scan). Start the MCP servers (shell 1: `./run_local.sh mcp`),
+then point `adk web` at the agent with just those two URLs exported:
+
+```bash
+cd ~/Desktop/work/vibeflix-audit
+source .venv/bin/activate
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+export MCP_MARKET_URL=http://127.0.0.1:9003/mcp
+adk web agents/vendor_clearance
+```
+
+Open http://127.0.0.1:8000, pick **vendor_clearance**, and try:
+
+- *"clear grogu for North America"* → runs the exclusivity + trademark checks, finds
+  Vinyl-Figure vendors, and returns the `ClearanceReport` — **blocked** by the Hasbro
+  lock, with every matching vendor marked ineligible.
+- *"clear grogu for Asia-Pacific"* → **cleared**, with eligible vendors (China / Japan /
+  Taiwan).
+- *"which active vendors can make Plush in Latin America?"* → `find_vendors`.
+- *"is Gremlins locked for action figures in North America?"* → `scan_global_exclusivity_clauses`
+  (NECA holds it).
+- *"onboard a vendor: Hanoi Figure Co in Vietnam, makes Vinyl Figures, operates in
+  Asia-Pacific"* → `create_vendor`; *"suspend VND-1003"* → `update_vendor`.
+
+Because every tool parameter is described in its schema (allowed territories,
+categories, statuses, character IDs, and the `create_vendor` JSON shape), the agent
+knows exactly what to pass for each call.
+
+#### Test the orchestrator with `adk web` (no Docker)
+
+The orchestrator is a graph whose nodes are `RemoteA2aAgent` references, so it
+needs the agent services running. Bring up the full backend mesh (4 MCP + 3 A2A
+agent services) in one shell, then point `adk web` at the orchestrator in another.
+
+```bash
+# shell 1 — full backend mesh (Ctrl-C stops all)
+gcloud auth application-default login    # agents call Vertex
+./run_local.sh mesh                      # MCP :9001-:9004, agent cards :8001-:8004 (incl. ui_renderer)
+```
+
+```bash
+# shell 2 — adk web on the orchestrator
+cd ~/Desktop/work/vibeflix-audit
+source .venv/bin/activate
+export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \
+       VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \
+       STORYLINE_A2A_URL=http://127.0.0.1:8003
+adk web agents/orchestrator              # open http://127.0.0.1:8000, pick "orchestrator"
+```
+
+You'll see the workflow graph and the fan-out to the live A2A agents in the trace.
+`ingest` parses your message (JSON or **plain English**), so just describe the
+request and include the image link, e.g.:
+
+```
+Vendor submitted gs://vibeflix-approved-assets/vendor_request.jpg for North America, 40000 units
+```
+It pulls out the `gs://`/`https` link, the market (say "North America" / "Europe" /
+"Asia"), and the volume (a number):
+- `North America` → `vendor_clearance` returns the Hasbro **blocked** exclusivity collision.
+- `40000` (> 25,000 cap) → the **`sourcing_gate`** asks for a split/cap decision
+  (a collected field, Option A/B); `Europe` + `15000` → clean pass.
+
+(A JSON payload also works: `{"target_market": "North America", "volume": 40000}`.)
+
+Notes:
+- **brand_style shows `needs_input`** here — no real image travels through the A2A
+  workflow to it, so it honestly asks for one (vendor_clearance / storyline are the
+  meaningful nodes to watch in the mesh).
+- `compile_ui` recovers each agent's report from the session events by author
+  (`RemoteA2aAgent` nodes don't surface their output to the JoinNode).
+
+**Workflow graph (in the orchestrator):**
+`START → ingest → dispatch → (guard_brand ‖ guard_ip ‖ guard_story) → merge →
+recovery → compile_ui → sourcing_gate → finalize`. Each guard wraps a `RemoteA2aAgent`
+(an `LlmAgent` that calls its MCP server(s) as tools) and either runs it or reuses its
+prior report, per the `dispatch` decision (see *Incremental re-run* below). The orchestrator is **deterministic** — it emits only the raw reports (+
+the sourcing outcome); it makes no LLM calls. When volume exceeds the vendor cap
+(25,000), `sourcing_gate` emits `sourcing.status = needs_choice` (a field the app
+collects), rather than interrupting the graph.
+
+**Two-layer reliability.** Gemini occasionally drops a report (a malformed
+`set_model_response`, worst on vendor_clearance). Rather than a blunt whole-audit re-run:
+- **Workflow layer — the `recovery` node.** The orchestrator reasons over its own
+  state: a report with no `status` is a failure, so it re-runs **only** those agents
+  in place (`ctx.run_node`, up to `MAX_RECOVERY` passes) and hands the healed set to
+  `compile_ui`. Selective, coordinator-owned self-heal — not "always run all three".
+- **Tool layer — `ReflectAndRetryToolPlugin`.** Every domain agent is served (via
+  `serve_a2a`) with this plugin, so when an actual **MCP tool** call errors, the model
+  reflects and retries that tool in place — shrinking how often the recovery node
+  even has to fire.
+
+**Incremental re-run (reasoned in a skill, not mapped).** The orchestrator's dispatch
+decision — *which workflows to run this request* — lives in a versioned skill
+(`agents/orchestrator/skills/workflow-dispatch/SKILL.md`). The `dispatch` node consults
+a skill-driven `workflow_dispatcher` LlmAgent that reasons: an **initial request** runs
+all workflows; a **re-run** compares the prior inputs to the new ones and runs only the
+workflows a changed input affects (judged from each workflow's self-description), plus
+any that were incomplete. The app threads the prior audit's reports + inputs back into
+the graph via a `run_token`; the guards run the dispatched workflows and **reuse** the
+rest (the UI tags reused panels *↺ Reused*). E.g. supplying a missing medium re-runs
+only `brand_style`; `vendor_clearance`/`storyline` replay from cache. No hardcoded
+input→workflow map and no if/else in a function — the rules are in the skill and the
+reasoning is done by the model.
+
+### 🎨 A2UI rendering & streaming
+
+Presentation is decoupled from the orchestrator. The **ui_renderer** agent (:8004,
+its own A2A service) turns the raw reports into user-friendly *panels* via a
+versioned skill (`skills/render-a2ui/`, `output_schema`, no tools → reliable native
+structured output); `agents/a2ui_surface.py` deterministically assembles those into
+a real **A2UI v0.9 surface** (`Column`/`Card`/`Text`/`Divider`), rendered by the
+official **`@a2ui/react`** renderer. It's **generic** — one panel per `*_report`, so
+adding a workflow needs no render change. If ui_renderer is unreachable, a rule-based
+fallback keeps the UI working.
+
+Two paths:
+- **`POST /api/audit`** — runs the graph once (the orchestrator's `recovery` node
+  handles reliability now), returns the finished surface. Non-streaming.
+- **`POST /api/audit/stream`** — **Server-Sent Events** carrying incremental A2UI
+  messages: the plan (`⏳ pending` panels + `beginRendering`) is pushed instantly,
+  then each panel is patched in place (merge-by-id) as its workflow returns — so the
+  UI fills in live, in completion order. The console uses this path. `needs_input`
+  ends the stream; the client re-streams with the added field. *(A panel fills on a
+  valid report and re-patches if the `recovery` node re-runs that workflow — pending →
+  ✅ self-heal, live.)*
+
+The `/api/audit/resume` endpoint (`{session_id, values}`) still backs the
+non-streaming collect loop.
+
+> ADK 2.0 (pre-GA, Python ≥ 3.11) is pinned with the `[a2a]` extra; images
+> install it with `--pre`. See **[deploy/README.md](deploy/README.md)** for the
+> environment contract and **Cloud Run / Agent Engine** deployment.
 
 ---
 
 ## 🎭 Interactive Flow Walkthrough
 
 - **Step 1: Ingest Image / Presets**: Choose a preset scenario or type a prompt commands to start. Sourcing Orchestrator initiates parallel checks across all 3 agents (Style, Legal, Storyline).
-- **Step 2: Style & Exclusivity Collision (Scenario 2)**: The Style Agent flags uncertified font family `SpaceGrotesk` for the text `THE CHILD`. The IP Counsel Agent flags a North American exclusive distribution conflict with Hasbro. Warning overlays are drawn over the product box.
+- **Step 2: Style & Exclusivity Collision (Scenario 2)**: The Style Agent flags uncertified font family `SpaceGrotesk` for the text `THE CHILD`. The Vendor & Licensing Clearance Agent flags a North American exclusive distribution conflict with Hasbro (and marks the matching vendors ineligible). Warning overlays are drawn over the product box.
 - **Step 3: Autonomous Mesh Resolution / User Remediation**: In Scenario 2, agents negotiate and resolve checks automatically. Otherwise, user manually swaps the market dropdown to **Europe**, re-running verification checks and clearing the blocks.
 - **Step 4: Human-in-the-Loop Sourcing Cap Override (Scenario 3)**: In Scenario 3, procurement volume (40,000) exceeds the primary vendor limit (25,000). Sourcing freezes, presenting a choices card. The user must explicitly choose **Option A** (Split excess 15k units to secondary Addendum Contract SC-7798-EU) or **Option B** (Strictly cap volume at 25k and cancel excess) before they can finalize the release.

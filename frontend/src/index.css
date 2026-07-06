@@ -701,3 +701,7 @@ body.dark-mode .prompt-bar-container {
   font-weight: bold;
   margin-right: 0.5rem;
 }
+
+/* Live workflow-graph node pulse while an agent is running. */
+@keyframes wfPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.wf-running { animation: wfPulse 1.2s ease-in-out infinite; }

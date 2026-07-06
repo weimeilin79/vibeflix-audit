@@ -1,66 +1,110 @@
-"""Brand Style Compliance Agent (the "Designer") — ADK 2.0 LlmAgent node.
+"""Brand Style Compliance Agent (the "Designer") — ADK 2.0 extract → audit agent.
 
-Extracts typography/logo/color from the mockup via the vision MCP server and
-checks it against the franchise style registry served by the legal MCP server.
-Placed directly in the Sourcing Orchestrator workflow graph (auto-wrapped).
+The agent does the EXTRACTION (reading the mockup's printed text and product medium,
+using its own multimodal vision when it can access the image); the MCP server is
+fully deterministic and only runs the checks.
+
+Output is a single `output_schema` (BrandStyleReport) that covers BOTH outcomes:
+  * status == "needs_input" → `question` carries what to ask the user (e.g. the
+    image link). This is how "conversation / needing more info" stays structured
+    instead of crashing an output_schema agent with free prose.
+  * status == "flagged" | "compliant" → `findings` merges the checks' results.
 """
 
 import os
+import pathlib
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google.adk.agents import LlmAgent
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools import skill_toolset
 
-from agents.mcp_clients import mcp_toolset
+from vibeflix_common.mcp_clients import mcp_toolset
+from vibeflix_common.schema_guard import make_schema_guard
+from vibeflix_common.image_input import require_image_before_model
 
 # Load this agent's Vertex AI / project configuration from its local .env.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-
-class StyleAnomaly(BaseModel):
-    element_id: str
-    issue_type: str = "typography_anomaly"
-    severity: str = "warning"
-    description: str
+_SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "brand-compliance-audit"
 
 
-class StyleReport(BaseModel):
-    """Structured output passed downstream to the JoinNode / compile_ui node."""
+class Finding(BaseModel):
+    """A single check finding. Fields are the union across the 3 checks (optional)."""
+
+    element_id: str = ""
+    issue_type: str = ""
+    severity: str = ""
+    description: str = ""
+    word: str = ""
+    suggestions: list[str] = Field(default_factory=list)
+    medium: str = ""
+    image_uri: str = ""
+
+
+class Extracted(BaseModel):
+    text: list[str] = Field(default_factory=list)
+    medium: str = ""
+    image_uri: str = ""
+
+
+class BrandStyleReport(BaseModel):
+    """Single structured output covering both the conversation and the result."""
 
     agent: str = "brand_style_compliance_agent"
-    status: str  # "compliant" | "warning"
-    anomalies: list[StyleAnomaly] = Field(default_factory=list)
+    # "needs_input"  → missing info; ask the user (see `question`).
+    # "rejected"     → the audit gate failed (unapproved image source); ask the
+    #                  user for an approved image (see `question` + `findings`).
+    # "flagged" / "compliant" → the audit ran; see `findings`.
+    status: str
+    # Populated when status is "needs_input" or "rejected": what to ask the user.
+    question: str = ""
+    # Which inputs are still needed from the user — e.g. ["medium"] or ["image"].
+    # Drives which field(s) the frontend renders. The medium is a manufacturing
+    # decision, so it's requested from the user rather than guessed from the image.
+    needs: list[str] = Field(default_factory=list)
+    extracted: Extracted = Field(default_factory=Extracted)
+    checks_run: list[str] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
 
 
 brand_style_agent = LlmAgent(
     name="brand_style_compliance_agent",
     model="gemini-flash-latest",
     description=(
-        "Extracts fonts, logos and colors from a product mockup and verifies them "
-        "against the official franchise style registry."
+        "Extracts a mockup's printed text and product medium from its image link, "
+        "then runs the deterministic typo, printed-medium, and asset-source checks."
     ),
     instruction=(
-        "You are the Brand Style Compliance Agent for the Vibeflix licensing pipeline.\n"
-        "The mockup under review is `{image_path}` for the `{target_market}` market.\n\n"
-        "Do the following with your tools:\n"
-        "1. Call `parse_design_elements` on the image to extract every text element, "
-        "its font, and its color.\n"
-        "2. Call `query_style_guidelines` with character_id 'grogu' to load the "
-        "official `allowed_fonts` and `hex_palette`.\n"
-        "3. For each extracted text element whose font is NOT in `allowed_fonts`, "
-        "record a typography anomaly with severity 'warning', element_id derived "
-        "from the text (e.g. 'text_the_child'), and a description naming the "
-        "offending font and the allowed fonts.\n"
-        "4. If you find an anomaly, you may call `flash_threat_vector` to highlight "
-        "the element on the audit canvas.\n\n"
-        "Respond with ONLY a JSON object matching the StyleReport schema: set "
-        "`status` to 'warning' when there is at least one anomaly, otherwise "
-        "'compliant'."
+        "You are the Brand Style Compliance Agent for the Vibeflix licensing "
+        "pipeline. Known context (may be empty): image link `{image_uri?}`, market "
+        "`{target_market?}`.\n\n"
+        "To audit a product mockup, use the `brand-compliance-audit` skill and "
+        "follow its steps exactly — it defines the fixed procedure and the only tool "
+        "you may call. ALWAYS respond by filling the BrandStyleReport schema; never "
+        "reply in prose."
     ),
     tools=[
-        mcp_toolset("mcp_vision_ui", tool_filter=["parse_design_elements", "flash_threat_vector"]),
-        mcp_toolset("mcp_legal", tool_filter=["query_style_guidelines"]),
+        # Procedural knowledge is a versioned ADK Skill (the audit steps live in
+        # skills/brand-compliance-audit/SKILL.md); the deterministic pipeline stays
+        # the one MCP tool the skill is allowed to call.
+        skill_toolset.SkillToolset(
+            skills=[load_skill_from_dir(_SKILL_DIR)],
+            additional_tools=[mcp_toolset("mcp_brand_style", tool_filter=["run_brand_audit"])],
+        ),
     ],
-    output_schema=StyleReport,
+    output_schema=BrandStyleReport,
     output_key="style_report",
+    # Deterministic guard: no real image part in the request → return needs_input
+    # without calling the model, so it can't hallucinate an extraction.
+    before_model_callback=require_image_before_model,
+    # Safety net: if the model ever answers in prose instead of the schema, treat
+    # it as a question to the user (semantically correct for this agent).
+    after_model_callback=make_schema_guard(
+        lambda text: {"status": "needs_input", "question": text}
+    ),
 )
+
+# ADK entrypoint convention — also the agent served standalone over A2A.
+root_agent = brand_style_agent

@@ -1,0 +1,29 @@
+# Generic MCP server service, one per functional group.
+# The group is selected at build time via the GROUP build-arg
+# (mcp_vision_ui / mcp_legal / mcp_market).
+# Build context = repo root:
+#   docker build -f deploy/Dockerfile.mcp --build-arg GROUP=mcp_legal .
+# syntax=docker/dockerfile:1
+
+FROM python:3.12-slim
+ARG GROUP
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MCP_TRANSPORT=streamable-http \
+    HOST=0.0.0.0 \
+    PORT=9001
+
+COPY mcp_servers/${GROUP}/requirements.txt ./requirements.txt
+RUN pip install -r requirements.txt
+
+# Shared package for the registry helper (registry-backed servers import
+# vibeflix_common.registry; firestore comes from the group's requirements above).
+COPY packages/vibeflix-common ./vibeflix-common
+RUN pip install ./vibeflix-common --no-deps
+
+COPY mcp_servers/${GROUP}/ ./server/
+
+EXPOSE 9001
+# Serves MCP over streamable-HTTP at /mcp on $PORT (honors Cloud Run's $PORT).
+CMD ["python", "server/server.py"]
