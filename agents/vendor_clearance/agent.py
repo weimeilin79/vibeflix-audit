@@ -19,8 +19,10 @@ malform) AND surfaces the legal hand-off distinctly for Agent Platform observabi
 import os
 import re
 import json
+import uuid
 import pathlib
 
+import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google.genai import types
@@ -29,7 +31,6 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 from google.adk.workflow import Workflow, node
 from google.adk.agents.context import Context
-from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_KNOWN_PATH
 from google.adk.events.event import Event
 
 from vibeflix_common.mcp_clients import mcp_toolset
@@ -48,9 +49,6 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # polluted input entirely, and the reply comes back directly (no session-event
 # authorship archaeology).
 _LEGAL_URL = os.environ.get("LEGAL_A2A_URL", "").rstrip("/")
-
-import uuid
-import httpx
 
 
 async def _call_legal(brief: str) -> str:
@@ -269,29 +267,6 @@ async def _liaison_answer(ctx: Context, question: str, lr: dict) -> str:
     return answer
 
 
-# The four reply shapes legal-clearance is allowed to answer with (see its skill).
-_LEGAL_STATUSES = {"answer", "ask_vendor", "needs_user", "done"}
-
-
-def _legal_reply(ctx: Context) -> tuple[str, dict]:
-    """Newest event that parses as a LEGAL reply shape → (raw_text, parsed).
-
-    Authorship alone is NOT reliable: the A2A hop can echo the forwarded history
-    back under the remote agent's name, so the newest `legal_clearance_agent` text
-    may be an echoed copy of OUR OWN clearance report. Require the reply to look
-    like one of legal's contract shapes (status ∈ _LEGAL_STATUSES, or a contract id).
-    """
-    events = getattr(getattr(ctx, "session", None), "events", None) or []
-    for e in reversed(events):
-        if getattr(e, "author", None) != "legal_clearance_agent":
-            continue
-        raw = _text_of(getattr(e, "content", None))
-        parsed = _parse_report(raw)
-        if str(parsed.get("status", "")).lower() in _LEGAL_STATUSES or parsed.get("contract_id"):
-            return raw, parsed
-    return "", {}
-
-
 def _apply_legal(report: dict, passed: bool, contract_id: str,
                  vendor_id: str = "", safety_cert: str = "") -> None:
     """Merge the legal outcome into the clearance report."""
@@ -337,14 +312,18 @@ async def legal_clearance(ctx: Context, node_input):
     Runs only when a category was onboarded, or when resuming a legal Q&A."""
     report = node_input if isinstance(node_input, dict) else {}
     lr = _needs_legal(ctx, report)
-    if not lr or legal_remote is None:
+    if not lr or not _LEGAL_URL:
         yield Event(output=report)
         return
 
     clarifications: list = []
     for _ in range(MAX_LEGAL_ROUNDS):
-        await ctx.run_node(legal_remote, _legal_brief(lr, report, clarifications))
-        raw, result = _legal_reply(ctx)
+        try:
+            raw = await _call_legal(_legal_brief(lr, report, clarifications))
+        except Exception as e:
+            print(f"[vendor_clearance] legal call failed: {type(e).__name__}: {e}", flush=True)
+            raw = ""
+        result = _parse_report(raw)
         status = str(result.get("status", "")).lower()
         print(f"[vendor_clearance] legal replied status={status!r}: {raw[:160]!r}", flush=True)
 
