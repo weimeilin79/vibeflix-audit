@@ -38,17 +38,39 @@ _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "vendor-clearance"
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # The Legal Clearance agent is a SEPARATE, independent A2A service reachable ONLY by
-# this service (never the app / orchestrator). We call it with ctx.run_node when a
-# vendor is onboarded to a category. Absent LEGAL_A2A_URL → the legal step is skipped.
+# this service (never the app / orchestrator), called when a vendor is onboarded to a
+# category. Absent LEGAL_A2A_URL → the legal step is skipped.
+#
+# Called with a plain A2A message/send in a FRESH context (NOT ctx.run_node on a
+# RemoteA2aAgent): running it as a sub-node forwards this workflow's session history,
+# and legal's model would intermittently ECHO the clearance reasoner's JSON report back
+# as its own reply instead of doing its job — a clean per-call context removes the
+# polluted input entirely, and the reply comes back directly (no session-event
+# authorship archaeology).
 _LEGAL_URL = os.environ.get("LEGAL_A2A_URL", "").rstrip("/")
-legal_remote = (
-    RemoteA2aAgent(
-        name="legal_clearance_agent",
-        description="Runs all legal clearance for a vendor × category and executes the contract.",
-        agent_card=f"{_LEGAL_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
-    )
-    if _LEGAL_URL else None
-)
+
+import uuid
+import httpx
+
+
+async def _call_legal(brief: str) -> str:
+    """One legal round-trip over A2A (fresh context) → the reply text."""
+    body = {"jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"role": "user", "kind": "message",
+                                   "messageId": uuid.uuid4().hex,
+                                   "parts": [{"kind": "text", "text": brief}]}}}
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.post(f"{_LEGAL_URL}/", json=body)
+        resp.raise_for_status()
+        result = resp.json().get("result") or {}
+    parts = [p.get("text", "") for a in result.get("artifacts") or []
+             for p in a.get("parts") or []]
+    if not parts:  # some replies come back as the last agent message instead
+        for msg in reversed(result.get("history") or []):
+            if msg.get("role") == "agent":
+                parts = [p.get("text", "") for p in msg.get("parts") or []]
+                break
+    return "".join(parts)
 
 
 # ---- Report schema (documentation; the reasoner emits this shape as JSON) ----
