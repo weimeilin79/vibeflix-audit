@@ -134,9 +134,21 @@ const WF_STATUS = {
   failed:      { fill: '#2e1420', border: '#ff6b9d', dot: '#ff6b9d', label: 'failed' },
   needs_input: { fill: '#3a2f12', border: '#ffc24a', dot: '#ffc24a', label: 'needs input' },
   awaiting:    { fill: '#3a2f12', border: '#ffc24a', dot: '#ffc24a', label: 'awaiting input' },
+  flagged:     { fill: '#3a2f12', border: '#ffc24a', dot: '#ffc24a', label: 'flagged' },
+  unverified:  { fill: '#3a2f12', border: '#ffc24a', dot: '#ffc24a', label: 'unverified' },
+  escalated:   { fill: '#2a2140', border: '#a98bff', dot: '#a98bff', label: 'escalated ⏫' },
   reused:      { fill: '#1c1c1c', border: '#3a3a3a', dot: '#666', label: 'reused' },
   pending:     { fill: '#1c1c1c', border: '#3a3a3a', dot: '#777', label: 'queued' },
 };
+
+// Statuses a workflow can be in that the operator may want to escalate (can't be cleared
+// by editing inputs). Gates the "raise exception request" control.
+const ESCALATABLE = new Set(['flagged', 'unverified', 'blocked', 'needs_input', 'failed']);
+
+// Requested-field tokens already covered by the standard inputs — filtered out of the
+// FieldDock in the combined-edit view so they aren't shown twice (their values still flow
+// through submitFields from the standard inputs' state).
+const STD_TOKENS = new Set(['image', 'image_uri', 'medium', 'character', 'vendor', 'market', 'target_market', 'volume']);
 
 function WorkflowGraph({ graph }) {
   const nodes = graph ? Object.values(graph) : [];
@@ -207,6 +219,9 @@ export default function ChatAudit() {
   const [productCategory, setProductCategory] = useState('');
   const [vendor, setVendor] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [escalating, setEscalating] = useState(false);
+  const [exReason, setExReason] = useState('');
+  const [note, setNote] = useState('');          // question/context; submitted WITH the audit
 
   // Trademark/character options from the registry (mcp_licensing.list_trademarks via
   // /api/trademarks) — so the picker offers valid ids instead of free-text.
@@ -301,6 +316,8 @@ export default function ChatAudit() {
                 [d.id]: { ...(g?.[d.id] || { id: d.id, label: d.label || d.id, parent: d.parent }), status: d.status, ...(d.parent ? { parent: d.parent } : {}), ...(d.label ? { label: d.label } : {}) },
               }));
             }
+          } else if (d.event === 'note_response') {
+            push({ role: 'agent', text: d.text });
           } else if (d.event === 'done') {
             if (d.run_token) runTokenRef.current = d.run_token;
             setGraph((g) => g ? { ...g, orchestrator: { ...g.orchestrator, status: 'done' } } : g);
@@ -323,8 +340,9 @@ export default function ChatAudit() {
   // run_token threads the prior audit so the orchestrator re-runs only affected
   // workflows. Carried on every submit in a session; cleared by "New".
   const startAudit = () => {
-    push({ role: 'user', text: `Audit ${imageUri}\n${character ? `${character} · ` : ''}${market} · ${Number(volume).toLocaleString()} units${medium ? ` · medium: ${medium}` : ''}` });
-    runStream({ image_uri: imageUri, target_market: market, volume: Number(volume), character, product_category: productCategory, vendor, medium, run_token: runTokenRef.current }, 'start');
+    push({ role: 'user', text: `Audit ${imageUri}\n${character ? `${character} · ` : ''}${market} · ${Number(volume).toLocaleString()} units${medium ? ` · medium: ${medium}` : ''}${note ? `\n💬 ${note}` : ''}` });
+    runStream({ image_uri: imageUri, target_market: market, volume: Number(volume), character, product_category: productCategory, vendor, medium, note, run_token: runTokenRef.current }, 'start');
+    setNote('');
   };
   const submitFields = (values) => {
     // Streaming resume = re-stream with the collected fields merged into the request.
@@ -335,7 +353,7 @@ export default function ChatAudit() {
     if (values.product_category) setProductCategory(values.product_category);
     if (values.vendor) setVendor(values.vendor);
     if (values.target_market) setMarket(values.target_market);
-    push({ role: 'user', text: Object.entries(values).map(([k, v]) => `${k} = ${v}`).join('\n') });
+    push({ role: 'user', text: [Object.entries(values).map(([k, v]) => `${k} = ${v}`).join('\n'), note ? `💬 ${note}` : ''].filter(Boolean).join('\n') });
     runStream({
       image_uri: values.image_uri || imageUri,
       target_market: values.target_market || market,
@@ -346,13 +364,82 @@ export default function ChatAudit() {
       new_vendor: values.new_vendor || '',
       add_category_approved: values.add_category_approved || '',
       medium: values.medium ?? medium,
+      note,
       run_token: runTokenRef.current,
     }, 'awaiting');
+    setNote('');
   };
+  // Mocked exception/escalation: POST the flagged workflows to /api/escalate, show the
+  // returned ticket, and mark those nodes 'escalated' on the graph.
+  const raiseException = async () => {
+    const g = graph || {};
+    const wfs = Object.entries(g)
+      .filter(([id, n]) => id !== 'orchestrator' && ESCALATABLE.has(n.status))
+      .map(([, n]) => n.label || n.id);
+    setEscalating(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/escalate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflows: wfs, reason: exReason, run_token: runTokenRef.current }),
+      });
+      const d = await res.json();
+      push({ role: 'system', text: `⏫ ${d.message || 'Request escalated.'}` });
+      setGraph((cur) => {
+        if (!cur) return cur;
+        const next = { ...cur };
+        for (const [id, n] of Object.entries(next)) {
+          if (id !== 'orchestrator' && ESCALATABLE.has(n.status)) next[id] = { ...n, status: 'escalated' };
+        }
+        return next;
+      });
+      setExReason('');
+    } catch (e) {
+      push({ role: 'system', text: `Escalation failed: ${e.message}` });
+    } finally {
+      setEscalating(false);
+    }
+  };
+  // Standard audit inputs, bound to state — shared by the full form AND the "answer a
+  // request" view so earlier inputs can be edited together with whatever the mesh asked for.
+  const standardInputs = () => (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '0.5rem' }}>
+        <input className="top-textarea" placeholder="Vendor image link (gs://… or https://…)" value={imageUri} onChange={(e) => setImageUri(e.target.value)} />
+        <select className="top-textarea" value={market} onChange={(e) => setMarket(e.target.value)}>
+          {MARKETS.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <input className="top-textarea" type="number" placeholder="Volume" value={volume} onChange={(e) => setVolume(e.target.value)} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+        <select className="top-textarea" value={character} onChange={(e) => setCharacter(e.target.value)}>
+          <option value="">Character / trademark — (blank → agent asks)</option>
+          {characters.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <input className="top-textarea" placeholder="Vendor — id (VND-1001) or name (blank → agent asks)" value={vendor} onChange={(e) => setVendor(e.target.value)} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <label className="preset-btn" style={{ cursor: uploading ? 'wait' : 'pointer', fontSize: '0.7rem' }}>
+          <Upload size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+          {uploading ? 'Uploading…' : 'Upload image'}
+          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={uploading}
+            onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ''; }} />
+        </label>
+        <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>→ uploads to gs://vibeflix-request-image</span>
+      </div>
+      <input className="top-textarea" placeholder="Product medium (leave blank and brand_style will ask; e.g. vinyl figure box, poster, T-shirt)"
+        value={medium} onChange={(e) => setMedium(e.target.value)} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+        <label style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>💬 Question or extra context for the orchestrator (optional) — submitted with the audit</label>
+        <textarea className="top-textarea" rows={1} placeholder="e.g. treat the T-Shirt medium as pre-approved · or: why was the vendor blocked?"
+          value={note} onChange={(e) => setNote(e.target.value)} style={{ fontSize: '0.74rem', resize: 'vertical' }} />
+      </div>
+    </>
+  );
   const reset = () => {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
     setFields(null); setSessionId(null); setPhase('start'); setGraph(null);
+    setNote('');
   };
   const uploadImage = async (fileObj) => {
     if (!fileObj) return;
@@ -419,52 +506,42 @@ export default function ChatAudit() {
               </div>
             ) : phase === 'awaiting' && fields ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {/* Everything provided so far — so context isn't lost when only one more field is asked. */}
-                <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '0.2rem 0.8rem' }}>
-                  {[['character', character], ['vendor', vendor], ['category', productCategory], ['market', market], ['volume', volume && Number(volume).toLocaleString()], ['medium', medium], ['image', imageUri]]
-                    .filter(([, v]) => v).map(([k, v]) => <span key={k}><b>{k}:</b> {String(v).length > 40 ? String(v).slice(0, 40) + '…' : v}</span>)}
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Provide what the mesh asked for below — you can also edit any earlier input; all of it is submitted together:
                 </div>
-                <FieldDock fields={fields} onSubmit={submitFields} busy={busy}
-                  defaults={{ image_uri: imageUri, medium, character, product_category: productCategory, vendor, target_market: market }} />
-                <button className="preset-btn" onClick={() => { setFields(null); setPhase('done'); }} disabled={busy}
-                  style={{ alignSelf: 'flex-start', fontSize: '0.68rem' }} title="Edit all inputs instead of just the requested field">
-                  ↔ edit all inputs instead
-                </button>
+                {standardInputs()}
+                {fields.filter((f) => !STD_TOKENS.has(f.name)).length > 0 ? (
+                  <FieldDock fields={fields.filter((f) => !STD_TOKENS.has(f.name))} onSubmit={submitFields} busy={busy}
+                    defaults={{ image_uri: imageUri, medium, character, product_category: productCategory, vendor, target_market: market }} />
+                ) : (
+                  <button className="preset-btn primary" onClick={() => submitFields({})} disabled={busy} style={{ alignSelf: 'flex-start' }}>
+                    <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> {busy ? 'Sending…' : 'Submit'}
+                  </button>
+                )}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                   {phase === 'done' ? 'Adjust inputs & re-run:' : 'Start an audit — fill in and submit:'}
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '0.5rem' }}>
-                  <input className="top-textarea" placeholder="Vendor image link (gs://… or https://…)" value={imageUri} onChange={(e) => setImageUri(e.target.value)} />
-                  <select className="top-textarea" value={market} onChange={(e) => setMarket(e.target.value)}>
-                    {MARKETS.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <input className="top-textarea" type="number" placeholder="Volume" value={volume} onChange={(e) => setVolume(e.target.value)} />
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                  <select className="top-textarea" value={character} onChange={(e) => setCharacter(e.target.value)}>
-                    <option value="">Character / trademark — (blank → agent asks)</option>
-                    {characters.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                  </select>
-                  <input className="top-textarea" placeholder="Vendor — id (VND-1001) or name (blank → agent asks)" value={vendor} onChange={(e) => setVendor(e.target.value)} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <label className="preset-btn" style={{ cursor: uploading ? 'wait' : 'pointer', fontSize: '0.7rem' }}>
-                    <Upload size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                    {uploading ? 'Uploading…' : 'Upload image'}
-                    <input type="file" accept="image/*" style={{ display: 'none' }} disabled={uploading}
-                      onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ''; }} />
-                  </label>
-                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>→ uploads to gs://vibeflix-request-image</span>
-                </div>
-                <input className="top-textarea" placeholder="Product medium (leave blank and brand_style will ask; e.g. vinyl figure box, poster, T-shirt)"
-                  value={medium} onChange={(e) => setMedium(e.target.value)} />
+                {standardInputs()}
                 <button className="preset-btn primary" onClick={startAudit} disabled={busy || !imageUri.trim()} style={{ alignSelf: 'flex-start' }}>
                   <Satellite size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
                   {busy ? 'Running…' : (phase === 'done' ? 'Re-run audit' : 'Submit — run audit')}
                 </button>
+                {phase === 'done' && graph && Object.entries(graph).some(([id, n]) => id !== 'orchestrator' && ESCALATABLE.has(n.status)) && (
+                  <div style={{ marginTop: '0.4rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--glass-border)', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                      Can't clear a flagged finding by editing inputs? Raise an exception for manual review:
+                    </div>
+                    <input className="top-textarea" placeholder="Reason (optional) — e.g. T-Shirt medium approved by Legal; misspellings intentional"
+                      value={exReason} onChange={(e) => setExReason(e.target.value)} style={{ fontSize: '0.72rem' }} />
+                    <button className="preset-btn" onClick={raiseException} disabled={busy || escalating}
+                      style={{ alignSelf: 'flex-start', fontSize: '0.7rem', borderColor: '#a98bff', color: '#a98bff' }}>
+                      {escalating ? 'Escalating…' : '⏫ Raise exception request'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

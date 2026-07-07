@@ -244,11 +244,18 @@ async def _liaison_answer(ctx: Context, question: str, lr: dict) -> str:
     return answer
 
 
-def _apply_legal(report: dict, passed: bool, contract_id: str) -> None:
+def _apply_legal(report: dict, passed: bool, contract_id: str,
+                 vendor_id: str = "", safety_cert: str = "") -> None:
     """Merge the legal outcome into the clearance report."""
     if passed:
         report["status"] = "cleared"
-        report["legal_cleared"] = f"Legal cleared — contract {contract_id or 'executed'}."
+        vid = vendor_id or "the vendor"
+        cid = contract_id or "executed"
+        cert = f" · safety cert {safety_cert}" if safety_cert else ""
+        report["legal_cleared"] = (
+            f"✅ Vendor {vid} onboarded & legally cleared — "
+            f"licensing contract {cid} executed{cert}."
+        )
     else:
         report["status"] = "blocked"
         report.setdefault("issues", []).append({
@@ -307,7 +314,8 @@ async def legal_clearance(ctx: Context, node_input):
 
         # done (or anything terminal) — pull the contract id and merge.
         m = re.search(r"LC-\w+", json.dumps(result) + _latest_text(ctx, "legal_clearance_agent"))
-        _apply_legal(report, True, result.get("contract_id") or (m.group(0) if m else ""))
+        _apply_legal(report, True, result.get("contract_id") or (m.group(0) if m else ""),
+                     vendor_id=lr.get("vendor_id", ""), safety_cert=result.get("safety_cert", ""))
         break
     yield Event(output=report)
 

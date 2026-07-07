@@ -33,7 +33,7 @@ from google.adk.runners import Runner, InMemoryRunner
 
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_KNOWN_PATH
 
-from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of
+from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of, note_responder
 from agents.a2ui_surface import (
     build_surface, panels_fallback, stream_initial, stream_panel, stream_sourcing,
     title_from_name,
@@ -85,6 +85,9 @@ class AuditRequest(BaseModel):
     add_category_approved: str = ""
     # Optional user-provided product medium; blank → brand_style infers it.
     medium: str = ""
+    # Free-text operator note / question (the chat field) — threaded into the orchestrator
+    # brief as extra context for the agents.
+    note: str = ""
     # On a re-submit, the token from the prior audit — lets the orchestrator reason
     # about which workflows the change affects and reuse the rest.
     run_token: str | None = None
@@ -147,6 +150,28 @@ presenter_runner = (
 
 # Audit conversations awaiting more input: token -> {user_id, request(accumulated)}.
 _SESSIONS: dict[str, dict] = {}
+
+# The orchestrator's note-responder runs as its own in-memory agent (like the presenter).
+_NOTE_APP = "note_responder"
+note_responder_runner = InMemoryRunner(app=App(name=_NOTE_APP, root_agent=note_responder))
+
+
+async def _respond_to_note(note: str, reports: dict) -> str | None:
+    """Run the orchestrator's note_responder on {note, reports} -> a short reply (or None)."""
+    try:
+        payload = json.dumps({"note": note, "reports": reports})
+        session = await note_responder_runner.session_service.create_session(app_name=_NOTE_APP, user_id="note")
+        text = ""
+        async for event in note_responder_runner.run_async(
+            user_id="note", session_id=session.id, new_message=_content(payload)
+        ):
+            content = getattr(event, "content", None)
+            parts = getattr(content, "parts", None) if content else None
+            text += "".join(getattr(p, "text", "") or "" for p in (parts or []))
+        return text.strip() or None
+    except Exception as e:
+        print(f"[note_responder] failed: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
 async def _present(reports: dict) -> list | None:
@@ -540,6 +565,14 @@ async def _stream_audit(request: dict):
     # 3) sourcing line.
     yield _sse({"a2ui": stream_sourcing(aggregate.get("sourcing") or {})})
 
+    # 3.5) if the operator submitted a note/question, the orchestrator responds to it
+    #      (answers from the reports, or acks it as applied context).
+    _note = (request.get("note") or "").strip()
+    if _note:
+        _ans = await _respond_to_note(_note, reports)
+        if _ans:
+            yield _sse({"event": "note_response", "text": _ans})
+
     # 4) done, or collect more input. Either way, cache this run + return its token so
     #    the client can thread it on the next submit (incremental re-run).
     token = _cache_audit(aggregate, request)
@@ -570,6 +603,7 @@ async def audit_stream(req: AuditRequest):
         "new_vendor": req.new_vendor or "",
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
+        "note": req.note or "",
         "run_token": req.run_token,
     }
     return StreamingResponse(_stream_audit(request), media_type="text/event-stream")
@@ -739,6 +773,32 @@ async def log_telemetry(payload: TelemetryPayload):
     # Simulated writing user engagement maps back to governance-telemetry store
     print(f"[Telemetry Ingestion] Received interaction map on {payload.element_id}: Overridden={payload.overridden}")
     return {"status": "telemetry_captured"}
+
+
+class EscalateRequest(BaseModel):
+    """Raise an exception request for flagged findings the operator can't clear by editing
+    inputs. MOCK for now — no real escalation workflow exists yet."""
+    workflows: list[str] = []
+    reason: str = ""
+    run_token: str | None = None
+
+
+@app.post("/api/escalate")
+async def escalate(req: EscalateRequest):
+    """MOCK exception escalation. A real version would open a ticket, route to a human
+    reviewer, or kick off an approval workflow. For now we mint a ticket id and ack so the
+    UI can show 'request escalated'."""
+    ticket = f"ESC-{uuid.uuid4().hex[:4].upper()}"
+    wf = ", ".join(req.workflows) if req.workflows else "the audit"
+    print(f"[escalate] MOCK exception request {ticket}: workflows={req.workflows} "
+          f"reason={req.reason!r}", flush=True)
+    return {
+        "status": "escalated",
+        "ticket": ticket,
+        "workflows": req.workflows,
+        "message": (f"Exception request {ticket} raised for {wf} — routed to compliance "
+                    f"review. (Mocked: the escalation workflow isn't implemented yet.)"),
+    }
 
 
 # Serve the built React frontend from the same origin as the API (mounted last

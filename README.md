@@ -14,7 +14,7 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
    - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
    - **Franchise Storyline & Lore Agent (Lore)**: Checks script databases, lore canon compliance, and screens for script leak/spoiler threats.
-   - **Legal Clearance Agent**: Reachable only from Vendor & Licensing. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
+   - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
@@ -24,9 +24,10 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 
 The orchestrator (a deterministic Workflow graph) fans out to the three domain
 agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
-The app also calls **ui_renderer** over A2A to paint the result as A2UI. A dedicated
-**`legal` agent** (:8005) sits behind Vendor Clearance — vendor_clearance hands off to it;
-it's not in the orchestrator's fan-out. Every box is its own container/instance.
+The app also calls **ui_renderer** over A2A to paint the result as A2UI. A standalone
+**`legal` agent** (:8005) sits behind Vendor Clearance — in this demo only vendor_clearance
+hands off to it (any agent could), and it's not in the orchestrator's fan-out. Every box
+is its own container/instance.
 
 ```
                     ┌─────────── app container (:8000) ───────────┐
@@ -47,10 +48,11 @@ it's not in the orchestrator's fan-out. Every box is its own container/instance.
   brand_style → mcp_brand_style + mcp_vision_ui · vendor_clearance → mcp_licensing + mcp_market
 ```
 
-Plus a dedicated **`legal` agent (:8005)** that **vendor_clearance hands off to** (A2A) —
-it clears + executes the licensing contract for a newly-onboarded vendor×category and
-RAGs its process from `resource/legal/docs/`. It's not in the orchestrator fan-out or the
-readiness gate. See **[FLOW.md](FLOW.md)** for the full vendor_clearance → legal flow.
+Plus a standalone **`legal` agent (:8005)** — **in this demo only `vendor_clearance` hands
+off to it (any agent could)**. It clears + executes the licensing contract for a
+newly-onboarded vendor×category and RAGs its process from `resource/legal/docs/`. It's not
+in the orchestrator fan-out or the readiness gate. See **[FLOW.md](FLOW.md)** for the full
+vendor_clearance → legal flow.
 
 The audit **streams**: `POST /api/audit/stream` (SSE) pushes A2UI `surfaceUpdate`
 messages as the graph runs — the plan appears instantly, then each panel fills in as its
@@ -248,6 +250,36 @@ and FastAPI serves it on the same origin as `/api/*` (port `8000`).
 **Frontend dev loop (optional):** with the mesh running, `./run_local.sh
 frontend` starts Vite on `:3000` against the app API (`VITE_API_URL`).
 
+### First-time setup: Python venv (for `adk web`, `test-agent`, and the RAG scripts)
+
+The non-Docker paths below — single-agent `adk web`, `./run_local.sh mcp` / `test-agent`,
+and `deploy/setup_legal_rag.py` / `deploy/rebuild_legal_rag.sh` — run against a local
+`.venv`. Build it with **`uv`** (Python 3.14's bundled pip self-upgrade is fragile; `uv`
+is reliable):
+
+```bash
+cd ~/Desktop/work/vibeflix-audit          # your real repo (venv bakes in absolute paths, so build it HERE)
+
+# 1) create the venv — uv handles Python 3.14 reliably (pip self-upgrade is fragile here)
+uv venv .venv
+
+# 2) agent/backend deps (ADK 2.0 is pre-GA -> prereleases allowed)
+uv pip install --python .venv/bin/python --prerelease=allow -r agents/requirements.txt
+
+# 3) the shared package — NON-editable (editable installs break on py3.14 + uv)
+uv pip install --python .venv/bin/python ./packages/vibeflix-common --no-deps
+
+# 4) RAG provisioning deps — needed for setup_legal_rag.py / rebuild_legal_rag.sh
+uv pip install --python .venv/bin/python --prerelease=allow -r deploy/requirements-legal-rag.txt
+
+# 5) activate
+source .venv/bin/activate
+```
+
+Steps 1-3 are enough for `adk web` and `test-agent`; step 4 is only needed for the RAG
+scripts. A copied venv (e.g. restored from a backup) won't work — it stores absolute paths,
+so always rebuild it in place.
+
 ### Test one agent in isolation (no Docker)
 
 To iterate on a single agent without bringing up the whole A2A mesh, start the
@@ -359,8 +391,8 @@ knows exactly what to pass for each call.
 
 #### Testing the Legal Agent
 
-`legal` is called only by `vendor_clearance` in the mesh, but you can drive it directly
-with `adk web`. It RAGs the (undefined) process from `resource/legal/docs/` via its
+In this demo `legal` is only called by `vendor_clearance` (though any agent could hand off
+to it), but you can also drive it directly with `adk web`. It RAGs the (undefined) process from `resource/legal/docs/` via its
 `search_legal_docs` tool and executes the contract via `mcp_licensing.upsert_contract`.
 Start `mcp_licensing` (shell 1: `./run_local.sh mcp`), then:
 

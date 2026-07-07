@@ -31,7 +31,7 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
 from vibeflix_common.health import probe_mcp_from_env, banner
 
-_KNOWN = {"brand_style", "vendor_clearance", "storyline", "ui_renderer"}
+_KNOWN = {"brand_style", "vendor_clearance", "storyline", "ui_renderer", "legal"}
 
 
 def _runner_with_plugins(agent):

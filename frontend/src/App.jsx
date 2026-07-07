@@ -740,7 +740,7 @@ export default function App() {
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance</strong>
-                      Vendor &amp; Licensing hands off to it on onboarding. Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
+                      A standalone agent — in this demo Vendor &amp; Licensing hands off to it (any agent could). Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
                     </div>
                   </div>
                 </div>

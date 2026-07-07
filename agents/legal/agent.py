@@ -31,7 +31,9 @@ _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "legal-clearance"
 # keyword retriever by default; Vertex AI RAG Engine when RAG_CORPUS is set.
 try:
     from agents.legal.legal_kb import search_legal_docs
-except ImportError:  # when loaded from the agent dir (e.g. adk web)
+except ImportError:  # loaded from the agent dir (e.g. `adk web agents/legal`)
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from legal_kb import search_legal_docs
 
 
@@ -91,15 +93,19 @@ def request_insurance_rider(vendor_id: str, category: str) -> dict:
 legal_agent = LlmAgent(
     name="legal_clearance_agent",
     model="gemini-flash-latest",
-    description="Auto-clears all legal work for a newly-onboarded vendor × category and "
-                "executes the licensing contract. Private to the vendor_clearance agent.",
+    description="Clears the legal work for a newly-onboarded vendor × category and "
+                "executes the licensing contract. In this demo only vendor_clearance "
+                "hands off to it, but any agent could.",
     instruction=(
-        "You are the Legal Clearance Agent. Given a vendor, character, product category "
-        "and territory (and possibly a royalty tier and safety certification id in your "
-        "brief), follow the `legal-clearance` skill. You may need to ASK the vendor "
-        "clearance agent or the USER for a missing fact — do that per the skill. Always "
-        "reply with ONLY the single JSON object the skill specifies (status "
-        "ask_vendor / needs_user / done); never reply in prose."
+        "You are the Legal Clearance Agent. Follow the `legal-clearance` skill. ALWAYS "
+        "reply with exactly ONE JSON object (never prose, no markdown fences):\n"
+        "- given a clearance BRIEF (a vendor + character + product category + territory, "
+        "possibly with a royalty tier / safety-cert id) → status `ask_vendor` / "
+        "`needs_user` / `done` as the skill dictates. When you ASK for a value, state the "
+        "options in the `question` so the asker knows what to answer.\n"
+        "- if the caller ASKS YOU a question — what a term means (e.g. 'annual-volume "
+        "band'), what the options are, or how something works → status `answer` with an "
+        "`answer` field explaining it (looked up via `search_legal_docs`)."
     ),
     tools=[
         skill_toolset.SkillToolset(
