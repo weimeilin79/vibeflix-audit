@@ -5,6 +5,7 @@ import {
   ArrowRight, GitBranch, Layers, Check, Database, RefreshCw as LoopIcon, HelpCircle, XCircle, MessagesSquare, Satellite
 } from 'lucide-react';
 import ChatAudit from './ChatAudit';
+import AuditHistory from './AuditHistory';
 
 // Backend base URL. Empty = same origin (the app container's FastAPI serves both
 // the static frontend and /api). Set VITE_API_URL for the Vite dev server (e.g.
@@ -630,7 +631,13 @@ export default function App() {
             >
               <Sliders size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Live Audit Console
             </button>
-            <button 
+            <button
+              className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+              onClick={() => setActiveTab('history')}
+            >
+              <Database size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Audit History
+            </button>
+            <button
               className={`tab-btn ${activeTab === 'usecase' ? 'active' : ''}`}
               onClick={() => setActiveTab('usecase')}
             >
@@ -686,7 +693,7 @@ export default function App() {
                 </div>
               </div>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: '1.5', marginTop: '0.5rem' }}>
-                The Vibeflix Merchandising ecosystem handles the global sourcing of licensed consumer items (vinyl figures, toy prototypes, apparel). To prevent severe downstream errors—ranging from trademark exclusions and copyright lawsuits to storyline canon script leaks—this workspace coordinates and executes real-time multi-agent compliance audits prior to placing manufacturing orders.
+                The Vibeflix Merchandising ecosystem handles the global sourcing of licensed consumer items (vinyl figures, toy prototypes, apparel). To prevent severe downstream errors—ranging from trademark exclusions and copyright lawsuits to under-priced licensing deals—this workspace coordinates and executes real-time multi-agent compliance audits prior to placing manufacturing orders.
               </p>
             </div>
 
@@ -709,7 +716,7 @@ export default function App() {
                       <strong style={{ color: 'var(--color-danger)' }}>2. Territorial Exclusivity Locks:</strong> Sourcing items in restricted zones (e.g. North America exclusivity blocks with third-parties) leads to contract breach and customs seizures.
                     </div>
                     <div style={{ fontSize: '0.8rem' }}>
-                      <strong style={{ color: 'var(--color-danger)' }}>3. Canon Storyline Spoiler Leaks:</strong> Sourcing figurines depicting characters in unreleased plotlines (e.g. spoiler details on box) ruins fan experiences.
+                      <strong style={{ color: 'var(--color-danger)' }}>3. Under-priced Licensing Deals:</strong> A vendor agreeing to pay below the rate card (royalty + advance + minimum guarantee) erodes the IP's value and shorts the licensor.
                     </div>
                     <div style={{ fontSize: '0.8rem' }}>
                       <strong style={{ color: 'var(--color-danger)' }}>4. Sourcing Overproduction Limits:</strong> Ordering volume past approved caps without authorized overrides breaches master manufacturing agreements.
@@ -735,12 +742,12 @@ export default function App() {
                       Scans exclusivity + trademark, recommends eligible vendors, and onboards new ones.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: '#34a853', display: 'block', marginBottom: '0.2rem' }}>🎬 Storyline Agent</strong>
-                      Audits design assets against canonical scripts and active release timeline embargoes.
+                      <strong style={{ color: '#c9922e', display: 'block', marginBottom: '0.2rem' }}>💰 Deal Pricing</strong>
+                      Reconciles the vendor's agreed total consideration (royalty + advance + MG) against the licensor rate card via an evaluate→validate→iterate loop.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance</strong>
-                      Vendor &amp; Licensing hands off to it on onboarding. Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
+                      A standalone agent — in this demo Vendor &amp; Licensing hands off to it (any agent could). Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
                     </div>
                   </div>
                 </div>
@@ -817,11 +824,11 @@ export default function App() {
                       <text x="10" y="30" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
                     </g>
 
-                    {/* Storyline */}
+                    {/* Deal Pricing */}
                     <g transform="translate(165, 180)">
                       <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎬 Storyline Lore</text>
-                      <text x="10" y="32" fill="#34a853" fontSize="7" fontWeight="bold">canon · spoiler embargo</text>
+                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">💰 Deal Pricing</text>
+                      <text x="10" y="32" fill="#c9922e" fontSize="7" fontWeight="bold">royalty · advance · MG</text>
                       <circle cx="138" cy="12" r="3.5" fill="#34a853" />
                     </g>
 
@@ -1096,6 +1103,12 @@ export default function App() {
         )}
 
         {activeTab === 'canvas' && <ChatAudit />}
+
+        {activeTab === 'history' && (
+          <div style={{ width: '100%', height: '100%', overflowY: 'auto' }}>
+            <AuditHistory />
+          </div>
+        )}
 
         {activeTab === 'contrast' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: '1.5rem', width: '100%', height: '100%', overflowY: 'auto' }}>

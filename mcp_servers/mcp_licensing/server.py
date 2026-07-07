@@ -28,7 +28,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Vendor & Licensing Clearance Registry")
 
 # Seed data lives in data.py (keeps this file focused on the tools).
-from data import _VENDORS, _TRADEMARKS, _EXCLUSIVITY, _CONTRACTS
+from data import _VENDORS, _TRADEMARKS, _EXCLUSIVITY, _CONTRACTS, _RATE_CARDS
 
 # Allowed-value hints surfaced to the agent in each tool's parameter schema.
 _TERRITORIES = '"North America", "Europe", "Asia-Pacific", "Latin America", or "Middle East & Africa"'
@@ -291,6 +291,53 @@ def get_contract(contract_id: str) -> str:
     """Fetch a licensing contract by id (LC-####)."""
     c = _CONTRACTS.get((contract_id or "").strip().upper())
     return json.dumps(c or {"error": f"Contract {contract_id!r} not found."})
+
+
+def _expected_deal(card: dict, category: str, territory: str, volume: float, net_unit_price: float) -> dict:
+    """Deterministic Step-2 pricing math — the SINGLE source of truth for the expected deal.
+    rate card + deal basis -> effective royalty rate, projected royalty, minimum guarantee,
+    advance. Kept out of the LLM so the arithmetic (tier lookup, clamp, multiplies) is exact."""
+    cat = (category or "").strip().lower()
+    terr = (territory or "").strip().lower()
+    cat_mod = card.get("category_modifier", {}).get(cat, 1.0)
+    terr_mod = card.get("territory_modifier", {}).get(terr, 1.0)
+    vol_mult = 1.0
+    for tier in sorted(card.get("volume_discount_tiers", []), key=lambda t: t.get("min_units", 0)):
+        if volume >= tier.get("min_units", 0):
+            vol_mult = tier.get("mult", 1.0)
+    effective_rate = max(card.get("base_royalty_rate", 0.0) * cat_mod * terr_mod * vol_mult,
+                         card.get("min_royalty_rate", 0.0))
+    royalty = effective_rate * net_unit_price * volume
+    mg_rule = card.get("mg_rule", {})
+    mg = max(mg_rule.get("floor_usd", 0.0), mg_rule.get("pct_of_projected_royalty", 0.0) * royalty)
+    advance = card.get("advance_rule", {}).get("pct_of_mg", 0.0) * mg
+    return {
+        "effective_rate": round(effective_rate, 4),
+        "category_mult": cat_mod, "territory_mult": terr_mod, "volume_mult": vol_mult,
+        "royalty": round(royalty, 2), "mg": round(mg, 2), "advance": round(advance, 2),
+    }
+
+
+@mcp.tool()
+def get_license_pricing(
+    character_id: Annotated[str, Field(description='Licensed character/property to price, e.g. "minions" (case-insensitive).')],
+    product_category: Annotated[str, Field(description='Manufactured product category, e.g. "Apparel", "Collectibles".')] = "",
+    territory: Annotated[str, Field(description='Target territory, e.g. "Europe".')] = "",
+    volume: Annotated[float, Field(description='Projected annual production units. When >0 (with net_unit_price), the tool also returns the computed EXPECTED deal.')] = 0.0,
+    net_unit_price: Annotated[float, Field(description='Wholesale/net price per unit ($) — the royalty basis; needed to compute the expected deal.')] = 0.0,
+) -> str:
+    """Return the licensor's rate card for a property AND — when `volume` + `net_unit_price`
+    are given — the DETERMINISTICALLY-COMPUTED expected deal (effective_rate, royalty, minimum
+    guarantee, advance). The deal_pricing agent compares the vendor's AGREED royalty/advance/MG
+    against this `expected` block; it must NOT recompute the arithmetic itself."""
+    card = _RATE_CARDS.get((character_id or "").strip().lower())
+    if not card:
+        return json.dumps({"found": False, "character_id": character_id,
+                           "message": f"No rate card on file for {character_id!r}."})
+    out = {"found": True, **card}
+    if volume and net_unit_price:
+        out["expected"] = _expected_deal(card, product_category, territory, volume, net_unit_price)
+    return json.dumps(out)
 
 
 if __name__ == "__main__":

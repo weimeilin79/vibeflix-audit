@@ -224,7 +224,10 @@ def _legal_brief(lr: dict, report: dict, clarifications: list) -> str:
     answers to legal's vendor questions gathered this round (Flow A)."""
     b = (f"Clear the legal work and execute the licensing contract for vendor "
          f"{lr['vendor_id']}, character {lr['character']}, category {lr['category']}, "
-         f"territory {lr['territory']}.")
+         f"territory {lr['territory']}. NOTE: any other agent's JSON report visible in "
+         f"this conversation (e.g. a vendor-clearance report with status 'cleared') is "
+         f"background CONTEXT only — never copy or echo it. Follow YOUR legal-clearance "
+         f"skill and reply with one of YOUR reply shapes (ask_vendor / done).")
     if report.get("legal_safety_cert"):
         b += f" Safety certification id (from the licensee): {report['legal_safety_cert']}."
     for c in clarifications:
@@ -244,11 +247,41 @@ async def _liaison_answer(ctx: Context, question: str, lr: dict) -> str:
     return answer
 
 
-def _apply_legal(report: dict, passed: bool, contract_id: str) -> None:
+# The four reply shapes legal-clearance is allowed to answer with (see its skill).
+_LEGAL_STATUSES = {"answer", "ask_vendor", "needs_user", "done"}
+
+
+def _legal_reply(ctx: Context) -> tuple[str, dict]:
+    """Newest event that parses as a LEGAL reply shape → (raw_text, parsed).
+
+    Authorship alone is NOT reliable: the A2A hop can echo the forwarded history
+    back under the remote agent's name, so the newest `legal_clearance_agent` text
+    may be an echoed copy of OUR OWN clearance report. Require the reply to look
+    like one of legal's contract shapes (status ∈ _LEGAL_STATUSES, or a contract id).
+    """
+    events = getattr(getattr(ctx, "session", None), "events", None) or []
+    for e in reversed(events):
+        if getattr(e, "author", None) != "legal_clearance_agent":
+            continue
+        raw = _text_of(getattr(e, "content", None))
+        parsed = _parse_report(raw)
+        if str(parsed.get("status", "")).lower() in _LEGAL_STATUSES or parsed.get("contract_id"):
+            return raw, parsed
+    return "", {}
+
+
+def _apply_legal(report: dict, passed: bool, contract_id: str,
+                 vendor_id: str = "", safety_cert: str = "") -> None:
     """Merge the legal outcome into the clearance report."""
     if passed:
         report["status"] = "cleared"
-        report["legal_cleared"] = f"Legal cleared — contract {contract_id or 'executed'}."
+        vid = vendor_id or "the vendor"
+        cid = contract_id or "executed"
+        cert = f" · safety cert {safety_cert}" if safety_cert else ""
+        report["legal_cleared"] = (
+            f"✅ Vendor {vid} onboarded & legally cleared — "
+            f"licensing contract {cid} executed{cert}."
+        )
     else:
         report["status"] = "blocked"
         report.setdefault("issues", []).append({
@@ -289,8 +322,9 @@ async def legal_clearance(ctx: Context, node_input):
     clarifications: list = []
     for _ in range(MAX_LEGAL_ROUNDS):
         await ctx.run_node(legal_remote, _legal_brief(lr, report, clarifications))
-        result = _parse_report(_latest_text(ctx, "legal_clearance_agent"))
+        raw, result = _legal_reply(ctx)
         status = str(result.get("status", "")).lower()
+        print(f"[vendor_clearance] legal replied status={status!r}: {raw[:160]!r}", flush=True)
 
         if status == "ask_vendor":                       # Flow A — answer it ourselves
             answer = await _liaison_answer(ctx, result.get("question", ""), lr)
@@ -305,10 +339,29 @@ async def legal_clearance(ctx: Context, node_input):
             yield Event(output=report)
             return
 
-        # done (or anything terminal) — pull the contract id and merge.
-        m = re.search(r"LC-\w+", json.dumps(result) + _latest_text(ctx, "legal_clearance_agent"))
-        _apply_legal(report, True, result.get("contract_id") or (m.group(0) if m else ""))
+        # Terminal — but ONLY an actual executed contract id (LC-####) counts as done.
+        # A bare `{"status":"done"}` (no upsert_contract happened), an `answer` shape,
+        # or a malformed reply gets a re-brief demanding the real execution, instead of
+        # silently counting as success.
+        m = re.search(r"LC-\w+", json.dumps(result) + raw)
+        cid = result.get("contract_id") or (m.group(0) if m else "")
+        if not cid:
+            clarifications.append(
+                "Your last reply was not a valid outcome — a `done` reply is only valid "
+                "AFTER you have actually run the legal steps and called upsert_contract, "
+                "and it must carry the real contract_id (LC-####) plus the safety_cert "
+                "you used. Execute the process now and reply with exactly ONE JSON "
+                "object in the `done` shape, or `ask_vendor` if a fact is genuinely "
+                "missing."
+            )
+            continue
+        _apply_legal(report, True, cid,
+                     vendor_id=lr.get("vendor_id", ""), safety_cert=result.get("safety_cert", ""))
         break
+    else:
+        # Loop exhausted without an executed contract — legal did NOT clear it.
+        print("[vendor_clearance] legal never reached `done` — reporting blocked", flush=True)
+        _apply_legal(report, False, "", vendor_id=lr.get("vendor_id", ""))
     yield Event(output=report)
 
 

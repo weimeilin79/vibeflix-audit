@@ -32,7 +32,7 @@ async def _probe_one(url: str, timeout: float = 5.0) -> dict:
 async def probe_mcp_from_env() -> list[dict]:
     """Handshake every ``MCP_*_URL`` env var; return [{name, url, ok, detail}].
 
-    Empty list when the agent has no MCP deps (e.g. storyline) → treated as OK.
+    Empty list when the agent has no MCP deps (e.g. ui_renderer) → treated as OK.
     """
     keys = sorted(
         k for k in os.environ

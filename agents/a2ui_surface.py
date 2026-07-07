@@ -124,7 +124,11 @@ def stream_initial(titles, market, volume, reused=0):
         root_kids.append(f"card{i}")
     comps.append({"id": "div", "component": {"Divider": {"axis": "horizontal"}}})
     comps.append(_text_comp("srce", "📦 **Sourcing:** pending…"))
-    root_kids += ["div", "srce"]
+    # Empty slot the final clearance report fills on a fully-passed run. Reserved up
+    # front because a later surfaceUpdate must be SELF-CONTAINED — it can only reference
+    # component ids it (re)defines itself, so the root is never re-sent.
+    comps.append({"id": "final", "component": {"Column": {"children": {"explicitList": []}}}})
+    root_kids += ["div", "srce", "final"]
     comps.append({"id": "root", "component": {"Column": {"children": {"explicitList": root_kids}}}})
     return [
         {"surfaceUpdate": {"surfaceId": _SURFACE, "components": comps}},
@@ -152,6 +156,58 @@ def stream_panel(i, panel):
 def stream_sourcing(sourcing):
     """surfaceUpdate that fills the sourcing line."""
     return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": [_text_comp("srce", sourcing_line(sourcing))]}}
+
+
+def stream_final_report(entry):
+    """surfaceUpdate filling the reserved `final` slot with the FINAL clearance report +
+    executed contract (shown when every workflow passed). Self-contained: every id it
+    references is (re)defined in this same update — the root is never touched.
+    `entry` is the audit-history record: {inputs, reports, sourcing, contract, ...}."""
+    inputs = entry.get("inputs") or {}
+    reports = entry.get("reports") or {}
+    contract = entry.get("contract") or {}
+
+    comps = [_text_comp("fin_t", "📜 **Final Clearance Report** — all workflows passed", "h4")]
+    kids = ["fin_t"]
+
+    def line(cid, s, hint=None):
+        comps.append(_text_comp(cid, s, hint))
+        kids.append(cid)
+
+    subject = " · ".join(str(v) for v in (
+        inputs.get("character"), inputs.get("product_category"), inputs.get("medium"),
+        inputs.get("vendor"), inputs.get("target_market"),
+        f"{_fmt(inputs.get('volume'))} units" if inputs.get("volume") else None) if v)
+    line("fin_sub", subject or "—", "caption")
+
+    for i, (name, report) in enumerate(sorted(reports.items())):
+        line(f"fin_w{i}", f"✅ {title_from_name(name)} — **{str((report or {}).get('status', '')).upper()}**")
+
+    line("fin_srce", sourcing_line(entry.get("sourcing") or {}))
+
+    if contract:
+        line("fin_ct", "**Executed licensing contract**", "h5")
+        rows = [
+            ("Contract", contract.get("contract_id")),
+            ("Status", contract.get("status")),
+            ("Vendor", contract.get("vendor_id")),
+            ("Character", contract.get("character_id")),
+            ("Category", contract.get("category")),
+            ("Territory", contract.get("territory")),
+            ("Royalty", f"{contract.get('royalty_pct')}%" if contract.get("royalty_pct") is not None else None),
+            ("Safety cert", contract.get("safety_cert_id")),
+            ("HS code", contract.get("hs_code")),
+            ("Amendment", contract.get("amendment_id")),
+        ]
+        detail = " · ".join(f"{k}: **{v}**" for k, v in rows if v not in (None, ""))
+        line("fin_cd", detail)
+
+    line("fin_hist", "🗂 Saved to **Audit History** (see the Audit History tab).", "caption")
+
+    comps.append({"id": "fin_col", "component": {"Column": {"children": {"explicitList": kids}}}})
+    comps.append({"id": "fin_card", "component": {"Card": {"child": "fin_col"}}})
+    comps.append({"id": "final", "component": {"Column": {"children": {"explicitList": ["fin_card"]}}}})
+    return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": comps}}
 
 
 def panels_fallback(reports: dict):

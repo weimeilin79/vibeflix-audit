@@ -83,16 +83,27 @@ def _check_typos(text: str) -> dict:
     return {"check": "typo", "status": "flagged" if findings else "clean", "findings": findings}
 
 
+def _norm_medium(s: str) -> str:
+    """Normalize a medium name for matching: lowercase, alphanumerics only
+    (so 'T-Shirt' / 't shirt' / 'tshirt' all compare equal)."""
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
 def _check_printed_medium(medium: str) -> dict:
-    """Deterministic approved-medium allowlist (forgiving contains-match)."""
-    m = (medium or "").strip().lower()
+    """Categorize the observed medium against the approved allowlist (forgiving
+    normalized contains-match). On a match, `medium_category` names the canonical
+    approved medium it was categorized as."""
+    m = _norm_medium(medium)
     if not m:
         return {"check": "printed_medium", "status": "unknown", "findings": [{
             "element_id": "printed_medium", "issue_type": "missing_medium",
             "severity": "warning", "description": "No printed medium was identified.",
         }]}
-    if any(a in m or m in a for a in _ALLOWED_PRINTED_MEDIA):
-        return {"check": "printed_medium", "status": "approved", "findings": []}
+    for a in _ALLOWED_PRINTED_MEDIA:
+        na = _norm_medium(a)
+        if na in m or m in na:
+            return {"check": "printed_medium", "status": "approved",
+                    "medium_category": a, "findings": []}
     return {"check": "printed_medium", "status": "flagged", "findings": [{
         "element_id": "printed_medium", "issue_type": "unapproved_medium",
         "severity": "critical",
@@ -141,11 +152,15 @@ def run_brand_audit(text: str, medium: str, image_uri: str) -> str:
 
     Args:
         text: the mockup's printed copy (a JSON array of strings or a plain string).
-        medium: the printed product medium (e.g. 'vinyl figure box').
+        medium: the product medium as observed/classified from the mockup image, or
+            as explicitly stated by the vendor (e.g. 'vinyl figure box'). It is
+            categorized here against the approved-media registry.
         image_uri: the image's storage link (e.g. a Cloud Storage gs:// URI).
 
-    Returns JSON: {audit, status, checks{...}, checks_run[...], findings[...]}.
-    status is 'rejected' (gate failed), 'flagged' (issues found), or 'compliant'.
+    Returns JSON: {audit, status, checks{...}, checks_run[...], findings[...],
+    medium_category}. `medium_category` is the canonical approved medium the input
+    was categorized as (absent if it matched none). status is 'rejected' (gate
+    failed), 'flagged' (issues found), or 'compliant'.
     """
     # Gate: the asset source must be approved before we audit its contents.
     src = _check_asset_source(image_uri)
@@ -161,17 +176,21 @@ def run_brand_audit(text: str, medium: str, image_uri: str) -> str:
         })
 
     # Source approved → run the content checks.
-    steps = [_check_typos(text), _check_printed_medium(medium)]
+    medium_step = _check_printed_medium(medium)
+    steps = [_check_typos(text), medium_step]
     findings = [f for step in steps for f in step["findings"]]
     checks = {"asset_source": "approved"}
     checks.update({step["check"]: step["status"] for step in steps})
-    return json.dumps({
+    result = {
         "audit": "brand_compliance",
         "status": "flagged" if findings else "compliant",
         "checks": checks,
         "checks_run": ["asset_source", "typo", "printed_medium"],
         "findings": findings,
-    })
+    }
+    if medium_step.get("medium_category"):
+        result["medium_category"] = medium_step["medium_category"]
+    return json.dumps(result)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,8 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - **Sourcing Orchestrator (Router)**: Captures uploads, checks parameters, coordinates state, and invokes display layouts.
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
    - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
-   - **Franchise Storyline & Lore Agent (Lore)**: Checks script databases, lore canon compliance, and screens for script leak/spoiler threats.
-   - **Legal Clearance Agent**: Reachable only from Vendor & Licensing. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
+   - **Deal Pricing Auditor (Cost)**: Audits the vendor's AGREED total consideration (royalty + advance + minimum guarantee) for using the IP against the licensor's rate card — an internal **evaluate→validate→iterate** loop reconciles each component and rules APPROVED / NEEDS-ADJUSTMENT / UNDERPRICED.
+   - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
@@ -24,9 +24,10 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 
 The orchestrator (a deterministic Workflow graph) fans out to the three domain
 agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
-The app also calls **ui_renderer** over A2A to paint the result as A2UI. A dedicated
-**`legal` agent** (:8005) sits behind Vendor Clearance — vendor_clearance hands off to it;
-it's not in the orchestrator's fan-out. Every box is its own container/instance.
+The app also calls **ui_renderer** over A2A to paint the result as A2UI. A standalone
+**`legal` agent** (:8005) sits behind Vendor Clearance — in this demo only vendor_clearance
+hands off to it (any agent could), and it's not in the orchestrator's fan-out. Every box
+is its own container/instance.
 
 ```
                     ┌─────────── app container (:8000) ───────────┐
@@ -36,7 +37,7 @@ it's not in the orchestrator's fan-out. Every box is its own container/instance.
                     └──┬──────────────┬──────────────┬──────────┬──┘
                   A2A  │         A2A  │         A2A  │     A2A  │ (paint)
         ┌──────────────▼─┐ ┌──────────▼───────┐ ┌────▼─────┐ ┌──▼──────────┐
-        │  brand_style   │ │ vendor_clearance │ │ storyline│ │ ui_renderer │
+        │  brand_style   │ │ vendor_clearance │ │ pricing  │ │ ui_renderer │
         │     :8001      │ │      :8002       │ │  :8003   │ │   :8004     │
         └──┬──────────┬──┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
    HTTP/MCP│          │  HTTP/MCP          │ HTTP/MCP         │  no MCP)    │
@@ -47,10 +48,11 @@ it's not in the orchestrator's fan-out. Every box is its own container/instance.
   brand_style → mcp_brand_style + mcp_vision_ui · vendor_clearance → mcp_licensing + mcp_market
 ```
 
-Plus a dedicated **`legal` agent (:8005)** that **vendor_clearance hands off to** (A2A) —
-it clears + executes the licensing contract for a newly-onboarded vendor×category and
-RAGs its process from `resource/legal/docs/`. It's not in the orchestrator fan-out or the
-readiness gate. See **[FLOW.md](FLOW.md)** for the full vendor_clearance → legal flow.
+Plus a standalone **`legal` agent (:8005)** — **in this demo only `vendor_clearance` hands
+off to it (any agent could)**. It clears + executes the licensing contract for a
+newly-onboarded vendor×category and RAGs its process from `resource/legal/docs/`. It's not
+in the orchestrator fan-out or the readiness gate. See **[FLOW.md](FLOW.md)** for the full
+vendor_clearance → legal flow.
 
 The audit **streams**: `POST /api/audit/stream` (SSE) pushes A2UI `surfaceUpdate`
 messages as the graph runs — the plan appears instantly, then each panel fills in as its
@@ -76,7 +78,7 @@ vibeflix/
 │   ├── ui_renderer/            # A2UI presenter A2A service (:8004) — skills/render-a2ui/ (reports → panels)
 │   ├── brand_style/            # Brand Style agent (A2A server) — skills/brand-compliance-audit/
 │   ├── vendor_clearance/       # Vendor & Licensing Clearance agent — skills/vendor-clearance/
-│   ├── storyline/              # Franchise Storyline & Lore agent — skills/canon-check/
+│   ├── deal_pricing/           # Deal Pricing Auditor (Workflow, loop) — skills/deal-pricing-audit/
 │   └── legal/                  # Legal Clearance agent (:8005) — skills/legal-clearance/
 │                               #   + legal_kb.py (search_legal_docs: local / Vertex RAG)
 │                               #   (each agent's procedure = a versioned ADK Skill / SKILL.md)
@@ -231,7 +233,7 @@ agent. Flipping from the local retriever to Vertex is a config change, not a cod
 ## 🚀 Running Locally
 
 The system is **distributed**: 9 services (frontend+orchestrator, **4** A2A agents —
-brand_style/vendor_clearance/storyline/**ui_renderer** — and 4 MCP servers) wired together
+brand_style/vendor_clearance/deal_pricing/**ui_renderer** — and 4 MCP servers) wired together
 with docker compose. The orchestrator + app talk to the agents over **A2A**; the
 domain agents talk to the MCP servers over **streamable-HTTP**.
 
@@ -248,6 +250,36 @@ and FastAPI serves it on the same origin as `/api/*` (port `8000`).
 **Frontend dev loop (optional):** with the mesh running, `./run_local.sh
 frontend` starts Vite on `:3000` against the app API (`VITE_API_URL`).
 
+### First-time setup: Python venv (for `adk web`, `test-agent`, and the RAG scripts)
+
+The non-Docker paths below — single-agent `adk web`, `./run_local.sh mcp` / `test-agent`,
+and `deploy/setup_legal_rag.py` / `deploy/rebuild_legal_rag.sh` — run against a local
+`.venv`. Build it with **`uv`** (Python 3.14's bundled pip self-upgrade is fragile; `uv`
+is reliable):
+
+```bash
+cd ~/work/vibeflix-audit          # your real repo (venv bakes in absolute paths, so build it HERE)
+
+# 1) create the venv — uv handles Python 3.14 reliably (pip self-upgrade is fragile here)
+uv venv .venv
+
+# 2) agent/backend deps (ADK 2.0 is pre-GA -> prereleases allowed)
+uv pip install --python .venv/bin/python --prerelease=allow -r agents/requirements.txt
+
+# 3) the shared package — NON-editable (editable installs break on py3.14 + uv)
+uv pip install --python .venv/bin/python ./packages/vibeflix-common --no-deps
+
+# 4) RAG provisioning deps — needed for setup_legal_rag.py / rebuild_legal_rag.sh
+uv pip install --python .venv/bin/python --prerelease=allow -r deploy/requirements-legal-rag.txt
+
+# 5) activate
+source .venv/bin/activate
+```
+
+Steps 1-3 are enough for `adk web` and `test-agent`; step 4 is only needed for the RAG
+scripts. A copied venv (e.g. restored from a backup) won't work — it stores absolute paths,
+so always rebuild it in place.
+
 ### Test one agent in isolation (no Docker)
 
 To iterate on a single agent without bringing up the whole A2A mesh, start the
@@ -262,7 +294,7 @@ In another shell:
 ```bash
 ./run_local.sh test-agent vendor_clearance --market "North America"
 ./run_local.sh test-agent brand_style
-./run_local.sh test-agent storyline --volume 40000
+./run_local.sh test-agent deal_pricing --volume 40000
 ```
 
 `agents/test_agent.py` runs that single agent in-process (no A2A layer), seeds the
@@ -321,7 +353,7 @@ short-circuits to `status: rejected` (content checks skipped). Output is one
 
 Export only the `MCP_*_URL`s that agent uses: brand_style needs
 `MCP_BRAND_STYLE_URL` + `MCP_VISION_UI_URL`; `vendor_clearance` needs `MCP_LICENSING_URL` +
-`MCP_MARKET_URL`; `storyline` needs none. Point `adk web` at the **single agent
+`MCP_MARKET_URL`; `deal_pricing` needs `MCP_LICENSING_URL` (for the rate card). Point `adk web` at the **single agent
 folder** (not the
 whole `agents/` dir, which would also try to load the orchestrator and its A2A
 URLs).
@@ -359,8 +391,8 @@ knows exactly what to pass for each call.
 
 #### Testing the Legal Agent
 
-`legal` is called only by `vendor_clearance` in the mesh, but you can drive it directly
-with `adk web`. It RAGs the (undefined) process from `resource/legal/docs/` via its
+In this demo `legal` is only called by `vendor_clearance` (though any agent could hand off
+to it), but you can also drive it directly with `adk web`. It RAGs the (undefined) process from `resource/legal/docs/` via its
 `search_legal_docs` tool and executes the contract via `mcp_licensing.upsert_contract`.
 Start `mcp_licensing` (shell 1: `./run_local.sh mcp`), then:
 
@@ -428,7 +460,7 @@ It pulls out the `gs://`/`https` link, the market (say "North America" / "Europe
 
 Notes:
 - **brand_style shows `needs_input`** here — no real image travels through the A2A
-  workflow to it, so it honestly asks for one (vendor_clearance / storyline are the
+  workflow to it, so it honestly asks for one (vendor_clearance / deal_pricing are the
   meaningful nodes to watch in the mesh).
 - `compile_ui` recovers each agent's report from the session events by author
   (`RemoteA2aAgent` nodes don't surface their output to the JoinNode).
@@ -462,7 +494,7 @@ workflows a changed input affects (judged from each workflow's self-description)
 any that were incomplete. The app threads the prior audit's reports + inputs back into
 the graph via a `run_token`; the guards run the dispatched workflows and **reuse** the
 rest (the UI tags reused panels *↺ Reused*). E.g. supplying a missing medium re-runs
-only `brand_style`; `vendor_clearance`/`storyline` replay from cache. No hardcoded
+only `brand_style`; `vendor_clearance`/`deal_pricing` replay from cache. No hardcoded
 input→workflow map and no if/else in a function — the rules are in the skill and the
 reasoning is done by the model.
 
@@ -528,7 +560,7 @@ non-streaming collect loop.
 
 ## 🎭 Interactive Flow Walkthrough
 
-- **Step 1: Ingest Image / Presets**: Choose a preset scenario or type a prompt commands to start. Sourcing Orchestrator initiates parallel checks across all 3 agents (Style, Legal, Storyline).
+- **Step 1: Ingest Image / Presets**: Choose a preset scenario or type a prompt commands to start. Sourcing Orchestrator initiates parallel checks across all 3 agents (Brand Style, Vendor & Licensing, Deal Pricing).
 - **Step 2: Style & Exclusivity Collision (Scenario 2)**: The Style Agent flags uncertified font family `SpaceGrotesk` for the text `THE CHILD`. The Vendor & Licensing Clearance Agent flags a North American exclusive distribution conflict with Hasbro (and marks the matching vendors ineligible). Warning overlays are drawn over the product box.
 - **Step 3: Autonomous Mesh Resolution / User Remediation**: In Scenario 2, agents negotiate and resolve checks automatically. Otherwise, user manually swaps the market dropdown to **Europe**, re-running verification checks and clearing the blocks.
 - **Step 4: Human-in-the-Loop Sourcing Cap Override (Scenario 3)**: In Scenario 3, procurement volume (40,000) exceeds the primary vendor limit (25,000). Sourcing freezes, presenting a choices card. The user must explicitly choose **Option A** (Split excess 15k units to secondary Addendum Contract SC-7798-EU) or **Option B** (Strictly cap volume at 25k and cancel excess) before they can finalize the release.

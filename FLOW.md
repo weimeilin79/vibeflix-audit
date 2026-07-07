@@ -7,9 +7,10 @@ the `legal` agent it hands off to.
 
 ## 1. Mesh topology (who calls whom)
 
-The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ storyline**. The
-`legal` agent is **not** dispatched by the orchestrator and is **not** in readiness —
-`vendor_clearance` hands off to it (only that service has `LEGAL_A2A_URL`).
+The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ deal_pricing**. The
+`legal` agent is **not** dispatched by the orchestrator and is **not** in readiness — it's
+a standalone agent that, **in this demo, only `vendor_clearance` hands off to** (only that
+service is given `LEGAL_A2A_URL`), though any agent could.
 
 ```
                             ┌──────────── app (:8000) ────────────┐
@@ -17,7 +18,7 @@ The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ storyline**.
                             └───┬─────────┬─────────┬──────────┬───┘
                           A2A   │    A2A  │    A2A  │   A2A     │ (paint)
                     ┌───────────▼─┐ ┌─────▼──────┐ ┌▼────────┐ ┌▼───────────┐
-   orchestrator ──► │ brand_style │ │  vendor_   │ │storyline│ │ ui_renderer│
+   orchestrator ──► │ brand_style │ │  vendor_   │ │ pricing │ │ ui_renderer│
    fans out to      │             │ │ clearance  │ │         │ │            │
    these 3          └──┬───────┬──┘ └─┬────┬───┬─┘ └─────────┘ └────────────┘
                        │       │      │    │   │
@@ -219,8 +220,10 @@ loops were verified end-to-end (Flow A: liaison answers the royalty question; Fl
 ## 6. Demo matrix — frontend inputs to trigger every path
 
 Frontend fields: **Character**, **Target Market**, **Product Category**, **Vendor**,
-**Volume**, **Medium** (image optional). Some paths ask a follow-up field (shown in the
-last column). Registry reference below the table.
+**Volume**, **Medium** (optional — blank → brand_style classifies it from the mockup
+image; type/pick to override, e.g. `shot glass` to trigger the unapproved-medium
+path) (image optional). Some paths ask a follow-up field (shown in the last column).
+Registry reference below the table.
 
 ### A. `vendor_clearance` asks for missing input (`needs_input`)
 | # | Character | Market | Category | Vendor | → Outcome / follow-up |
@@ -276,11 +279,11 @@ last column). Registry reference below the table.
 ### I. Orchestrator dispatch (which workflows run)
 | # | Action | → Outcome |
 |---|---|---|
-| I1 | Any initial audit | dispatch runs **all 3** (brand_style ‖ vendor_clearance ‖ storyline) |
+| I1 | Any initial audit | dispatch runs **all 3** (brand_style ‖ vendor_clearance ‖ deal_pricing) |
 | I2 | Re-submit changing only the market/vendor | dispatch **re-runs only the affected** workflow(s), reuses the rest (see the `__plan__`) |
 
 > In the mesh **brand_style** returns `needs_input` (no real image travels over A2A) and
-> **storyline** runs on the character — both appear on every audit alongside vendor_clearance.
+> **deal_pricing** audits the agreed price (royalty + advance + MG) — both appear on every audit alongside vendor_clearance.
 
 ### Registry reference (from `mcp_licensing/data.py`)
 - **Vendors** — 1001 Shenzhen (APAC/NA · Vinyl/Action/BlindBox), 1002 Bavaria (EU/NA ·

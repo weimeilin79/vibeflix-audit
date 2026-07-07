@@ -3,7 +3,7 @@
 #   app            frontend + FastAPI + Sourcing Orchestrator (A2A client)   :8000
 #   brand_style    Brand Style agent  (A2A server)                           :8001
 #   vendor_clearance  Vendor & Licensing Clearance agent (A2A server)        :8002
-#   storyline      Storyline agent    (A2A server)                           :8003
+#   deal_pricing   Deal Pricing agent (A2A server)                           :8003
 #   mcp_vision_ui  Vision & UI MCP server (streamable-http)                  :9001
 #   mcp_licensing  Vendor & licensing registry MCP server (streamable-http)  :9002
 #   mcp_market     Market & telemetry MCP server (streamable-http)           :9003
@@ -139,18 +139,21 @@ services:
       - ./resource/legal/docs:/app/legal-docs:ro
     depends_on: [mcp_licensing]
 
-  storyline:
+  deal_pricing:
     build:
       context: .
       dockerfile: deploy/Dockerfile.agent
-      args: { AGENT: storyline }
+      args: { AGENT: deal_pricing }
     environment:
       <<: *vertex-env
-      A2A_AGENT: storyline
-      A2A_HOST: storyline
+      A2A_AGENT: deal_pricing
+      A2A_HOST: deal_pricing
       A2A_PROTOCOL: http
       PORT: "8003"
+      # deal_pricing's reasoner calls mcp_licensing.get_license_pricing for the rate card.
+      MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
     volumes: *gcloud-adc
+    depends_on: [mcp_licensing]
 
   # ---- UI-Render agent (A2A server) — turns reports → A2UI panels via Gemini.
   #      Its own instance like the domain agents; no MCP, needs Vertex + ADC. ----
@@ -180,7 +183,7 @@ services:
       PORT: "8000"
       BRAND_STYLE_A2A_URL: http://brand_style:8001
       VENDOR_CLEARANCE_A2A_URL: http://vendor_clearance:8002
-      STORYLINE_A2A_URL: http://storyline:8003
+      DEAL_PRICING_A2A_URL: http://deal_pricing:8003
       # The UI-Render agent (paints reports → A2UI panels).
       UI_RENDERER_A2A_URL: http://ui_renderer:8004
       # Read-only: the app pulls the licensed-trademark list (list_trademarks) to
@@ -188,5 +191,10 @@ services:
       MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
       # Bucket for vendor image uploads (/api/upload).
       REQUEST_IMAGE_BUCKET: vibeflix-request-image
-    volumes: *gcloud-adc
-    depends_on: [brand_style, vendor_clearance, storyline, ui_renderer, mcp_licensing]
+      # Completed audits are appended here (JSONL) — mounted so history survives
+      # container rebuilds and is browsable in the console's Audit History tab.
+      AUDIT_HISTORY_DIR: /app/data
+    volumes:
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - ./data/app:/app/data
+    depends_on: [brand_style, vendor_clearance, deal_pricing, ui_renderer, mcp_licensing]

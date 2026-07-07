@@ -18,7 +18,7 @@
 #   ./run_local.sh mesh              Start the full backend (4 MCP + 3 A2A agents) for
 #                                    testing the orchestrator, e.g. via `adk web`
 #   ./run_local.sh test-agent NAME   Run one agent in isolation against the local MCP servers
-#                                    NAME = brand_style | vendor_clearance | storyline
+#                                    NAME = brand_style | vendor_clearance | deal_pricing
 #
 # Prereqs: Docker (mesh), or .venv (local mcp/test-agent). Agents call Vertex,
 # so run `gcloud auth application-default login` first.
@@ -73,7 +73,7 @@ start_mcp_servers() {
   done
 }
 
-# Local A2A agent services (brand_style:8001, vendor_clearance:8002, storyline:8003,
+# Local A2A agent services (brand_style:8001, vendor_clearance:8002, deal_pricing:8003,
 # ui_renderer:8004). Each gets only the MCP URLs it uses; Vertex config comes from
 # the agent's .env (ui_renderer needs Vertex for its Gemini call, no MCP).
 start_a2a_agents() {
@@ -88,8 +88,8 @@ start_a2a_agents() {
     LEGAL_A2A_URL=http://127.0.0.1:8005 \
     "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_vendor_clearance.log 2>&1 &
   A2A_PIDS+=("$!")
-  A2A_AGENT=storyline A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8003 \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_storyline.log 2>&1 &
+  A2A_AGENT=deal_pricing A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8003 MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
+    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_deal_pricing.log 2>&1 &
   A2A_PIDS+=("$!")
   A2A_AGENT=ui_renderer A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8004 \
     "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_ui_renderer.log 2>&1 &
@@ -153,7 +153,7 @@ case "${1:-up}" in
     c_info "Test the orchestrator in another shell:"
     c_info "  export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \\"
     c_info "         VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \\"
-    c_info "         STORYLINE_A2A_URL=http://127.0.0.1:8003"
+    c_info "         DEAL_PRICING_A2A_URL=http://127.0.0.1:8003"
     c_info "  adk web agents/orchestrator      # then open http://127.0.0.1:8000"
     c_info "Ctrl-C to stop the mesh."
     wait
@@ -170,7 +170,7 @@ case "${1:-up}" in
     ensure_venv
     check_adc
     shift
-    [ "$#" -ge 1 ] || { c_err "Usage: ./run_local.sh test-agent <brand_style|vendor_clearance|storyline> [--market M] [--volume N] [--image F]"; exit 1; }
+    [ "$#" -ge 1 ] || { c_err "Usage: ./run_local.sh test-agent <brand_style|vendor_clearance|deal_pricing> [--market M] [--volume N] [--image F]"; exit 1; }
     "$VENV/bin/python" -m agents.test_agent "$@"
     ;;
   *)

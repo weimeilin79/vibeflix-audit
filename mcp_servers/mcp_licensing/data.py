@@ -439,3 +439,50 @@ _EXCLUSIVITY: dict[str, dict] = {
 # Runtime-populated (created when a vendor is legally cleared for a category).
 # ---------------------------------------------------------------------------
 _CONTRACTS: dict[str, dict] = {}
+
+
+# Licensor rate cards — the EXPECTED pricing the deal_pricing agent reconciles the vendor's
+# agreed royalty/advance/MG against. Keyed by character_id (lowercase). Editable by hand.
+_RATE_CARDS: dict[str, dict] = {
+    "minions": {
+        "property": "Minions",
+        "character_tier": "A-list",
+        "base_royalty_rate": 0.12,
+        "category_modifier": {
+            "vinyl figures": 1.15, "action figures": 1.15, "blind box": 1.10,
+            "resin statues": 1.20, "premium collectibles": 1.20, "sofubi": 1.20,
+            "novelty": 0.95, "plush": 0.90, "apparel": 1.0, "accessories": 1.0,
+            "stationery": 0.95, "homeware": 1.0,
+        },
+        "territory_modifier": {"north america": 1.0, "europe": 1.05, "asia-pacific": 0.95},
+        "volume_discount_tiers": [
+            {"min_units": 0, "mult": 1.0},
+            {"min_units": 50000, "mult": 0.95},
+            {"min_units": 250000, "mult": 0.90},
+        ],
+        "min_royalty_rate": 0.08,
+        "mg_rule": {"pct_of_projected_royalty": 0.50, "floor_usd": 100000},
+        "advance_rule": {"pct_of_mg": 0.20},
+        "tolerance_pct": 0.05,
+    },
+    "grogu": {
+        "property": "Grogu (The Child)",
+        "character_tier": "A-list",
+        "base_royalty_rate": 0.14,
+        "category_modifier": {
+            "vinyl figures": 1.20, "action figures": 1.20, "blind box": 1.15,
+            "resin statues": 1.25, "premium collectibles": 1.25, "sofubi": 1.25,
+            "novelty": 0.95, "plush": 1.0, "apparel": 1.0, "accessories": 1.0,
+            "stationery": 0.95, "homeware": 1.0,
+        },
+        "territory_modifier": {"north america": 1.0, "europe": 1.05, "asia-pacific": 1.0},
+        "volume_discount_tiers": [
+            {"min_units": 0, "mult": 1.0},
+            {"min_units": 100000, "mult": 0.95},
+        ],
+        "min_royalty_rate": 0.10,
+        "mg_rule": {"pct_of_projected_royalty": 0.50, "floor_usd": 150000},
+        "advance_rule": {"pct_of_mg": 0.25},
+        "tolerance_pct": 0.05,
+    },
+}

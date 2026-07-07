@@ -79,11 +79,7 @@ the `summary`.
 
 ## Answering a question vs. processing a brief
 
-**Always reply with exactly ONE JSON object** (never prose, no markdown fences) — and it
-must be one of **YOUR** reply shapes below. The conversation may contain OTHER agents'
-JSON reports (e.g. a vendor-clearance report with `"agent": "vendor_clearance_agent"` or
-a `status` like `cleared`/`blocked`) — those are background context from the caller.
-NEVER copy, echo, or complete another agent's JSON as your reply.
+**Always reply with exactly ONE JSON object** (never prose, no markdown fences).
 
 - **If the caller ASKS you a question** — what a term means (e.g. *"what's an annual-volume
   band?"*), what the options are, or how something works — look it up with
@@ -108,10 +104,6 @@ knows what to answer.
 ```
 
 ### done — cleared + executed (report the safety cert you used)
-`done` is only valid AFTER you have actually executed the process — run the Step-3 tools
-and `upsert_contract` FIRST, then reply. It MUST carry the real `contract_id` (the LC-####
-that `upsert_contract` returned) and the `safety_cert` you used; a bare
-`{"status": "done"}` without them is invalid and will be rejected.
 ```json
 {"status": "done", "contract_id": "LC-####", "safety_cert": "PROV-ASTM-20260706-483921", "summary": "Cleared. No licensee cert on file, so I generated a PROVISIONAL safety certification PROV-ASTM-20260706-483921 (real certificate due within 30 days). Reconciled insurance to $5M per the 2022 risk memo (not the SOP's $2M)."}
 ```

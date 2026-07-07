@@ -5,7 +5,7 @@ Start the MCP servers first (``./run_local.sh mcp``), then:
 
     python -m agents.test_agent brand_style
     python -m agents.test_agent vendor_clearance --market "North America"
-    python -m agents.test_agent storyline --image grogu_box.png --volume 40000
+    python -m agents.test_agent deal_pricing --volume 40000
 
 It defaults the ``MCP_*_URL`` vars to the local servers, seeds the session state
 the agents read (image_path / target_market / volume), runs the agent once via
@@ -30,7 +30,7 @@ from google.adk.apps import App
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
-AGENTS = ("brand_style", "vendor_clearance", "storyline")
+AGENTS = ("brand_style", "vendor_clearance", "deal_pricing")
 
 
 async def run(agent_name: str, image: str, market: str, volume: int, image_uri: str) -> None:

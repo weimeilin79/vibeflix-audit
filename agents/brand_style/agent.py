@@ -60,9 +60,9 @@ class BrandStyleReport(BaseModel):
     status: str
     # Populated when status is "needs_input" or "rejected": what to ask the user.
     question: str = ""
-    # Which inputs are still needed from the user — e.g. ["medium"] or ["image"].
-    # Drives which field(s) the frontend renders. The medium is a manufacturing
-    # decision, so it's requested from the user rather than guessed from the image.
+    # Which inputs are still needed from the user — e.g. ["image"], or ["medium"]
+    # in the rare case the medium can't be classified from the mockup. Drives
+    # which field(s) the frontend renders.
     needs: list[str] = Field(default_factory=list)
     extracted: Extracted = Field(default_factory=Extracted)
     checks_run: list[str] = Field(default_factory=list)
@@ -73,8 +73,9 @@ brand_style_agent = LlmAgent(
     name="brand_style_compliance_agent",
     model="gemini-flash-latest",
     description=(
-        "Extracts a mockup's printed text and product medium from its image link, "
-        "then runs the deterministic typo, printed-medium, and asset-source checks."
+        "Extracts a mockup's printed text and classifies its product medium from "
+        "the image (an explicitly stated medium overrides), then runs the "
+        "deterministic typo, printed-medium, and asset-source checks."
     ),
     instruction=(
         "You are the Brand Style Compliance Agent for the Vibeflix licensing "

@@ -1,10 +1,10 @@
 """Serve a single domain agent as a standalone A2A service.
 
-Each domain agent (brand_style / vendor_clearance / storyline / ui_renderer) runs in
+Each domain agent (brand_style / vendor_clearance / deal_pricing / ui_renderer) runs in
 its own container and exposes itself over the Agent-to-Agent (A2A) protocol so the
 Sourcing Orchestrator can call it remotely. Driven by environment:
 
-    A2A_AGENT     which agent package to serve: brand_style | vendor_clearance | storyline | ui_renderer
+    A2A_AGENT     which agent package to serve: brand_style | vendor_clearance | deal_pricing | ui_renderer
     PORT          port to bind (Cloud Run injects this; default 8001)
     A2A_HOST      hostname advertised in the published agent card
                   (compose: the service name; Cloud Run: the *.run.app domain)
@@ -31,7 +31,7 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
 from vibeflix_common.health import probe_mcp_from_env, banner
 
-_KNOWN = {"brand_style", "vendor_clearance", "storyline", "ui_renderer", "legal"}
+_KNOWN = {"brand_style", "vendor_clearance", "deal_pricing", "ui_renderer", "legal"}
 
 
 def _runner_with_plugins(agent):

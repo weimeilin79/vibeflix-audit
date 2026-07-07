@@ -8,6 +8,7 @@ human-in-the-loop sourcing gate interrupts; the response then carries
 """
 
 import os
+import re
 import json
 import time
 import uuid
@@ -33,10 +34,10 @@ from google.adk.runners import Runner, InMemoryRunner
 
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_KNOWN_PATH
 
-from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of
+from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of, note_responder
 from agents.a2ui_surface import (
     build_surface, panels_fallback, stream_initial, stream_panel, stream_sourcing,
-    title_from_name,
+    stream_final_report, title_from_name,
 )
 from vibeflix_common.memory import (
     APP_NAME,
@@ -85,6 +86,14 @@ class AuditRequest(BaseModel):
     add_category_approved: str = ""
     # Optional user-provided product medium; blank → brand_style infers it.
     medium: str = ""
+    # Free-text operator note / question (the chat field) — threaded into the orchestrator
+    # brief as extra context for the agents.
+    note: str = ""
+    # Deal pricing — the vendor's AGREED total consideration + royalty basis (deal_pricing agent).
+    net_unit_price: float = 0.0
+    agreed_royalty_rate: float = 0.0
+    agreed_advance: float = 0.0
+    agreed_mg: float = 0.0
     # On a re-submit, the token from the prior audit — lets the orchestrator reason
     # about which workflows the change affects and reuse the rest.
     run_token: str | None = None
@@ -147,6 +156,28 @@ presenter_runner = (
 
 # Audit conversations awaiting more input: token -> {user_id, request(accumulated)}.
 _SESSIONS: dict[str, dict] = {}
+
+# The orchestrator's note-responder runs as its own in-memory agent (like the presenter).
+_NOTE_APP = "note_responder"
+note_responder_runner = InMemoryRunner(app=App(name=_NOTE_APP, root_agent=note_responder))
+
+
+async def _respond_to_note(note: str, reports: dict) -> str | None:
+    """Run the orchestrator's note_responder on {note, reports} -> a short reply (or None)."""
+    try:
+        payload = json.dumps({"note": note, "reports": reports})
+        session = await note_responder_runner.session_service.create_session(app_name=_NOTE_APP, user_id="note")
+        text = ""
+        async for event in note_responder_runner.run_async(
+            user_id="note", session_id=session.id, new_message=_content(payload)
+        ):
+            content = getattr(event, "content", None)
+            parts = getattr(content, "parts", None) if content else None
+            text += "".join(getattr(p, "text", "") or "" for p in (parts or []))
+        return text.strip() or None
+    except Exception as e:
+        print(f"[note_responder] failed: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
 async def _present(reports: dict) -> list | None:
@@ -299,7 +330,7 @@ _FIELD_SPECS = {
                   "type": "text", "placeholder": "North America, Europe, Asia-Pacific, Latin America…", "required": True},
     "image": {"name": "image_uri", "label": "Approved mockup image link",
               "type": "text", "placeholder": "gs://vibeflix-approved-assets/… or https://…", "required": True},
-    "medium": {"name": "medium", "label": "Product medium — what will this be manufactured / printed as?",
+    "medium": {"name": "medium", "label": "Product medium could not be determined from the image — what will this be manufactured / printed as?",
                "type": "text", "placeholder": "e.g. vinyl figure box, poster, T-shirt", "required": True},
 }
 
@@ -378,6 +409,7 @@ async def _collect_or_complete(request: dict, token: str | None = None) -> dict:
         }
     if token:
         _SESSIONS.pop(token, None)
+    await _record_history(request, aggregate)
     await _persist_audit(user_id, sid, aggregate)
     return {"status": "completed", "result": aggregate}
 
@@ -404,6 +436,13 @@ def _cache_audit(aggregate: dict, request: dict) -> str:
         "character_id": request.get("character") or "",
         "product_category": request.get("product_category") or "",
         "vendor": request.get("vendor") or "",
+        # Mirror the orchestrator's _INPUT_KEYS: pricing terms + note must be part
+        # of the history, or the dispatcher can't see them change on a re-run.
+        "net_unit_price": request.get("net_unit_price") or 0,
+        "agreed_royalty_rate": request.get("agreed_royalty_rate") or 0,
+        "agreed_advance": request.get("agreed_advance") or 0,
+        "agreed_mg": request.get("agreed_mg") or 0,
+        "note": request.get("note") or "",
     }
     token = uuid.uuid4().hex[:12]
     _AUDIT_CACHE[token] = {"reports": reports, "inputs": inputs}
@@ -417,6 +456,101 @@ def _apply_prior(request: dict) -> dict:
     if prior:
         request = {**request, "prior_reports": prior["reports"], "prior_inputs": prior["inputs"]}
     return request
+
+
+# ---- Audit history (completed runs, browsable in the console's History tab) ----
+# Every COMPLETED audit (done, not awaiting input) is appended to a JSONL file so it
+# survives restarts; fully-passed runs also fetch the executed contract from
+# mcp_licensing so the final report shows the whole contract record.
+import datetime
+import pathlib as _pathlib
+
+_HISTORY_PATH = _pathlib.Path(os.environ.get("AUDIT_HISTORY_DIR", "data")) / "audit_history.jsonl"
+_AUDIT_HISTORY: list[dict] = []
+
+
+def _load_history() -> None:
+    try:
+        with open(_HISTORY_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    _AUDIT_HISTORY.append(json.loads(line))
+        print(f"[history] loaded {len(_AUDIT_HISTORY)} audits from {_HISTORY_PATH}", flush=True)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[history] load failed: {type(e).__name__}: {e}", flush=True)
+
+
+_load_history()
+
+_PASSING_STATUSES = {"cleared", "compliant"}
+
+
+def _all_passed(reports: dict, sourcing: dict) -> bool:
+    """True when every workflow's report passed and sourcing isn't awaiting a choice."""
+    if not reports:
+        return False
+    if any(str((r or {}).get("status", "")).lower() not in _PASSING_STATUSES
+           for r in reports.values()):
+        return False
+    return (sourcing or {}).get("status") != "needs_choice"
+
+
+async def _fetch_contract(contract_id: str) -> dict | None:
+    """Fetch the full executed contract record from mcp_licensing (get_contract)."""
+    url = os.environ.get("MCP_LICENSING_URL")
+    if not (url and contract_id):
+        return None
+    try:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+        async with streamablehttp_client(url) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                res = await session.call_tool("get_contract", {"contract_id": contract_id})
+                text = "".join(getattr(c, "text", "") or "" for c in res.content)
+                contract = json.loads(text)
+                return None if contract.get("error") else contract
+    except Exception as e:
+        print(f"[history] get_contract({contract_id}) failed: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
+async def _record_history(request: dict, aggregate: dict) -> dict:
+    """Build + persist a history entry for a completed audit; returns the entry."""
+    reports = aggregate.get("reports") or {}
+    sourcing = aggregate.get("sourcing") or {}
+    m = re.search(r"LC-\w+", json.dumps(reports))
+    contract = await _fetch_contract(m.group(0) if m else "")
+    entry = {
+        "id": uuid.uuid4().hex[:8],
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "passed": _all_passed(reports, sourcing),
+        "inputs": {k: request.get(k) for k in (
+            "image_uri", "target_market", "volume", "character", "product_category",
+            "vendor", "medium", "note", "net_unit_price", "agreed_royalty_rate",
+            "agreed_advance", "agreed_mg") if request.get(k)},
+        "statuses": {n: (r or {}).get("status", "") for n, r in reports.items()},
+        "reports": reports,
+        "sourcing": sourcing,
+        "contract": contract,
+    }
+    _AUDIT_HISTORY.append(entry)
+    try:
+        _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_HISTORY_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"[history] persist failed: {type(e).__name__}: {e}", flush=True)
+    return entry
+
+
+@app.get("/api/audits")
+def list_audits():
+    """Completed audits, newest first (the console's Audit History tab)."""
+    return {"audits": list(reversed(_AUDIT_HISTORY))}
 
 
 def _sse(obj: dict) -> str:
@@ -540,6 +674,14 @@ async def _stream_audit(request: dict):
     # 3) sourcing line.
     yield _sse({"a2ui": stream_sourcing(aggregate.get("sourcing") or {})})
 
+    # 3.5) if the operator submitted a note/question, the orchestrator responds to it
+    #      (answers from the reports, or acks it as applied context).
+    _note = (request.get("note") or "").strip()
+    if _note:
+        _ans = await _respond_to_note(_note, reports)
+        if _ans:
+            yield _sse({"event": "note_response", "text": _ans})
+
     # 4) done, or collect more input. Either way, cache this run + return its token so
     #    the client can thread it on the next submit (incremental re-run).
     token = _cache_audit(aggregate, request)
@@ -552,6 +694,11 @@ async def _stream_audit(request: dict):
             panels_fallback(aggregate.get("reports") or {}),
             aggregate.get("sourcing") or {}, market, volume,
         )
+        # Record the completed run in the audit history; when EVERYTHING passed,
+        # close the run with the final clearance report + the executed contract.
+        entry = await _record_history(request, aggregate)
+        if entry["passed"]:
+            yield _sse({"a2ui": stream_final_report(entry)})
         await _persist_audit(user_id, session.id, aggregate)
         yield _sse({"event": "done", "run_token": token})
 
@@ -570,6 +717,11 @@ async def audit_stream(req: AuditRequest):
         "new_vendor": req.new_vendor or "",
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
+        "note": req.note or "",
+        "net_unit_price": req.net_unit_price,
+        "agreed_royalty_rate": req.agreed_royalty_rate,
+        "agreed_advance": req.agreed_advance,
+        "agreed_mg": req.agreed_mg,
         "run_token": req.run_token,
     }
     return StreamingResponse(_stream_audit(request), media_type="text/event-stream")
@@ -587,7 +739,7 @@ def health():
 _AGENT_SERVICES = [
     {"name": "brand_style", "label": "Brand Style", "env": "BRAND_STYLE_A2A_URL", "critical": True},
     {"name": "vendor_clearance", "label": "Vendor & Licensing", "env": "VENDOR_CLEARANCE_A2A_URL", "critical": True},
-    {"name": "storyline", "label": "Storyline Lore", "env": "STORYLINE_A2A_URL", "critical": True},
+    {"name": "deal_pricing", "label": "Deal Pricing", "env": "DEAL_PRICING_A2A_URL", "critical": True},
     {"name": "ui_renderer", "label": "UI Renderer", "env": "UI_RENDERER_A2A_URL", "critical": True},
 ]
 
@@ -739,6 +891,32 @@ async def log_telemetry(payload: TelemetryPayload):
     # Simulated writing user engagement maps back to governance-telemetry store
     print(f"[Telemetry Ingestion] Received interaction map on {payload.element_id}: Overridden={payload.overridden}")
     return {"status": "telemetry_captured"}
+
+
+class EscalateRequest(BaseModel):
+    """Raise an exception request for flagged findings the operator can't clear by editing
+    inputs. MOCK for now — no real escalation workflow exists yet."""
+    workflows: list[str] = []
+    reason: str = ""
+    run_token: str | None = None
+
+
+@app.post("/api/escalate")
+async def escalate(req: EscalateRequest):
+    """MOCK exception escalation. A real version would open a ticket, route to a human
+    reviewer, or kick off an approval workflow. For now we mint a ticket id and ack so the
+    UI can show 'request escalated'."""
+    ticket = f"ESC-{uuid.uuid4().hex[:4].upper()}"
+    wf = ", ".join(req.workflows) if req.workflows else "the audit"
+    print(f"[escalate] MOCK exception request {ticket}: workflows={req.workflows} "
+          f"reason={req.reason!r}", flush=True)
+    return {
+        "status": "escalated",
+        "ticket": ticket,
+        "workflows": req.workflows,
+        "message": (f"Exception request {ticket} raised for {wf} — routed to compliance "
+                    f"review. (Mocked: the escalation workflow isn't implemented yet.)"),
+    }
 
 
 # Serve the built React frontend from the same origin as the API (mounted last
