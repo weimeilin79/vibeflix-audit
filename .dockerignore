@@ -1,0 +1,29 @@
+# VCS / tooling
+.git
+.gitignore
+.claude
+
+# Python envs & caches
+.venv
+venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+
+# ADK local runtime state
+**/.adk
+
+# Secrets / per-env config (provide via container env instead)
+**/.env
+**/.env.*
+
+# Node deps & build output (frontend is built inside the image)
+**/node_modules
+frontend/dist
+
+# Large session log — not needed in any image
+reference.md
+
+# Misc
+*.log
+.DS_Store

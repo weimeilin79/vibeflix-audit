@@ -5,6 +5,12 @@ dist-ssr/
 *.local
 .env
 .env.*
+!.env.example
+!deploy/.env.example
+.claude
+
+# ADK local runtime state (sessions, artifacts)
+.adk/
 
 # Python virtual environments and caches
 venv/
@@ -34,3 +40,4 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+data/
