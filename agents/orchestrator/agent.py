@@ -120,7 +120,11 @@ note_responder = LlmAgent(
         "You are the Sourcing Orchestrator, replying to the operator's free-text note that "
         "accompanied an audit. You receive JSON: {\"note\": str, \"reports\": {...}} where "
         "`reports` are the compliance-workflow results (brand_style, vendor_clearance, "
+<<<<<<< HEAD
         "deal_pricing, sourcing, legal...).\n"
+=======
+        "storyline, sourcing, legal...).\n"
+>>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
         "- If the note is a QUESTION, answer it concisely and specifically FROM the reports "
         "(cite the finding, status, vendor id, contract id, etc.). If the answer isn't in "
         "the reports, say which workflow would determine it.\n"
@@ -176,12 +180,15 @@ class AuditInput(BaseModel):
     legal_safety_cert: str = ""
     # Free-text operator note / question (from the chat field) — appended to the brief.
     note: str = ""
+<<<<<<< HEAD
     # Deal pricing — the vendor's AGREED total consideration + the royalty basis, consumed by
     # the deal_pricing agent (net_unit_price × volume × rate = projected royalty).
     net_unit_price: float = 0.0
     agreed_royalty_rate: float = 0.0
     agreed_advance: float = 0.0
     agreed_mg: float = 0.0
+=======
+>>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
 
 
 def _request_text(node_input) -> str:
@@ -215,10 +222,13 @@ def _parse_audit_request(text: str) -> AuditInput:
                 sourcing_choice=str(data.get("sourcing_choice", "")),
                 legal_safety_cert=str(data.get("legal_safety_cert", "")),
                 note=str(data.get("note", "")),
+<<<<<<< HEAD
                 net_unit_price=float(data.get("net_unit_price") or 0),
                 agreed_royalty_rate=float(data.get("agreed_royalty_rate") or 0),
                 agreed_advance=float(data.get("agreed_advance") or 0),
                 agreed_mg=float(data.get("agreed_mg") or 0),
+=======
+>>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
             )
     except (ValueError, TypeError):
         pass
@@ -286,10 +296,13 @@ def ingest(node_input) -> Event:
             "sourcing_choice": req.sourcing_choice,
             "legal_safety_cert": req.legal_safety_cert,
             "note": req.note,
+<<<<<<< HEAD
             "net_unit_price": req.net_unit_price,
             "agreed_royalty_rate": req.agreed_royalty_rate,
             "agreed_advance": req.agreed_advance,
             "agreed_mg": req.agreed_mg,
+=======
+>>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
             "prior_reports": prior_reports,
             "prior_inputs": prior_inputs,
         },

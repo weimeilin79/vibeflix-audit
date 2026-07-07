@@ -7,7 +7,11 @@ the `legal` agent it hands off to.
 
 ## 1. Mesh topology (who calls whom)
 
+<<<<<<< HEAD
 The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ deal_pricing**. The
+=======
+The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ storyline**. The
+>>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
 `legal` agent is **not** dispatched by the orchestrator and is **not** in readiness — it's
 a standalone agent that, **in this demo, only `vendor_clearance` hands off to** (only that
 service is given `LEGAL_A2A_URL`), though any agent could.
