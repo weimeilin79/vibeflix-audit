@@ -89,14 +89,11 @@ class AuditRequest(BaseModel):
     # Free-text operator note / question (the chat field) — threaded into the orchestrator
     # brief as extra context for the agents.
     note: str = ""
-<<<<<<< HEAD
     # Deal pricing — the vendor's AGREED total consideration + royalty basis (deal_pricing agent).
     net_unit_price: float = 0.0
     agreed_royalty_rate: float = 0.0
     agreed_advance: float = 0.0
     agreed_mg: float = 0.0
-=======
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
     # On a re-submit, the token from the prior audit — lets the orchestrator reason
     # about which workflows the change affects and reuse the rest.
     run_token: str | None = None
@@ -721,13 +718,10 @@ async def audit_stream(req: AuditRequest):
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
         "note": req.note or "",
-<<<<<<< HEAD
         "net_unit_price": req.net_unit_price,
         "agreed_royalty_rate": req.agreed_royalty_rate,
         "agreed_advance": req.agreed_advance,
         "agreed_mg": req.agreed_mg,
-=======
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
         "run_token": req.run_token,
     }
     return StreamingResponse(_stream_audit(request), media_type="text/event-stream")

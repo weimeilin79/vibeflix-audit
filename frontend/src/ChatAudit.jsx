@@ -205,11 +205,7 @@ const ESCALATABLE = new Set(['flagged', 'unverified', 'blocked', 'needs_input', 
 // Requested-field tokens already covered by the standard inputs — filtered out of the
 // FieldDock in the combined-edit view so they aren't shown twice (their values still flow
 // through submitFields from the standard inputs' state).
-<<<<<<< HEAD
 const STD_TOKENS = new Set(['image', 'image_uri', 'medium', 'character', 'vendor', 'market', 'target_market', 'volume', 'category', 'product_category']);
-=======
-const STD_TOKENS = new Set(['image', 'image_uri', 'medium', 'character', 'vendor', 'market', 'target_market', 'volume']);
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
 
 function WorkflowGraph({ graph }) {
   const nodes = graph ? Object.values(graph) : [];
@@ -285,13 +281,10 @@ export default function ChatAudit() {
   const [escalating, setEscalating] = useState(false);
   const [exReason, setExReason] = useState('');
   const [note, setNote] = useState('');          // question/context; submitted WITH the audit
-<<<<<<< HEAD
   const [netUnitPrice, setNetUnitPrice] = useState('');  // deal pricing → deal_pricing agent
   const [agreedRate, setAgreedRate] = useState('');
   const [agreedAdvance, setAgreedAdvance] = useState('');
   const [agreedMg, setAgreedMg] = useState('');
-=======
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
 
   // Trademark/character options from the registry (mcp_licensing.list_trademarks via
   // /api/trademarks) — so the picker offers valid ids instead of free-text.
@@ -411,11 +404,7 @@ export default function ChatAudit() {
   // workflows. Carried on every submit in a session; cleared by "New".
   const startAudit = () => {
     push({ role: 'user', text: `Audit ${imageUri}\n${character ? `${character} · ` : ''}${market} · ${Number(volume).toLocaleString()} units${medium ? ` · medium: ${medium}` : ''}${note ? `\n💬 ${note}` : ''}` });
-<<<<<<< HEAD
     runStream({ image_uri: imageUri, target_market: market, volume: Number(volume), character, product_category: productCategory, vendor, medium, note, net_unit_price: Number(netUnitPrice) || 0, agreed_royalty_rate: (Number(agreedRate) || 0) / 100, agreed_advance: Number(agreedAdvance) || 0, agreed_mg: Number(agreedMg) || 0, run_token: runTokenRef.current }, 'start');
-=======
-    runStream({ image_uri: imageUri, target_market: market, volume: Number(volume), character, product_category: productCategory, vendor, medium, note, run_token: runTokenRef.current }, 'start');
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
     setNote('');
   };
   const submitFields = (values) => {
@@ -439,13 +428,10 @@ export default function ChatAudit() {
       add_category_approved: values.add_category_approved || '',
       medium: values.medium ?? medium,
       note,
-<<<<<<< HEAD
       net_unit_price: Number(netUnitPrice) || 0,
       agreed_royalty_rate: (Number(agreedRate) || 0) / 100,
       agreed_advance: Number(agreedAdvance) || 0,
       agreed_mg: Number(agreedMg) || 0,
-=======
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
       run_token: runTokenRef.current,
     }, 'awaiting');
     setNote('');
@@ -507,7 +493,6 @@ export default function ChatAudit() {
         </label>
         <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>→ uploads to gs://vibeflix-request-image</span>
       </div>
-<<<<<<< HEAD
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
         <Combo value={productCategory} onChange={setProductCategory} options={CATEGORY_OPTIONS}
           placeholder="Product category (pick or type; blank -> agent asks)" />
@@ -523,10 +508,6 @@ export default function ChatAudit() {
           <input className="top-textarea" type="number" placeholder="Min guar. $" value={agreedMg} onChange={(e) => setAgreedMg(e.target.value)} title="Agreed minimum guarantee ($)" />
         </div>
       </div>
-=======
-      <input className="top-textarea" placeholder="Product medium (leave blank and brand_style will ask; e.g. vinyl figure box, poster, T-shirt)"
-        value={medium} onChange={(e) => setMedium(e.target.value)} />
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
         <label style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>💬 Question or extra context for the orchestrator (optional) — submitted with the audit</label>
         <textarea className="top-textarea" rows={1} placeholder="e.g. treat the T-Shirt medium as pre-approved · or: why was the vendor blocked?"
@@ -538,11 +519,7 @@ export default function ChatAudit() {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
     setFields(null); setSessionId(null); setPhase('start'); setGraph(null);
-<<<<<<< HEAD
     setNote(''); setNetUnitPrice(''); setAgreedRate(''); setAgreedAdvance(''); setAgreedMg('');
-=======
-    setNote('');
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
   };
   const uploadImage = async (fileObj) => {
     if (!fileObj) return;

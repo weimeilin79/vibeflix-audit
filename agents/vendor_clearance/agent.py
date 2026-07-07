@@ -340,7 +340,6 @@ async def legal_clearance(ctx: Context, node_input):
             yield Event(output=report)
             return
 
-<<<<<<< HEAD
         # Terminal — but ONLY an actual executed contract id (LC-####) counts as done.
         # A bare `{"status":"done"}` (no upsert_contract happened), an `answer` shape,
         # or a malformed reply gets a re-brief demanding the real execution, instead of
@@ -358,11 +357,6 @@ async def legal_clearance(ctx: Context, node_input):
             )
             continue
         _apply_legal(report, True, cid,
-=======
-        # done (or anything terminal) — pull the contract id and merge.
-        m = re.search(r"LC-\w+", json.dumps(result) + _latest_text(ctx, "legal_clearance_agent"))
-        _apply_legal(report, True, result.get("contract_id") or (m.group(0) if m else ""),
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
                      vendor_id=lr.get("vendor_id", ""), safety_cert=result.get("safety_cert", ""))
         break
     else:

@@ -13,11 +13,7 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - **Sourcing Orchestrator (Router)**: Captures uploads, checks parameters, coordinates state, and invokes display layouts.
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
    - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
-<<<<<<< HEAD
    - **Deal Pricing Auditor (Cost)**: Audits the vendor's AGREED total consideration (royalty + advance + minimum guarantee) for using the IP against the licensor's rate card — an internal **evaluate→validate→iterate** loop reconciles each component and rules APPROVED / NEEDS-ADJUSTMENT / UNDERPRICED.
-=======
-   - **Franchise Storyline & Lore Agent (Lore)**: Checks script databases, lore canon compliance, and screens for script leak/spoiler threats.
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
    - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
@@ -262,11 +258,7 @@ and `deploy/setup_legal_rag.py` / `deploy/rebuild_legal_rag.sh` — run against 
 is reliable):
 
 ```bash
-<<<<<<< HEAD
 cd ~/work/vibeflix-audit          # your real repo (venv bakes in absolute paths, so build it HERE)
-=======
-cd ~/Desktop/work/vibeflix-audit          # your real repo (venv bakes in absolute paths, so build it HERE)
->>>>>>> a3ad1c8e8ceb0128010b74f325b69f82ff03f7ba
 
 # 1) create the venv — uv handles Python 3.14 reliably (pip self-upgrade is fragile here)
 uv venv .venv
