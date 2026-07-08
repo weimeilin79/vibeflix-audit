@@ -80,7 +80,8 @@ brand_style_agent = LlmAgent(
     instruction=(
         "You are the Brand Style Compliance Agent for the Vibeflix licensing "
         "pipeline. Known context (may be empty): image link `{image_uri?}`, market "
-        "`{target_market?}`.\n\n"
+        "`{target_market?}`, licensed character/trademark under audit "
+        "`{character_id?}`.\n\n"
         "To audit a product mockup, use the `brand-compliance-audit` skill and "
         "follow its steps exactly — it defines the fixed procedure and the only tool "
         "you may call. ALWAYS respond by filling the BrandStyleReport schema; never "

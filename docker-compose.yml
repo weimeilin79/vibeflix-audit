@@ -41,14 +41,22 @@ services:
     # Fully deterministic — no LLM, so no Vertex creds needed.
     environment: { MCP_TRANSPORT: streamable-http, HOST: 0.0.0.0, PORT: "9001" }
 
-  # Vendor & Licensing Clearance registry (vendors, trademarks, exclusivity — in-memory).
+  # Vendor & Licensing Clearance registry. VENDORS are Firestore-backed CRUD
+  # (collection `vendors`, auto-seeded from the in-code defaults on first use) so
+  # onboarded vendors/categories survive restarts; trademarks/exclusivity/contracts
+  # stay in-memory. Unset FIRESTORE_DATABASE → fully in-memory fallback.
   mcp_licensing:
     build:
       context: .
       dockerfile: deploy/Dockerfile.mcp
       args: { GROUP: mcp_licensing }
-    # In-memory stores — no LLM, no Firestore needed.
-    environment: { MCP_TRANSPORT: streamable-http, HOST: 0.0.0.0, PORT: "9002" }
+    environment:
+      <<: *registry-env
+      FIRESTORE_DATABASE: ${FIRESTORE_DATABASE:-vibeflix-registry}
+      MCP_TRANSPORT: streamable-http
+      HOST: 0.0.0.0
+      PORT: "9002"
+    volumes: *gcloud-adc
 
   mcp_market:
     build:
@@ -191,8 +199,9 @@ services:
       MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
       # Bucket for vendor image uploads (/api/upload).
       REQUEST_IMAGE_BUCKET: vibeflix-request-image
-      # Completed audits are appended here (JSONL) — mounted so history survives
-      # container rebuilds and is browsable in the console's Audit History tab.
+      # Audit history: stored in Firestore (collection `audit_history` in this named
+      # db) when reachable; the mounted JSONL below is the offline fallback.
+      FIRESTORE_DATABASE: ${FIRESTORE_DATABASE:-vibeflix-registry}
       AUDIT_HISTORY_DIR: /app/data
     volumes:
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro

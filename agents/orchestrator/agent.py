@@ -6,7 +6,7 @@ node (run-or-reuse) fed by a skill-driven dispatch decision::
 
     START -> ingest -> dispatch -> ( guard_brand ‖ guard_clearance ‖ guard_pricing )
                      -> merge (JoinNode) -> recovery -> compile_ui
-                     -> sourcing_gate -> finalize
+                     -> generate_report -> contract_finalize -> finalize
 
 `dispatch` consults the skill-driven `workflow_dispatcher` (which workflows to run:
 all for an initial request; only the affected subset on a re-run) and emits a
@@ -24,7 +24,9 @@ import json
 import os
 import pathlib
 import re
+import uuid
 
+import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google.genai import types
@@ -40,7 +42,8 @@ from google.adk.events.event import Event
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Authorized primary-vendor ceiling — mirrors mcp_market.check_sku_volume_caps
-# (`authorized_max_skus`). Volume above this triggers the HITL sourcing gate.
+# (`authorized_max_skus`). Volume above this makes `generate_report` ask for a
+# sourcing decision (HITL).
 VENDOR_VOLUME_CAP = 25000
 SECONDARY_ADDENDUM = "SC-7798-EU"
 
@@ -64,8 +67,10 @@ def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
 brand_style_remote = _remote_agent(
     "brand_style_compliance_agent",
     "Audits the artwork's typography, colors, printed text, and the PRODUCT MEDIUM "
-    "(e.g. poster vs. vinyl figure box vs. T-shirt) for brand compliance. Depends on "
-    "the image and the stated medium; independent of target market.",
+    "(e.g. poster vs. vinyl figure box vs. T-shirt) for brand compliance, and VERIFIES "
+    "the artwork depicts the licensed CHARACTER/trademark under audit (mismatch → "
+    "rejected). Depends on the image, the stated medium, and the character; "
+    "independent of target market.",
     "BRAND_STYLE_A2A_URL",
 )
 vendor_clearance_remote = _remote_agent(
@@ -169,7 +174,7 @@ class AuditInput(BaseModel):
     # user can correct/provide the medium when the vision read is wrong.
     medium: str = ""
     # A previously-collected sourcing-cap decision ("A"/"B"), fed back on a
-    # follow-up run so the sourcing gate applies it instead of asking again.
+    # follow-up run so `generate_report` applies it instead of asking again.
     sourcing_choice: str = ""
     # The licensee's safety-certification id — supplied when the (private) legal agent
     # asks the user for it; threaded down so vendor_clearance can resume legal.
@@ -491,7 +496,7 @@ async def recovery(ctx: Context, node_input):
 
 def compile_ui(ctx: Context, node_input: dict) -> Event:
     """Merge the three agents' reports. The A2UI surface is painted in `finalize`
-    (after the sourcing gate has run, so it can include the sourcing outcome)."""
+    (after `generate_report` has run, so it can include the volume-cap outcome)."""
     aggregate = {
         "style_report": _get_report(ctx, "brand_style_compliance_agent"),
         "clearance_report": _get_report(ctx, "vendor_clearance_agent"),
@@ -506,12 +511,13 @@ def compile_ui(ctx: Context, node_input: dict) -> Event:
     return Event(output=aggregate, state={"audit_result": aggregate})
 
 
-def sourcing_gate(ctx: Context, node_input: dict) -> Event:
-    """Sourcing-cap decision, surfaced as a collectable field (Scenario 3).
+def generate_report(ctx: Context, node_input: dict) -> Event:
+    """Assemble the final audit report — the step that closes every run.
 
-    Passes through when volume is within the vendor cap. When it's over and a
-    `sourcing_choice` has already been provided (fed back on a follow-up run),
-    it applies that choice. Otherwise it emits `status="needs_choice"` with the
+    Part of generating the report is resolving the production volume against the
+    vendor cap: within the cap it finalizes outright; over the cap it needs a
+    sourcing decision — if a `sourcing_choice` was already provided (fed back on a
+    follow-up run) it applies it, else it emits `status="needs_choice"` with the
     options — the app turns that into a dynamic field, collects the answer, and
     re-runs with `sourcing_choice` set (no in-graph interrupt / resumability).
     """
@@ -557,8 +563,100 @@ def sourcing_gate(ctx: Context, node_input: dict) -> Event:
     return Event(output=result)
 
 
+# ---- Contract finalization — a fully-passed audit ends with an executed contract ----
+# The ORCHESTRATOR owns the decision (every workflow passed → the audit must end in a
+# finalized licensing contract) but DELEGATES the execution: it re-invokes the
+# vendor_clearance agent with a FINALIZE-CONTRACT brief, and vendor_clearance hands off
+# to its private legal agent exactly like it does for onboarding. The orchestrator never
+# talks to legal directly. If onboarding already papered a contract in this audit chain
+# (an LC-#### in the reports), it's reused instead.
+_PASSING_STATUSES = {"cleared", "compliant"}
+
+
+async def _a2a_send(base_url: str, text: str, timeout: float = 420) -> str:
+    """One A2A message/send round-trip in a FRESH context → the reply text.
+
+    Used instead of a second ctx.run_node on the same RemoteA2aAgent: within one
+    session the hop reuses the completed A2A task and the new reply's events never
+    reach this session — a clean per-call context returns the reply directly."""
+    body = {"jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"role": "user", "kind": "message",
+                                   "messageId": uuid.uuid4().hex,
+                                   "parts": [{"kind": "text", "text": text}]}}}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{base_url.rstrip('/')}/", json=body)
+        resp.raise_for_status()
+        result = resp.json().get("result") or {}
+    parts = [p.get("text", "") for a in result.get("artifacts") or []
+             for p in a.get("parts") or []]
+    if not parts:  # some replies come back as the last agent message instead
+        for msg in reversed(result.get("history") or []):
+            if msg.get("role") == "agent":
+                parts = [p.get("text", "") for p in msg.get("parts") or []]
+                break
+    return "".join(parts)
+
+
+@node(name="contract_finalize", rerun_on_resume=True)
+async def contract_finalize(ctx: Context, node_input):
+    """Ensure a fully-passed audit ends with an executed contract (see block comment)."""
+    result = dict(node_input)
+    reports = result.get("reports") or {}
+    sourcing = result.get("sourcing") or {}
+    passed = bool(reports) and all(
+        str((r or {}).get("status", "")).lower() in _PASSING_STATUSES
+        for r in reports.values()
+    ) and sourcing.get("status") != "needs_choice"
+    if not passed:
+        yield Event(output=result)
+        return
+
+    # Onboarding already executed a contract in this audit chain — reuse it.
+    m = re.search(r"LC-\w+", json.dumps(reports))
+    if m:
+        result["contract"] = {"contract_id": m.group(0), "source": "onboarding"}
+        yield Event(output=result)
+        return
+
+    vendor = str(ctx.state.get("vendor", "")).strip()
+    character = str(ctx.state.get("character_id", "")).strip()
+    category = str(ctx.state.get("product_category", "")).strip()
+    territory = str(ctx.state.get("target_market", "")).strip()
+    volume = int(ctx.state.get("volume", 0) or 0)
+    if not (vendor and character and category):
+        yield Event(output=result)   # not enough identity to paper a contract
+        return
+
+    brief = (
+        f"FINALIZE-CONTRACT: every compliance workflow for this audit has passed. "
+        f"Verify vendor {vendor} and have legal execute the licensing contract for "
+        f"character {character}, category {category}, territory {territory}, at a "
+        f"production volume of {volume} units."
+    )
+    print(f"[orchestrator] contract_finalize: delegating to vendor_clearance "
+          f"({vendor} × {character} × {category} × {territory})", flush=True)
+    try:
+        raw = await _a2a_send(os.environ.get("VENDOR_CLEARANCE_A2A_URL", ""), brief)
+    except Exception as e:
+        print(f"[orchestrator] contract_finalize: call failed: {type(e).__name__}: {e}", flush=True)
+        raw = ""
+    rep = _parse_report_text(raw) or {}
+    lc = re.search(r"LC-\w+", raw or "")
+    if lc:
+        result["contract"] = {"contract_id": lc.group(0),
+                              "summary": rep.get("legal_cleared", ""),
+                              "source": "finalize"}
+        print(f"[orchestrator] contract_finalize: executed {lc.group(0)}", flush=True)
+    else:
+        result["contract_error"] = "Contract finalization did not produce a contract id."
+        print(f"[orchestrator] contract_finalize: NO contract (clearance status="
+              f"{rep.get('status')!r} question={str(rep.get('question'))[:140]!r} "
+              f"needs={rep.get('needs')!r})", flush=True)
+    yield Event(output=result)
+
+
 def finalize(node_input: dict):
-    """Emit the aggregate (reports + sourcing)."""
+    """Emit the aggregate (reports + sourcing + contract)."""
     yield Event(content=types.Content(role="model", parts=[types.Part.from_text(text=json.dumps(node_input, indent=2))]))
     yield Event(output=node_input)
 
@@ -575,7 +673,8 @@ root_agent = Workflow(
         ((guard_brand, guard_clearance, guard_pricing), merge),
         (merge, recovery),          # self-heal any workflow that ran but failed
         (recovery, compile_ui),
-        (compile_ui, sourcing_gate),
-        (sourcing_gate, finalize),
+        (compile_ui, generate_report),       # closes the run (incl. volume-cap check)
+        (generate_report, contract_finalize),  # fully-passed audit → executed contract
+        (contract_finalize, finalize),
     ],
 )

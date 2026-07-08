@@ -260,14 +260,37 @@ body.dark-mode .prompt-bar-container {
 
 .top-textarea {
   flex: 1;
-  background: transparent;
-  border: none;
+  background: var(--bg-secondary);
+  /* Dashed surround so it's obvious the field is open for input; turns solid on focus. */
+  border: 1.5px dashed var(--text-muted);
+  border-radius: 0.35rem;
+  padding: 0.3rem 0.55rem;
   resize: none;
   outline: none;
   color: var(--text-main);
   font-family: var(--font-family-primary);
   font-size: 0.85rem;
-  height: 24px;
+  min-height: 30px;
+  box-sizing: border-box;
+}
+
+.top-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.top-textarea:focus {
+  border-style: solid;
+  border-color: var(--accent-purple);
+}
+
+/* Inside the prompt bar the container already draws the border — keep the inner field bare. */
+.prompt-bar-container .top-textarea {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  min-height: 24px;
 }
 
 .action-bar {

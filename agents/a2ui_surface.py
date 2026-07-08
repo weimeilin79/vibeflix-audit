@@ -17,16 +17,20 @@ def _fmt(n) -> str:
         return str(n)
 
 
-def sourcing_line(sourcing: dict) -> str:
+def report_line(sourcing: dict) -> str:
+    """The closing line of the audit report — how the run was finalized (including
+    the production-volume-vs-vendor-cap outcome)."""
     s = sourcing or {}
     st = s.get("status")
     if st == "auto_finalized":
-        return f"📦 **Sourcing:** within vendor cap ({_fmt(s.get('volume'))} ≤ {_fmt(s.get('cap'))} units)."
+        return f"🧾 **Report finalized** — production volume {_fmt(s.get('volume'))} within the vendor cap ({_fmt(s.get('cap'))} units)."
     if st == "split_addendum":
-        return f"📦 **Sourcing:** split {_fmt(s.get('primary_units'))} primary + {_fmt(s.get('addendum_units'))} to {s.get('addendum_contract')}."
+        return f"🧾 **Report finalized** — volume split: {_fmt(s.get('primary_units'))} primary + {_fmt(s.get('addendum_units'))} units to addendum {s.get('addendum_contract')}."
     if st == "capped":
-        return f"📦 **Sourcing:** capped at {_fmt(s.get('primary_units'))}; {_fmt(s.get('cancelled_units'))} units cancelled."
-    return f"📦 **Sourcing:** {st or 'pending'}."
+        return f"🧾 **Report finalized** — capped at {_fmt(s.get('primary_units'))} units; {_fmt(s.get('cancelled_units'))} cancelled."
+    if st == "needs_choice":
+        return "🧾 **Report:** awaiting a production-volume sourcing decision."
+    return f"🧾 **Report:** {st or 'pending'}."
 
 
 def build_surface(panels, sourcing, market, volume) -> dict:
@@ -59,7 +63,7 @@ def build_surface(panels, sourcing, market, volume) -> dict:
         root_kids.append(add(f"card{idx}", {"Card": {"child": f"col{idx}"}}))
 
     root_kids.append(add("div", {"Divider": {"axis": "horizontal"}}))
-    root_kids.append(text("srce", sourcing_line(sourcing)))
+    root_kids.append(text("srce", report_line(sourcing)))
 
     add("root", {"Column": {"children": {"explicitList": root_kids}}})
     return {"a2ui_version": "0.9", "root": "root", "components": comps, "data": {}}
@@ -123,7 +127,7 @@ def stream_initial(titles, market, volume, reused=0):
         comps.append({"id": f"card{i}", "component": {"Card": {"child": f"col{i}"}}})
         root_kids.append(f"card{i}")
     comps.append({"id": "div", "component": {"Divider": {"axis": "horizontal"}}})
-    comps.append(_text_comp("srce", "📦 **Sourcing:** pending…"))
+    comps.append(_text_comp("srce", "🧾 **Report:** assembling…"))
     # Empty slot the final clearance report fills on a fully-passed run. Reserved up
     # front because a later surfaceUpdate must be SELF-CONTAINED — it can only reference
     # component ids it (re)defines itself, so the root is never re-sent.
@@ -153,9 +157,9 @@ def stream_panel(i, panel):
     return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": comps}}
 
 
-def stream_sourcing(sourcing):
-    """surfaceUpdate that fills the sourcing line."""
-    return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": [_text_comp("srce", sourcing_line(sourcing))]}}
+def stream_report_line(sourcing):
+    """surfaceUpdate that fills the closing report line (the `srce` slot)."""
+    return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": [_text_comp("srce", report_line(sourcing))]}}
 
 
 def stream_final_report(entry):
@@ -183,7 +187,7 @@ def stream_final_report(entry):
     for i, (name, report) in enumerate(sorted(reports.items())):
         line(f"fin_w{i}", f"✅ {title_from_name(name)} — **{str((report or {}).get('status', '')).upper()}**")
 
-    line("fin_srce", sourcing_line(entry.get("sourcing") or {}))
+    line("fin_srce", report_line(entry.get("sourcing") or {}))
 
     if contract:
         line("fin_ct", "**Executed licensing contract**", "h5")

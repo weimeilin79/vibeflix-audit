@@ -70,6 +70,33 @@ REGISTRIES = {
 }
 
 
+def _seed_vendors(client: "firestore.Client") -> None:
+    """Seed the `vendors` collection (mcp_licensing's Firestore-backed CRUD store)
+    from the in-code defaults. Unlike the registries above, vendors are MUTATED at
+    runtime (create_vendor/update_vendor — onboarding), so by default only MISSING
+    vendors are created; set RESET_VENDORS=1 to overwrite every default vendor with
+    its pristine record (resets demo onboarding state)."""
+    import pathlib
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]
+                           / "mcp_servers" / "mcp_licensing"))
+    from data import _VENDORS  # the pristine default records
+
+    reset = os.environ.get("RESET_VENDORS", "") == "1"
+    col = client.collection("vendors")
+    if reset:  # true restore: also drop vendors onboarded at runtime
+        for doc in col.stream():
+            if doc.id not in _VENDORS:
+                col.document(doc.id).delete()
+                print(f"[seed] vendors/{doc.id} deleted (not a default vendor)")
+    for vid, record in _VENDORS.items():
+        if reset or not col.document(vid).get().exists:
+            col.document(vid).set(record)
+            print(f"[seed] vendors/{vid}" + (" (reset)" if reset else ""))
+        else:
+            print(f"[seed] vendors/{vid} exists — kept (RESET_VENDORS=1 to overwrite)")
+
+
 def main() -> None:
     client = firestore.Client(project=PROJECT, database=DATABASE)
     print(f"[seed] project={PROJECT} database={DATABASE}")
@@ -77,6 +104,7 @@ def main() -> None:
         for doc_id, data in docs.items():
             client.collection(collection).document(doc_id).set(data)
             print(f"[seed] {collection}/{doc_id}")
+    _seed_vendors(client)
     print("[seed] done.")
 
 

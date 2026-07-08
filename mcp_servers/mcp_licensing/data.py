@@ -1,14 +1,19 @@
-"""Seed data for the Vendor & Licensing Clearance registry (mcp_licensing).
+"""Data layer for the Vendor & Licensing Clearance registry (mcp_licensing).
 
-Plain in-memory dicts, imported by server.py. Kept separate so the server file stays
-focused on the MCP tools/logic. WRITABLE — create_vendor/update_vendor mutate _VENDORS
-in place (same object reference the server imports). In-memory: per-process,
-single-instance, reset on restart; production would back these with Firestore/Postgres.
-
-  * _VENDORS      — approved manufacturing partners (VND-####).
-  * _TRADEMARKS   — IP/trademark registrations, keyed by character_id.
-  * _EXCLUSIVITY  — exclusivity contracts (EXC-####) that lock a category × territory.
+  * VENDORS       — approved manufacturing partners (VND-####). **Firestore-backed
+                    CRUD** when FIRESTORE_DATABASE is set (collection `vendors`, doc
+                    id = vendor id, auto-seeded from the defaults below on first use);
+                    the in-memory `_VENDORS` dict is the offline fallback. Access ONLY
+                    via `vendors_all` / `vendor_get` / `vendor_put`.
+  * _TRADEMARKS   — IP/trademark registrations, keyed by character_id (in-memory).
+  * _EXCLUSIVITY  — exclusivity contracts (EXC-####) that lock a category × territory
+                    (in-memory).
+  * _CONTRACTS    — executed licensing contracts, LC-#### (in-memory; the app snapshots
+                    each contract into the audit history at record time).
+  * _RATE_CARDS   — licensor rate cards per character (in-memory, read-only).
 """
+
+import os
 
 # ---------------------------------------------------------------------------
 # VENDORS — approved manufacturing partners.
@@ -485,4 +490,142 @@ _RATE_CARDS: dict[str, dict] = {
         "advance_rule": {"pct_of_mg": 0.25},
         "tolerance_pct": 0.05,
     },
+    # Lilo & Stitch — A-list evergreen; plush is the signature category and APAC is
+    # the strongest territory (hence the premium there, mirroring the Bandai demand).
+    "stitch": {
+        "property": "Stitch (Lilo & Stitch)",
+        "character_tier": "A-list",
+        "base_royalty_rate": 0.13,
+        "category_modifier": {
+            "vinyl figures": 1.10, "action figures": 1.05, "blind box": 1.15,
+            "resin statues": 1.15, "premium collectibles": 1.15, "sofubi": 1.20,
+            "novelty": 1.0, "plush": 1.15, "apparel": 1.05, "accessories": 1.05,
+            "stationery": 1.0, "homeware": 1.05,
+        },
+        "territory_modifier": {"north america": 1.0, "europe": 1.0, "asia-pacific": 1.10},
+        "volume_discount_tiers": [
+            {"min_units": 0, "mult": 1.0},
+            {"min_units": 75000, "mult": 0.95},
+            {"min_units": 300000, "mult": 0.90},
+        ],
+        "min_royalty_rate": 0.09,
+        "mg_rule": {"pct_of_projected_royalty": 0.50, "floor_usd": 120000},
+        "advance_rule": {"pct_of_mg": 0.25},
+        "tolerance_pct": 0.05,
+    },
+    # Gremlins — cult/retro B-list; collector formats (resin/premium/action) carry a
+    # premium, mass-market plush discounts, Europe strongest (Super7 collector base).
+    "gremlins": {
+        "property": "Gremlins",
+        "character_tier": "B-list",
+        "base_royalty_rate": 0.10,
+        "category_modifier": {
+            "vinyl figures": 1.10, "action figures": 1.15, "blind box": 1.05,
+            "resin statues": 1.25, "premium collectibles": 1.25, "sofubi": 1.15,
+            "novelty": 1.05, "plush": 0.85, "apparel": 0.95, "accessories": 0.95,
+            "stationery": 0.90, "homeware": 0.95,
+        },
+        "territory_modifier": {"north america": 1.0, "europe": 1.05, "asia-pacific": 0.90},
+        "volume_discount_tiers": [
+            {"min_units": 0, "mult": 1.0},
+            {"min_units": 50000, "mult": 0.95},
+            {"min_units": 250000, "mult": 0.90},
+        ],
+        "min_royalty_rate": 0.07,
+        "mg_rule": {"pct_of_projected_royalty": 0.50, "floor_usd": 75000},
+        "advance_rule": {"pct_of_mg": 0.20},
+        "tolerance_pct": 0.05,
+    },
 }
+
+
+# ---------------------------------------------------------------------------
+# Vendor store — Firestore-backed CRUD (collection `vendors`, doc id = VND-####)
+# when FIRESTORE_DATABASE is set; `_VENDORS` above is the fallback AND the seed:
+# an empty collection is auto-seeded with the defaults on first use, so the
+# mesh migrates itself. Onboarded vendors/categories survive restarts this way.
+# ---------------------------------------------------------------------------
+_FIRESTORE_DB = os.environ.get("FIRESTORE_DATABASE", "").strip()
+_VENDOR_COLLECTION = "vendors"
+_fs_vendors = None  # lazy collection handle
+
+# Pristine copy of the defaults, so vendor_reset() can restore them even in the
+# in-memory fallback mode (where _VENDORS itself gets mutated).
+import copy as _copy
+_DEFAULT_VENDORS = _copy.deepcopy(_VENDORS)
+
+
+def _vendors_fs():
+    """The Firestore `vendors` collection (lazy client; seeds defaults if empty)."""
+    global _fs_vendors
+    if _fs_vendors is None:
+        from google.cloud import firestore
+        col = firestore.Client(database=_FIRESTORE_DB).collection(_VENDOR_COLLECTION)
+        if next(iter(col.limit(1).stream()), None) is None:
+            for vid, rec in _VENDORS.items():
+                col.document(vid).set(rec)
+            print(f"[mcp_licensing] seeded '{_VENDOR_COLLECTION}' with "
+                  f"{len(_VENDORS)} default vendors", flush=True)
+        _fs_vendors = col
+    return _fs_vendors
+
+
+def vendors_all() -> dict[str, dict]:
+    """Every vendor record, keyed by id."""
+    if _FIRESTORE_DB:
+        try:
+            return {d.id: d.to_dict() for d in _vendors_fs().stream()}
+        except Exception as e:
+            print(f"[mcp_licensing] Firestore vendors read failed "
+                  f"({type(e).__name__}: {e}) — using in-memory fallback", flush=True)
+    return _VENDORS
+
+
+def vendor_get(vendor_id: str) -> dict | None:
+    if _FIRESTORE_DB:
+        try:
+            doc = _vendors_fs().document(vendor_id).get()
+            return doc.to_dict() if doc.exists else None
+        except Exception as e:
+            print(f"[mcp_licensing] Firestore vendor_get({vendor_id}) failed "
+                  f"({type(e).__name__}: {e}) — using in-memory fallback", flush=True)
+    return _VENDORS.get(vendor_id)
+
+
+def vendor_put(vendor_id: str, record: dict) -> None:
+    """Create or replace a vendor record (create_vendor / update_vendor)."""
+    if _FIRESTORE_DB:
+        try:
+            _vendors_fs().document(vendor_id).set(record)
+            return
+        except Exception as e:
+            print(f"[mcp_licensing] Firestore vendor_put({vendor_id}) failed "
+                  f"({type(e).__name__}: {e}) — writing in-memory only", flush=True)
+    _VENDORS[vendor_id] = record
+
+
+def vendor_reset() -> dict:
+    """DEMO RESET: restore every default vendor to its pristine record and delete
+    vendors created at runtime. Returns {'restored': n, 'deleted': n}."""
+    deleted = 0
+    if _FIRESTORE_DB:
+        try:
+            col = _vendors_fs()
+            for doc in col.stream():
+                if doc.id not in _DEFAULT_VENDORS:
+                    col.document(doc.id).delete()
+                    deleted += 1
+            for vid, rec in _DEFAULT_VENDORS.items():
+                col.document(vid).set(rec)
+            print(f"[mcp_licensing] vendors reset to defaults "
+                  f"({len(_DEFAULT_VENDORS)} restored, {deleted} deleted)", flush=True)
+            return {"restored": len(_DEFAULT_VENDORS), "deleted": deleted}
+        except Exception as e:
+            print(f"[mcp_licensing] Firestore vendor_reset failed "
+                  f"({type(e).__name__}: {e}) — resetting in-memory only", flush=True)
+    for vid in [k for k in _VENDORS if k not in _DEFAULT_VENDORS]:
+        del _VENDORS[vid]
+        deleted += 1
+    for vid, rec in _DEFAULT_VENDORS.items():
+        _VENDORS[vid] = _copy.deepcopy(rec)
+    return {"restored": len(_DEFAULT_VENDORS), "deleted": deleted}

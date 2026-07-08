@@ -16,4 +16,6 @@ google-genai>=1.0.0
 # warning emitted when agents call MCP servers over streamable-HTTP).
 aiohttp>=3.9.0
 google-cloud-storage>=2.0.0
+# Audit history persistence (app.py) — collection `audit_history` in FIRESTORE_DATABASE.
+google-cloud-firestore>=2.16.0
 python-multipart>=0.0.9

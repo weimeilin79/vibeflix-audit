@@ -542,7 +542,7 @@ export default function App() {
   const [liveHitlMessage, setLiveHitlMessage] = useState(null);
   // The vendor image LINK the orchestrator audits (gs:// or https). brand_style's
   // asset-source gate + vision extraction key off this.
-  const [imageUri, setImageUri] = useState('gs://vibeflix-approved-assets/vendor_request.jpg');
+  const [imageUri, setImageUri] = useState('');
 
   const applyLiveResponse = (data) => {
     if (data && data.hitl_required) {
@@ -698,7 +698,7 @@ export default function App() {
             </div>
 
             {/* Split Details Section */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
               
               {/* Left Column: Business Problem & Agents Mesh */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -730,12 +730,12 @@ export default function App() {
                     <GitBranch size={16} style={{ color: 'var(--accent-blue)' }} /> Multi-Agent Auditing Mesh (ADK 2.0)
                   </h3>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three domain compliance agents running concurrently — and Vendor &amp; Licensing hands off to a <strong>Legal Clearance agent</strong>:
+                    Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three domain compliance agents running concurrently — and Vendor &amp; Licensing hands off to a <strong>Legal Clearance agent</strong>. When <strong>every workflow passes</strong>, the orchestrator's <em>contract_finalize</em> step ensures the audit ends with an <strong>executed licensing contract</strong> (📜 Final Clearance Report); every completed run is archived in the <strong>Audit History</strong> tab, exportable as PDF.
                   </p>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginTop: '0.5rem' }}>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: '#1a73e8', display: 'block', marginBottom: '0.2rem' }}>🎨 Style Agent</strong>
-                      Uses CV tool models to verify fonts, layout parameters, and swatch compliance instantly.
+                      Reads the mockup with vision — extracts printed text and <strong>classifies the product medium from the image</strong> (an explicit medium overrides) — then runs the deterministic typo / medium / asset-source pipeline.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: '#ea4335', display: 'block', marginBottom: '0.2rem' }}>⚖️ Vendor &amp; Licensing</strong>
@@ -747,362 +747,138 @@ export default function App() {
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
                       <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance</strong>
-                      A standalone agent — in this demo Vendor &amp; Licensing hands off to it (any agent could). Executes the licensing contract and <strong>RAG-discovers</strong> its undefined process from scattered internal docs.
+                      A standalone agent — only Vendor &amp; Licensing hands off to it (on onboarding, or when the orchestrator requests contract finalization). <strong>RAG-discovers</strong> its undefined process from scattered internal docs, self-issues a provisional safety cert when none is on file, and executes the LC-#### contract.
                     </div>
                   </div>
                 </div>
 
               </div>
 
-              {/* Right Column: Animated Workflow Flowchart */}
-              <div className="canvas-panel" style={{ justifyContent: 'space-between' }}>
-                <div>
-                  <h3 className="panel-title" style={{ fontSize: '0.95rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                    <RefreshCw size={16} className="spin" style={{ animation: 'spin 12s linear infinite', color: 'var(--color-success)' }} />
-                    Compliance Lifespans: Visual Workflow
-                  </h3>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                    Hover over nodes to trace how information streams dynamically in the simulator mesh. Blue flow dash offset shows active auditing path.
-                  </p>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', margin: '0.5rem 0' }}>
-                  {/* Inserted SVG Workflow Diagram */}
-                  <svg width="100%" height="230" viewBox="0 0 820 270" style={{ background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--glass-border)', padding: '0.5rem' }}>
-                    <defs>
-                      <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                        <path d="M 0 2 L 10 5 L 0 8 z" fill="var(--text-muted)" />
-                      </marker>
-                    </defs>
-
-                    {/* edges (solid) */}
-                    <path d="M 102 134 L 165 35" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 102 134 L 165 102" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 102 134 L 165 200" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 313 35 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 313 102 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 313 200 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 538 119 L 578 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    <path d="M 686 119 L 718 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                    {/* legal hand-off from Vendor & Licensing (dashed) */}
-                    <path d="M 245 122 L 258 128" stroke="var(--accent-purple)" strokeWidth="1.5" fill="none" strokeDasharray="3 3" markerEnd="url(#arrow)" />
-
-                    {/* animated active flow */}
-                    <path d="M 102 134 L 165 102" stroke="#1a73e8" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 313 102 L 420 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 538 119 L 578 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                    <path d="M 686 119 L 718 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-
-                    {/* Ingestion */}
-                    <g transform="translate(12, 105)">
-                      <rect width="90" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
-                      <text x="45" y="25" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold" textAnchor="middle">Mockup Ingestion</text>
-                      <text x="45" y="39" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Ingest assets</text>
-                      <text x="45" y="51" fill="var(--text-muted)" fontSize="7" textAnchor="middle">Computer Vision</text>
-                    </g>
-
-                    {/* Brand Style */}
-                    <g transform="translate(165, 15)">
-                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎨 Brand Style</text>
-                      <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">fonts · swatches · medium</text>
-                      <circle cx="138" cy="12" r="3.5" fill="#34a853" />
-                    </g>
-
-                    {/* Vendor & Licensing */}
-                    <g transform="translate(165, 82)">
-                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">⚖️ Vendor &amp; Licensing</text>
-                      <text x="10" y="32" fill="#ea4335" fontSize="7" fontWeight="bold">exclusivity · trademark · vendors</text>
-                      <circle cx="138" cy="12" r="3.5" fill="#fbbc05" />
-                    </g>
-
-                    {/* Legal Clearance — hangs off Vendor & Licensing */}
-                    <g transform="translate(198, 128)">
-                      <rect width="120" height="38" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
-                      <text x="10" y="17" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance</text>
-                      <text x="10" y="30" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
-                    </g>
-
-                    {/* Deal Pricing */}
-                    <g transform="translate(165, 180)">
-                      <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
-                      <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">💰 Deal Pricing</text>
-                      <text x="10" y="32" fill="#c9922e" fontSize="7" fontWeight="bold">royalty · advance · MG</text>
-                      <circle cx="138" cy="12" r="3.5" fill="#34a853" />
-                    </g>
-
-                    {/* Orchestrator */}
-                    <g transform="translate(420, 90)">
-                      <rect width="118" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
-                      <text x="59" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Orchestrator</text>
-                      <text x="59" y="37" fill="var(--color-warning)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Remediation + HITL</text>
-                      <text x="59" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">A / B override</text>
-                    </g>
-
-                    {/* UI Renderer (A2UI) */}
-                    <g transform="translate(578, 90)">
-                      <rect width="108" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
-                      <text x="54" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer</text>
-                      <text x="54" y="37" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
-                      <text x="54" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">reports → surface</text>
-                    </g>
-
-                    {/* Sourcing */}
-                    <g transform="translate(718, 90)">
-                      <rect width="88" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-success)" strokeWidth="2" />
-                      <text x="44" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Sourcing</text>
-                      <text x="44" y="37" fill="var(--color-success)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Contracts</text>
-                      <text x="44" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">PO dispatched</text>
-                    </g>
-                  </svg>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>💻 System Ready to Run:</span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setActiveTab('canvas')}>
-                    Go to Live Audit Console ➔
-                  </span>
-                </div>
-              </div>
 
             </div>
 
-            {/* Sourcing Approvals & Dispatch History Log Card */}
-            <div className="canvas-panel" style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontSize: '1.2rem' }}>📜</span>
-                  <h3 className="panel-title" style={{ fontSize: '0.95rem', margin: 0 }}>Sourcing Compliance Approvals & Dispatch History</h3>
-                </div>
-                
-                {/* Filter buttons */}
-                <div style={{ display: 'flex', gap: '0.4rem' }}>
-                  {['ALL', 'APPROVED', 'REJECTED'].map((filter) => (
-                    <button
-                      key={filter}
-                      className={`preset-btn ${historyFilter === filter ? 'primary' : ''}`}
-                      onClick={() => setHistoryFilter(filter)}
-                      style={{ 
-                        padding: '0.25rem 0.5rem', 
-                        fontSize: '0.7rem',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {filter}
-                    </button>
-                  ))}
-                </div>
+            {/* Full-width: Animated Workflow Flowchart */}
+            <div className="canvas-panel" style={{ justifyContent: 'space-between' }}>
+              <div>
+                <h3 className="panel-title" style={{ fontSize: '0.95rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
+                  <RefreshCw size={16} className="spin" style={{ animation: 'spin 12s linear infinite', color: 'var(--color-success)' }} />
+                  Compliance Lifespans: Visual Workflow
+                </h3>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                  Hover over nodes to trace how information streams dynamically in the agent mesh. Blue flow dash offset shows active auditing path.
+                </p>
               </div>
 
-              {/* Description */}
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', marginTop: 0 }}>
-                This ledger records the historical pipeline audits finalized in the interactive simulator or ingested from production runs. Click any record to expand and view the complete step-by-step agent workflow routing path.
-              </p>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', margin: '0.5rem 0' }}>
+                {/* Inserted SVG Workflow Diagram */}
+                <svg width="100%" height="345" viewBox="0 0 820 270" style={{ background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--glass-border)', padding: '0.5rem' }}>
+                  <defs>
+                    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                      <path d="M 0 2 L 10 5 L 0 8 z" fill="var(--text-muted)" />
+                    </marker>
+                  </defs>
 
-              {/* History List */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {approvalHistory
-                  .filter(item => {
-                    if (historyFilter === 'ALL') return true;
-                    if (historyFilter === 'APPROVED') return item.status.startsWith('APPROVED');
-                    if (historyFilter === 'REJECTED') return item.status === 'REJECTED';
-                    return true;
-                  })
-                  .map((item) => {
-                    const isExpanded = expandedItemId === item.id;
-                    const isApproved = item.status.startsWith('APPROVED');
-                    return (
-                      <div 
-                        key={item.id} 
-                        style={{ 
-                          background: 'var(--bg-secondary)', 
-                          border: '1px solid',
-                          borderColor: isExpanded 
-                            ? (isApproved ? 'var(--color-success)' : 'var(--color-danger)') 
-                            : 'var(--glass-border)',
-                          borderRadius: '0.5rem',
-                          padding: '0.75rem 1rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease',
-                          boxShadow: isExpanded ? '0 4px 12px rgba(0,0,0,0.06)' : 'none'
-                        }}
-                        onClick={() => setExpandedItemId(isExpanded ? null : item.id)}
-                      >
-                        {/* Summary Header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                            <span style={{ 
-                              fontFamily: 'monospace', 
-                              fontSize: '0.75rem', 
-                              background: 'var(--bg-tertiary)', 
-                              padding: '2px 6px', 
-                              borderRadius: '4px',
-                              border: '1px solid var(--glass-border)',
-                              color: 'var(--text-dark)',
-                              fontWeight: 'bold'
-                            }}>
-                              {item.id}
-                            </span>
-                            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-dark)' }}>
-                              {item.asset}
-                            </span>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                              ({item.category})
-                            </span>
-                          </div>
-                          
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                              {item.timestamp}
-                            </span>
-                            <span style={{ 
-                              fontSize: '0.65rem', 
-                              fontWeight: 800, 
-                              padding: '2px 6px', 
-                              borderRadius: '3px',
-                              background: isApproved ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                              color: isApproved ? 'var(--color-success)' : 'var(--color-danger)',
-                              border: '1px solid',
-                              borderColor: isApproved ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'
-                            }}>
-                              {item.status}
-                            </span>
-                          </div>
-                        </div>
+                  {/* edges (solid) */}
+                  <path d="M 102 134 L 165 35" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 102 134 L 165 102" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 102 134 L 165 200" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 313 35 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 313 102 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 313 200 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 538 119 L 578 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 686 119 L 718 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  {/* legal hand-off from Vendor & Licensing (dashed) */}
+                  <path d="M 245 122 L 258 128" stroke="var(--accent-purple)" strokeWidth="1.5" fill="none" strokeDasharray="3 3" markerEnd="url(#arrow)" />
 
-                        {/* Sub-details (Volume & Market) */}
-                        <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                          <div>
-                            <strong>Market Route:</strong> <span style={{ color: 'var(--text-dark)' }}>{item.market}</span>
-                          </div>
-                          <div>
-                            <strong>Sourcing Capacity:</strong> <span style={{ color: 'var(--text-dark)' }}>{item.volume.toLocaleString()} units</span>
-                          </div>
-                        </div>
+                  {/* animated active flow */}
+                  <path d="M 102 134 L 165 102" stroke="#1a73e8" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 313 102 L 420 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 538 119 L 578 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 686 119 L 718 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
 
-                        {/* Collapsed view: Show simple horizontal path preview */}
-                        {!isExpanded && (
-                          <div style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: '0.4rem', 
-                            flexWrap: 'wrap', 
-                            marginTop: '0.75rem',
-                            paddingTop: '0.75rem',
-                            borderTop: '1px dashed var(--glass-border)' 
-                          }}>
-                            <span style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Workflow Path:</span>
-                            {item.path.map((step, idx) => (
-                              <React.Fragment key={idx}>
-                                {idx > 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>➔</span>}
-                                <div style={{ 
-                                  display: 'flex', 
-                                  alignItems: 'center', 
-                                  gap: '0.2rem', 
-                                  color: step.status === 'pass' ? 'var(--color-success)' : (step.status === 'warning' ? 'var(--color-warning)' : 'var(--color-danger)'),
-                                  fontSize: '0.65rem',
-                                  fontWeight: 600
-                                }}>
-                                  {step.status === 'pass' && <CheckCircle size={8} />}
-                                  {step.status === 'warning' && <AlertTriangle size={8} />}
-                                  {step.status === 'fail' && <XCircle size={8} />}
-                                  <span>{step.name}</span>
-                                </div>
-                              </React.Fragment>
-                            ))}
-                            <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: 'var(--accent-blue)' }}>Click to view details ➔</span>
-                          </div>
-                        )}
+                  {/* Ingestion */}
+                  <g transform="translate(12, 105)">
+                    <rect width="90" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
+                    <text x="45" y="25" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold" textAnchor="middle">Mockup Ingestion</text>
+                    <text x="45" y="39" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Ingest assets</text>
+                    <text x="45" y="51" fill="var(--text-muted)" fontSize="7" textAnchor="middle">Computer Vision</text>
+                  </g>
 
-                        {/* Expanded view: Show vertical stepper with detailed audits */}
-                        {isExpanded && (
-                          <div style={{ 
-                            marginTop: '1rem', 
-                            paddingTop: '1rem', 
-                            borderTop: '1px solid var(--glass-border)',
-                            animation: 'slideIn 0.25s ease-out'
-                          }} onClick={(e) => e.stopPropagation() /* Prevent double toggle when clicking inside */}>
-                            <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-dark)', margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                              <GitBranch size={12} style={{ color: 'var(--accent-purple)' }} /> Complete Audit Workflow Trace Path
-                            </h4>
+                  {/* Brand Style */}
+                  <g transform="translate(165, 15)">
+                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                    <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎨 Brand Style</text>
+                    <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">fonts · swatches · medium</text>
+                    <circle cx="138" cy="12" r="3.5" fill="#34a853" />
+                  </g>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', position: 'relative', paddingLeft: '1.25rem' }}>
-                              {/* Vertical Line Connector */}
-                              <div style={{ 
-                                position: 'absolute', 
-                                left: '5px', 
-                                top: '8px', 
-                                bottom: '8px', 
-                                width: '2px', 
-                                background: 'var(--glass-border)',
-                                zIndex: 0
-                              }} />
+                  {/* Vendor & Licensing */}
+                  <g transform="translate(165, 82)">
+                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                    <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">⚖️ Vendor &amp; Licensing</text>
+                    <text x="10" y="32" fill="#ea4335" fontSize="7" fontWeight="bold">exclusivity · trademark · vendors</text>
+                    <circle cx="138" cy="12" r="3.5" fill="#fbbc05" />
+                  </g>
 
-                              {item.path.map((step, idx) => (
-                                <div key={idx} style={{ display: 'flex', gap: '0.75rem', position: 'relative', zIndex: 1 }}>
-                                  {/* Step Dot */}
-                                  <div style={{ 
-                                    width: '12px', 
-                                    height: '12px', 
-                                    borderRadius: '50%', 
-                                    background: step.status === 'pass' ? 'var(--color-success)' : (step.status === 'warning' ? 'var(--color-warning)' : 'var(--color-danger)'),
-                                    position: 'absolute',
-                                    left: '-20px',
-                                    top: '3px',
-                                    border: '2px solid var(--bg-secondary)',
-                                    boxShadow: '0 0 0 2px var(--bg-secondary)'
-                                  }} />
+                  {/* Legal Clearance — hangs off Vendor & Licensing */}
+                  <g transform="translate(198, 128)">
+                    <rect width="120" height="38" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
+                    <text x="10" y="17" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance</text>
+                    <text x="10" y="30" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
+                  </g>
 
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                                    <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-dark)' }}>
-                                      {step.name}
-                                    </span>
-                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                      {step.detail}
-                                    </span>
-                                  </div>
+                  {/* Deal Pricing */}
+                  <g transform="translate(165, 180)">
+                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                    <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">💰 Deal Pricing</text>
+                    <text x="10" y="32" fill="#c9922e" fontSize="7" fontWeight="bold">royalty · advance · MG</text>
+                    <circle cx="138" cy="12" r="3.5" fill="#34a853" />
+                  </g>
 
-                                  {/* Step Status Badge */}
-                                  <span style={{ 
-                                    marginLeft: 'auto',
-                                    fontSize: '0.6rem', 
-                                    fontWeight: 700, 
-                                    padding: '1px 4px', 
-                                    borderRadius: '3px',
-                                    height: 'fit-content',
-                                    background: step.status === 'pass' ? 'rgba(16, 185, 129, 0.06)' : (step.status === 'warning' ? 'rgba(245, 158, 11, 0.06)' : 'rgba(239, 68, 68, 0.06)'),
-                                    color: step.status === 'pass' ? 'var(--color-success)' : (step.status === 'warning' ? 'var(--color-warning)' : 'var(--color-danger)'),
-                                    border: '1px solid',
-                                    borderColor: step.status === 'pass' ? 'rgba(16, 185, 129, 0.15)' : (step.status === 'warning' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)')
-                                  }}>
-                                    {step.status === 'pass' ? 'CLEARED' : (step.status === 'warning' ? 'OVERRIDDEN' : 'BLOCKED')}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
+                  {/* Orchestrator */}
+                  <g transform="translate(420, 90)">
+                    <rect width="118" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
+                    <text x="59" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Orchestrator</text>
+                    <text x="59" y="37" fill="var(--color-warning)" fontSize="7.5" fontWeight="bold" textAnchor="middle">dispatch · recover · HITL</text>
+                    <text x="59" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">report + contract finalize</text>
+                  </g>
 
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                              <button 
-                                className="preset-btn" 
-                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.65rem', cursor: 'pointer' }}
-                                onClick={() => setExpandedItemId(null)}
-                              >
-                                Close Details
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {/* UI Renderer (A2UI) */}
+                  <g transform="translate(578, 90)">
+                    <rect width="108" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
+                    <text x="54" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer</text>
+                    <text x="54" y="37" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
+                    <text x="54" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">reports → surface</text>
+                  </g>
+
+                  {/* Final report */}
+                  <g transform="translate(718, 90)">
+                    <rect width="88" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-success)" strokeWidth="2" />
+                    <text x="44" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">📜 Final Report</text>
+                    <text x="44" y="37" fill="var(--color-success)" fontSize="7.5" fontWeight="bold" textAnchor="middle">contract LC-#</text>
+                    <text x="44" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">→ Audit History</text>
+                  </g>
+                </svg>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.6rem 0.85rem', borderRadius: '6px' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>💻 System Ready to Run:</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setActiveTab('canvas')}>
+                  Go to Live Audit Console ➔
+                </span>
               </div>
             </div>
 
           </div>
         )}
 
-        {activeTab === 'canvas' && <ChatAudit />}
+        {/* ChatAudit stays MOUNTED across tab switches so the chat session (transcript,
+            surfaces, run_token chain, workflow graph) survives — only its New button
+            resets it. `display: contents` keeps the grid layout identical when shown;
+            `none` hides it without unmounting. A running SSE stream keeps going too. */}
+        <div style={{ display: activeTab === 'canvas' ? 'contents' : 'none' }}>
+          <ChatAudit />
+        </div>
 
         {activeTab === 'history' && (
           <div style={{ width: '100%', height: '100%', overflowY: 'auto' }}>

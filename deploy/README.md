@@ -100,30 +100,51 @@ hardcoded defaults in each server when `FIRESTORE_DATABASE` is unset. So the mes
 runs with no Firestore, and setting one env var makes the registries live-editable
 without a redeploy (legal/market read per-request; brand_style at server start).
 
-Setup (enables the API, creates a dedicated database, seeds the current values):
+The same database also stores the **audit history**: the app writes one document per
+audit ORDER (a run_token chain of submits — re-submits update the same doc) to the
+`audit_history` collection, which backs the console's **Audit History** tab. Falls
+back to `data/app/audit_history.jsonl` when `FIRESTORE_DATABASE` is unset/unreachable.
+
+Setup (enables the API, creates the dedicated database, seeds the registries, and
+smoke-tests the `audit_history` collection) — config from `deploy/.env`:
 
 ```bash
-PROJECT=pokedemo-test REGION=us-central1 DATABASE=vibeflix-registry \
-  ./deploy/setup_registry.sh
+./deploy/setup_firestore.sh          # or: PROJECT=… REGION=… DATABASE=… ./deploy/setup_firestore.sh
 ```
 
-(Equivalent manual steps: `gcloud firestore databases create --database=vibeflix-registry
+(`deploy/setup_registry.sh` is a compatibility wrapper for the same script.
+Equivalent manual steps: `gcloud firestore databases create --database=vibeflix-registry
 --location=us-central1 --type=firestore-native`, then
 `GOOGLE_CLOUD_PROJECT=… FIRESTORE_DATABASE=vibeflix-registry python deploy/seed_firestore.py`.)
 
 Enable it:
 - **Local:** `export FIRESTORE_DATABASE=vibeflix-registry` before `./run_local.sh mcp`
   (uses your ADC).
-- **Mesh/compose:** `FIRESTORE_DATABASE=vibeflix-registry docker compose up` — the 3
-  registry servers (`mcp_legal`, `mcp_market`, `mcp_brand_style`) get the var + ADC
-  mount; `mcp_vision_ui` has no registries.
-- **Cloud Run:** set `FIRESTORE_DATABASE` on those services; runtime SA needs
+- **Mesh/compose:** the **app** service defaults to `vibeflix-registry` for the audit
+  history; the 3 registry servers (`mcp_legal`, `mcp_market`, `mcp_brand_style`) opt in
+  via `FIRESTORE_DATABASE=vibeflix-registry docker compose up` (var + ADC mount);
+  `mcp_vision_ui` has no registries.
+- **Cloud Run:** set `FIRESTORE_DATABASE` on the app + those services; runtime SA needs
   `roles/datastore.user`.
 
 Collections: `brand_style_registry/{brand_terms,printed_media,approved_sources}` (as
 `{items:[...]}`), `legal_registry/{style_guidelines_grogu, exclusivity_grogu_<territory>,
-trademark_grogu}`, `market_policy/sourcing_caps`. Edit a doc → the check reflects it
-(e.g. bump `market_policy/sourcing_caps.authorized_max_skus` to change the vendor cap).
+trademark_grogu}`, `market_policy/sourcing_caps`, `vendors/{VND-####}` (mcp_licensing's
+**CRUD store** — `create_vendor`/`update_vendor` write here, so onboarded vendors and
+categories survive restarts; auto-seeded from the in-code defaults on first use, and
+`RESET_VENDORS=1 python deploy/seed_firestore.py` restores the pristine records), and
+`audit_history/{<order_id>}` (the app's completed audits — inputs, per-workflow reports,
+executed contract). Edit a registry doc → the check reflects it (e.g. bump
+`market_policy/sourcing_caps.authorized_max_skus` to change the vendor cap).
+
+**Reset to the original demo state** — either the **Reset database** button in the
+console's Audit History tab (calls `POST /api/reset`: default vendors, contracts
+cleared, history wiped, uploaded mockups deleted from `gs://vibeflix-request-image`)
+or, standalone:
+
+```bash
+./deploy/reset_firestore.sh        # registries + vendors + audit_history + uploads (+ local JSONL)
+```
 
 ## Approved-assets bucket (Cloud Storage)
 

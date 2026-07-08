@@ -14,7 +14,7 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
    - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
    - **Deal Pricing Auditor (Cost)**: Audits the vendor's AGREED total consideration (royalty + advance + minimum guarantee) for using the IP against the licensor's rate card — an internal **evaluate→validate→iterate** loop reconciles each component and rules APPROVED / NEEDS-ADJUSTMENT / UNDERPRICED.
-   - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. When a vendor is onboarded for a category it clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier and the user for the safety-cert id when needed.
+   - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. It clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier; the licensee safety cert never blocks (it **generates a provisional `PROV-…` id** when none is on file and reports it). It fires on vendor/category **onboarding**, and on the orchestrator's **contract finalization**: when every workflow passes, the orchestrator's `contract_finalize` node re-invokes Vendor Clearance with a `FINALIZE-CONTRACT` brief so the audit always ends with an executed `LC-####` — rendered in the **📜 Final Clearance Report** and archived in the **Audit History** tab.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
@@ -325,7 +325,7 @@ that the agents import; if you built the venv by hand, run `uv pip install
 folder with the MCP URLs exported:
 
 ```bash
-cd ~/Desktop/work/vibeflix-audit
+cd ~/work/vibeflix-audit
 source .venv/bin/activate
 export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
 export MCP_VISION_UI_URL=http://127.0.0.1:9001/mcp
@@ -365,7 +365,7 @@ URLs).
 then point `adk web` at the agent with just those two URLs exported:
 
 ```bash
-cd ~/Desktop/work/vibeflix-audit
+cd ~/work/vibeflix-audit
 source .venv/bin/activate
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 export MCP_MARKET_URL=http://127.0.0.1:9003/mcp
@@ -397,7 +397,7 @@ to it), but you can also drive it directly with `adk web`. It RAGs the (undefine
 Start `mcp_licensing` (shell 1: `./run_local.sh mcp`), then:
 
 ```bash
-cd ~/Desktop/work/vibeflix-audit
+cd ~/work/vibeflix-audit
 source .venv/bin/activate
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 # search_legal_docs retriever: unset RAG_CORPUS → local keyword search over the docs;
@@ -408,18 +408,19 @@ adk web agents/legal
 ```
 
 Open http://127.0.0.1:8000, pick **legal**. Because there's no vendor_clearance to answer
-its `ask_vendor` question and no user for its `needs_user` question, provide those two
-facts in your prompt:
+its `ask_vendor` question, state the royalty tier in your prompt:
 
 - *"What certifications does Apparel need, and what's the insurance minimum?"* → the agent
   calls `search_legal_docs` and reconstructs the answer from the scattered docs
   (reconciling the $5M risk memo vs the 2019 SOP's $2M).
 - *"Run legal clearance for vendor VND-1002, character grogu, category Apparel, territory
-  Europe. Royalty tier: Tier 2. Safety cert id: UL-778812."* → with both facts supplied it
-  runs the checklist (amendment → certs → customs → royalty → insurance) and
-  `upsert_contract` → returns `{"status":"done","contract_id":"LC-####"}`.
-- Omit the royalty tier → it returns `{"status":"ask_vendor", …}`; omit the safety-cert id
-  → `{"status":"needs_user", …}` — the same hand-offs it uses inside the mesh.
+  Europe. Royalty tier: Tier 2."* → it runs the checklist (amendment → certs → customs →
+  royalty → insurance), **generates a provisional safety cert** (`PROV-…`, since none was
+  given) and `upsert_contract` → returns
+  `{"status":"done","contract_id":"LC-####","safety_cert":"PROV-…"}`.
+- Omit the royalty tier → it returns `{"status":"ask_vendor", …}` — the same hand-off it
+  uses inside the mesh (the liaison answers it there). Supply a real safety-cert id and
+  it uses that verbatim instead of a provisional one.
 
 #### Test the orchestrator with `adk web` (no Docker)
 
@@ -435,11 +436,11 @@ gcloud auth application-default login    # agents call Vertex
 
 ```bash
 # shell 2 — adk web on the orchestrator
-cd ~/Desktop/work/vibeflix-audit
+cd ~/work/vibeflix-audit
 source .venv/bin/activate
 export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \
        VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \
-       STORYLINE_A2A_URL=http://127.0.0.1:8003
+       DEAL_PRICING_A2A_URL=http://127.0.0.1:8003
 adk web agents/orchestrator              # open http://127.0.0.1:8000, pick "orchestrator"
 ```
 
@@ -453,7 +454,7 @@ Vendor submitted gs://vibeflix-approved-assets/vendor_request.jpg for North Amer
 It pulls out the `gs://`/`https` link, the market (say "North America" / "Europe" /
 "Asia"), and the volume (a number):
 - `North America` → `vendor_clearance` returns the Hasbro **blocked** exclusivity collision.
-- `40000` (> 25,000 cap) → the **`sourcing_gate`** asks for a split/cap decision
+- `40000` (> 25,000 cap) → **`generate_report`** asks for a split/cap sourcing decision
   (a collected field, Option A/B); `Europe` + `15000` → clean pass.
 
 (A JSON payload also works: `{"target_market": "North America", "volume": 40000}`.)
@@ -467,11 +468,11 @@ Notes:
 
 **Workflow graph (in the orchestrator):**
 `START → ingest → dispatch → (guard_brand ‖ guard_ip ‖ guard_story) → merge →
-recovery → compile_ui → sourcing_gate → finalize`. Each guard wraps a `RemoteA2aAgent`
+recovery → compile_ui → generate_report → contract_finalize → finalize`. Each guard wraps a `RemoteA2aAgent`
 (an `LlmAgent` that calls its MCP server(s) as tools) and either runs it or reuses its
 prior report, per the `dispatch` decision (see *Incremental re-run* below). The orchestrator is **deterministic** — it emits only the raw reports (+
-the sourcing outcome); it makes no LLM calls. When volume exceeds the vendor cap
-(25,000), `sourcing_gate` emits `sourcing.status = needs_choice` (a field the app
+the volume-cap outcome); it makes no LLM calls. `generate_report` closes the run;
+when volume exceeds the vendor cap (25,000) it emits `sourcing.status = needs_choice` (a field the app
 collects), rather than interrupting the graph.
 
 **Two-layer reliability.** Gemini occasionally drops a report (a malformed
@@ -496,7 +497,24 @@ the graph via a `run_token`; the guards run the dispatched workflows and **reuse
 rest (the UI tags reused panels *↺ Reused*). E.g. supplying a missing medium re-runs
 only `brand_style`; `vendor_clearance`/`deal_pricing` replay from cache. No hardcoded
 input→workflow map and no if/else in a function — the rules are in the skill and the
-reasoning is done by the model.
+reasoning is done by the model. Changed **pricing terms** and a new/changed operator
+**note** are dispatch inputs too: a note about a workflow's domain re-runs that workflow
+so it can *address* the note (a note can never waive a rule — overrides go through the
+exception process).
+
+### 📜 Contract finalization, final report & audit history
+
+A fully-passed audit doesn't just end with panels — the orchestrator's
+**`contract_finalize`** node (after `generate_report`) makes sure it ends with an
+**executed licensing contract**: it reuses the `LC-####` if onboarding already papered
+one this chain, else it re-invokes **vendor_clearance** with a `FINALIZE-CONTRACT` brief
+and vendor_clearance hands off to its private **legal** agent as usual. The stream then
+closes with a **📜 Final Clearance Report** card (per-workflow results, the volume-cap
+outcome, and the
+full contract record fetched from `mcp_licensing`). Every completed run is appended to
+`data/app/audit_history.jsonl` (survives rebuilds) and browsable in the console's
+**Audit History** tab (`GET /api/audits`) — inputs, statuses, full reports, and the
+executed contract, exportable as PDF.
 
 ### 🎨 A2UI rendering & streaming
 

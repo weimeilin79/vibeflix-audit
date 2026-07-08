@@ -36,7 +36,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_K
 
 from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of, note_responder
 from agents.a2ui_surface import (
-    build_surface, panels_fallback, stream_initial, stream_panel, stream_sourcing,
+    build_surface, panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
 from vibeflix_common.memory import (
@@ -459,23 +459,47 @@ def _apply_prior(request: dict) -> dict:
 
 
 # ---- Audit history (completed runs, browsable in the console's History tab) ----
-# Every COMPLETED audit (done, not awaiting input) is appended to a JSONL file so it
-# survives restarts; fully-passed runs also fetch the executed contract from
-# mcp_licensing so the final report shows the whole contract record.
+# ONE entry per audit ORDER (a chain of submits linked by run_token — a re-submit
+# UPDATES its order's entry rather than adding a new one; "New" starts a new order).
+# Stored in Firestore (collection `audit_history` in FIRESTORE_DATABASE) when
+# configured, else a local JSONL file. Fully-passed runs also fetch the executed
+# contract from mcp_licensing so the final report shows the whole contract record.
 import datetime
 import pathlib as _pathlib
 
 _HISTORY_PATH = _pathlib.Path(os.environ.get("AUDIT_HISTORY_DIR", "data")) / "audit_history.jsonl"
 _AUDIT_HISTORY: list[dict] = []
+_FIRESTORE_DB = os.environ.get("FIRESTORE_DATABASE", "").strip()
+_HISTORY_COLLECTION = "audit_history"
+# run_token → order id: every re-submit in one audit chain shares ONE history entry.
+_ORDER_BY_TOKEN: dict[str, str] = {}
+
+
+def _history_store():
+    from google.cloud import firestore
+    return firestore.Client(database=_FIRESTORE_DB).collection(_HISTORY_COLLECTION)
 
 
 def _load_history() -> None:
+    if _FIRESTORE_DB:
+        try:
+            docs = [d.to_dict() for d in _history_store().stream()]
+            _AUDIT_HISTORY.extend(sorted(docs, key=lambda e: e.get("ts", "")))
+            print(f"[history] loaded {len(_AUDIT_HISTORY)} audits from Firestore "
+                  f"db={_FIRESTORE_DB!r}/{_HISTORY_COLLECTION}", flush=True)
+            return
+        except Exception as e:
+            print(f"[history] Firestore load failed ({type(e).__name__}: {e}) — "
+                  f"falling back to {_HISTORY_PATH}", flush=True)
     try:
+        by_order: dict[str, dict] = {}
         with open(_HISTORY_PATH) as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    _AUDIT_HISTORY.append(json.loads(line))
+                    e = json.loads(line)
+                    by_order[e.get("order_id") or e.get("id")] = e  # keep the LAST state
+        _AUDIT_HISTORY.extend(sorted(by_order.values(), key=lambda e: e.get("ts", "")))
         print(f"[history] loaded {len(_AUDIT_HISTORY)} audits from {_HISTORY_PATH}", flush=True)
     except FileNotFoundError:
         pass
@@ -484,6 +508,16 @@ def _load_history() -> None:
 
 
 _load_history()
+
+
+def _order_for(request: dict, new_token: str | None = None) -> str:
+    """The stable order id for this audit chain: re-submits carry the prior run_token,
+    so they resolve to the same order; a fresh submit (no/unknown token) opens a new
+    order. The chain's NEW token is mapped so the next re-submit stays in the order."""
+    order_id = _ORDER_BY_TOKEN.get(request.get("run_token") or "") or uuid.uuid4().hex[:10]
+    if new_token:
+        _ORDER_BY_TOKEN[new_token] = order_id
+    return order_id
 
 _PASSING_STATUSES = {"cleared", "compliant"}
 
@@ -518,14 +552,19 @@ async def _fetch_contract(contract_id: str) -> dict | None:
         return None
 
 
-async def _record_history(request: dict, aggregate: dict) -> dict:
-    """Build + persist a history entry for a completed audit; returns the entry."""
+async def _record_history(request: dict, aggregate: dict, order_id: str | None = None) -> dict:
+    """Build + UPSERT the history entry for this audit's order (latest state wins)."""
     reports = aggregate.get("reports") or {}
     sourcing = aggregate.get("sourcing") or {}
+    # The orchestrator's contract_finalize node reports the executed contract id;
+    # fall back to an LC-#### mentioned in the reports (onboarding-time execution).
     m = re.search(r"LC-\w+", json.dumps(reports))
-    contract = await _fetch_contract(m.group(0) if m else "")
+    cid = (aggregate.get("contract") or {}).get("contract_id") or (m.group(0) if m else "")
+    contract = await _fetch_contract(cid)
+    order_id = order_id or uuid.uuid4().hex[:10]
     entry = {
-        "id": uuid.uuid4().hex[:8],
+        "id": order_id,
+        "order_id": order_id,
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "passed": _all_passed(reports, sourcing),
         "inputs": {k: request.get(k) for k in (
@@ -537,11 +576,25 @@ async def _record_history(request: dict, aggregate: dict) -> dict:
         "sourcing": sourcing,
         "contract": contract,
     }
-    _AUDIT_HISTORY.append(entry)
+    # Upsert in memory: a re-submit replaces its order's entry (latest state only).
+    for i, e in enumerate(_AUDIT_HISTORY):
+        if e.get("order_id") == order_id:
+            _AUDIT_HISTORY[i] = entry
+            break
+    else:
+        _AUDIT_HISTORY.append(entry)
+    if _FIRESTORE_DB:
+        try:
+            _history_store().document(order_id).set(entry)   # doc id = order → upsert
+            return entry
+        except Exception as e:
+            print(f"[history] Firestore persist failed ({type(e).__name__}: {e}) — "
+                  f"writing {_HISTORY_PATH}", flush=True)
     try:
         _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_HISTORY_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        with open(_HISTORY_PATH, "w") as f:   # rewrite: one line per order, latest state
+            for e in _AUDIT_HISTORY:
+                f.write(json.dumps(e) + "\n")
     except Exception as e:
         print(f"[history] persist failed: {type(e).__name__}: {e}", flush=True)
     return entry
@@ -551,6 +604,69 @@ async def _record_history(request: dict, aggregate: dict) -> dict:
 def list_audits():
     """Completed audits, newest first (the console's Audit History tab)."""
     return {"audits": list(reversed(_AUDIT_HISTORY))}
+
+
+def _clear_upload_bucket() -> int:
+    """Delete every uploaded mockup in the request-image bucket (demo uploads only —
+    the curated approved-assets bucket is never touched). Returns blobs deleted."""
+    from google.cloud import storage
+    bucket = storage.Client().bucket(os.environ.get("REQUEST_IMAGE_BUCKET", "vibeflix-request-image"))
+    n = 0
+    for blob in bucket.list_blobs():
+        blob.delete()
+        n += 1
+    return n
+
+
+@app.post("/api/reset")
+async def reset_database():
+    """DEMO RESET — restore the original state (the console's Reset database button):
+      1. vendors → pristine defaults + executed contracts cleared (mcp_licensing's
+         reset_vendors tool, which owns the seed data);
+      2. audit history wiped (Firestore docs + in-memory + JSONL fallback);
+      3. run caches dropped (run_token chains, pending sessions);
+      4. uploaded mockups deleted from the request-image GCS bucket.
+    """
+    result: dict = {}
+    # 1) vendors + contracts (mcp_licensing owns the defaults).
+    url = os.environ.get("MCP_LICENSING_URL")
+    if url:
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+            async with streamablehttp_client(url) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    res = await session.call_tool("reset_vendors", {})
+                    result["vendors"] = json.loads(
+                        "".join(getattr(c, "text", "") or "" for c in res.content))
+        except Exception as e:
+            result["vendors"] = {"error": f"{type(e).__name__}: {e}"}
+    # 2) audit history — Firestore + memory + local JSONL.
+    cleared = len(_AUDIT_HISTORY)
+    if _FIRESTORE_DB:
+        try:
+            for doc in _history_store().stream():
+                doc.reference.delete()
+        except Exception as e:
+            result["history_error"] = f"{type(e).__name__}: {e}"
+    _AUDIT_HISTORY.clear()
+    try:
+        _HISTORY_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
+    result["history_cleared"] = cleared
+    # 3) in-flight run state.
+    _AUDIT_CACHE.clear()
+    _ORDER_BY_TOKEN.clear()
+    _SESSIONS.clear()
+    # 4) uploaded demo images.
+    try:
+        result["uploads_deleted"] = await asyncio.to_thread(_clear_upload_bucket)
+    except Exception as e:
+        result["uploads_error"] = f"{type(e).__name__}: {e}"
+    print(f"[reset] {result}", flush=True)
+    return {"reset": True, **result}
 
 
 def _sse(obj: dict) -> str:
@@ -671,8 +787,8 @@ async def _stream_audit(request: dict):
             yield _sse({"a2ui": stream_panel(i, await _panel_for(name, failed))})
             yield _sse({"event": "graph", "op": "status", "id": name, "status": "failed"})
 
-    # 3) sourcing line.
-    yield _sse({"a2ui": stream_sourcing(aggregate.get("sourcing") or {})})
+    # 3) the closing report line (finalization + volume-cap outcome).
+    yield _sse({"a2ui": stream_report_line(aggregate.get("sourcing") or {})})
 
     # 3.5) if the operator submitted a note/question, the orchestrator responds to it
     #      (answers from the reports, or acks it as applied context).
@@ -683,8 +799,10 @@ async def _stream_audit(request: dict):
             yield _sse({"event": "note_response", "text": _ans})
 
     # 4) done, or collect more input. Either way, cache this run + return its token so
-    #    the client can thread it on the next submit (incremental re-run).
+    #    the client can thread it on the next submit (incremental re-run). The token
+    #    chain also defines the ORDER: re-submits update one history entry.
     token = _cache_audit(aggregate, request)
+    order_id = _order_for(request, new_token=token)
     pending = _pending_input(aggregate)
     if pending is not None:
         yield _sse({"event": "input_required", "run_token": token,
@@ -694,13 +812,22 @@ async def _stream_audit(request: dict):
             panels_fallback(aggregate.get("reports") or {}),
             aggregate.get("sourcing") or {}, market, volume,
         )
-        # Record the completed run in the audit history; when EVERYTHING passed,
-        # close the run with the final clearance report + the executed contract.
-        entry = await _record_history(request, aggregate)
+        # Record the completed run in this ORDER's history entry (upsert — a re-submit
+        # replaces the previous state); when EVERYTHING passed, close the run with the
+        # final clearance report + the executed contract.
+        entry = await _record_history(request, aggregate, order_id)
+        # Contract executed by the orchestrator's finalize step → light the legal node.
+        if (aggregate.get("contract") or {}).get("source") == "finalize":
+            yield _sse({"event": "graph", "op": "status", "id": "legal",
+                        "label": "⚖️ Legal Clearance", "parent": "vendor_clearance_agent",
+                        "status": "cleared"})
         if entry["passed"]:
             yield _sse({"a2ui": stream_final_report(entry)})
         await _persist_audit(user_id, session.id, aggregate)
-        yield _sse({"event": "done", "run_token": token})
+        # `passed` + contract let the client CLOSE the session (a fully-cleared,
+        # contract-executed audit is final — re-submitting it makes no sense).
+        yield _sse({"event": "done", "run_token": token, "passed": entry["passed"],
+                    "contract_id": (entry.get("contract") or {}).get("contract_id", "")})
 
 
 @app.post("/api/audit/stream")
@@ -830,6 +957,11 @@ async def run_audit(req: AuditRequest):
         "new_vendor": req.new_vendor or "",
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
+        "note": req.note or "",
+        "net_unit_price": req.net_unit_price,
+        "agreed_royalty_rate": req.agreed_royalty_rate,
+        "agreed_advance": req.agreed_advance,
+        "agreed_mg": req.agreed_mg,
     }
     try:
         return await _collect_or_complete(request)

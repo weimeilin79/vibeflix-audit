@@ -20,6 +20,7 @@ back these with Firestore/Postgres behind the same tool surface.
 import os
 import json
 import copy
+import random
 from typing import Annotated
 
 from pydantic import Field
@@ -28,7 +29,8 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Vendor & Licensing Clearance Registry")
 
 # Seed data lives in data.py (keeps this file focused on the tools).
-from data import _VENDORS, _TRADEMARKS, _EXCLUSIVITY, _CONTRACTS, _RATE_CARDS
+from data import (_TRADEMARKS, _EXCLUSIVITY, _CONTRACTS, _RATE_CARDS,
+                  vendors_all, vendor_get, vendor_put, vendor_reset)
 
 # Allowed-value hints surfaced to the agent in each tool's parameter schema.
 _TERRITORIES = '"North America", "Europe", "Asia-Pacific", "Latin America", or "Middle East & Africa"'
@@ -53,7 +55,7 @@ def get_vendor(
     vendor_id: Annotated[str, Field(description='Vendor ID to fetch, e.g. "VND-1001" (case-insensitive).')],
 ) -> str:
     """Fetch a single approved manufacturing vendor's full record by its ID."""
-    vendor = _VENDORS.get((vendor_id or "").strip().upper())
+    vendor = vendor_get((vendor_id or "").strip().upper())
     if not vendor:
         return json.dumps({"error": f"Vendor {vendor_id!r} not found.", "vendor_id": vendor_id})
     return json.dumps(vendor)
@@ -68,7 +70,7 @@ def find_vendors(
     """Search the vendor registry by operating territory, product category, and/or
     status. Returns the matching vendor records."""
     results = [
-        v for v in _VENDORS.values()
+        v for v in vendors_all().values()
         if _match_territory(v, territory)
         and _match_category(v, category)
         and (not status or v.get("status") == status)
@@ -103,11 +105,12 @@ def create_vendor(
     for req in ("legal_name", "hq_country"):
         if not data.get(req):
             return json.dumps({"error": f"Missing required field: {req!r}."})
+    existing = vendors_all()
     vid = (data.get("vendor_id") or "").strip().upper()
     if not vid:
-        nums = [int(k.split("-")[1]) for k in _VENDORS if k.startswith("VND-")]
+        nums = [int(k.split("-")[1]) for k in existing if k.startswith("VND-")]
         vid = f"VND-{(max(nums) + 1) if nums else 1001}"
-    if vid in _VENDORS:
+    if vid in existing:
         return json.dumps({"error": f"Vendor {vid} already exists (use update_vendor)."})
     record = {
         "vendor_id": vid,
@@ -130,7 +133,7 @@ def create_vendor(
         "onboarded": data.get("onboarded", ""),
         "notes": data.get("notes", ""),
     }
-    _VENDORS[vid] = record
+    vendor_put(vid, record)
     return json.dumps({"created": True, "vendor": record})
 
 
@@ -146,18 +149,33 @@ def update_vendor(
     """Update an existing vendor. `updates_json` is a JSON object of the fields to
     change (merged into the record). Returns the updated record."""
     vid = (vendor_id or "").strip().upper()
-    if vid not in _VENDORS:
+    current = vendor_get(vid)
+    if not current:
         return json.dumps({"error": f"Vendor {vendor_id!r} not found."})
     try:
         updates = json.loads(updates_json)
         assert isinstance(updates, dict)
     except (ValueError, AssertionError):
         return json.dumps({"error": "updates_json must be a JSON object."})
-    record = copy.deepcopy(_VENDORS[vid])
+    record = copy.deepcopy(current)
     updates.pop("vendor_id", None)  # id is immutable
     record.update(updates)
-    _VENDORS[vid] = record
+    vendor_put(vid, record)
     return json.dumps({"updated": True, "changed": sorted(updates), "vendor": record})
+
+
+@mcp.tool()
+def reset_vendors() -> str:
+    """DEMO RESET: restore the vendor registry to its pristine default records —
+    vendors onboarded at runtime are deleted, default vendors are overwritten (any
+    categories added to them are removed) — and clear all executed licensing
+    contracts. Not a production operation."""
+    counts = vendor_reset()
+    n_contracts = len(_CONTRACTS)
+    _CONTRACTS.clear()
+    return json.dumps({"reset": True, "vendors_restored": counts["restored"],
+                       "extra_vendors_deleted": counts["deleted"],
+                       "contracts_cleared": n_contracts})
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +256,7 @@ def check_vendor_eligibility(
     `territory`, able to make `category`, AND free of an exclusivity lock there?
     Returns `eligible` plus the specific blocking reasons."""
     vid = (vendor_id or "").strip().upper()
-    vendor = _VENDORS.get(vid)
+    vendor = vendor_get(vid)
     if not vendor:
         return json.dumps({"eligible": False, "reasons": [f"Vendor {vendor_id!r} not found."]})
     reasons = []
@@ -278,8 +296,13 @@ def upsert_contract(contract_json: str) -> str:
             return json.dumps({"error": f"Missing required field: {req!r}."})
     cid = (data.get("contract_id") or "").strip().upper()
     if not cid:
-        nums = [int(k.split("-")[1]) for k in _CONTRACTS if k.startswith("LC-")]
-        cid = f"LC-{(max(nums) + 1) if nums else 6001}"
+        # Random 6-digit serial (not a per-process counter): the store is in-memory,
+        # so a counter re-issues LC-6001 after every restart — ids must stay unique
+        # across restarts for the audit history to make sense.
+        while True:
+            cid = f"LC-{random.randint(100000, 999999)}"
+            if cid not in _CONTRACTS:
+                break
     record = {**_CONTRACTS.get(cid, {}), **data, "contract_id": cid,
               "status": data.get("status", "executed")}
     _CONTRACTS[cid] = record

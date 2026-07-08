@@ -218,14 +218,16 @@ def _needs_legal(ctx: Context, report: dict) -> dict | None:
     """Legal runs when a vendor was just onboarded for a category — either a NEW vendor
     (`create_vendor`) or a NEW category on an existing vendor (`update_vendor`), both
     facts in the event log — OR when we're RESUMING a legal Q&A (the user answered legal's
-    question, so the reasoner echoed a `legal_safety_cert` into the report). On the Flow-B
-    resume the category is already added, so the onboarding tool won't recur — the echoed
-    answer is what re-enters legal. Params come from the reasoner's real
+    question, so the reasoner echoed a `legal_safety_cert` into the report), OR when the
+    ORCHESTRATOR explicitly requested contract finalization (its `contract_finalize` node
+    re-invokes this agent with a FINALIZE-CONTRACT brief after every workflow passed —
+    legal stays private behind this service). Params come from the reasoner's real
     `check_vendor_eligibility` call args."""
     onboarded = (_tool_call_args(ctx, "update_vendor") is not None
                  or _tool_call_args(ctx, "create_vendor") is not None)
     resuming = bool(report.get("legal_safety_cert"))
-    if report.get("status") != "cleared" or not (onboarded or resuming):
+    finalizing = bool(ctx.state.get("finalize_requested"))
+    if report.get("status") != "cleared" or not (onboarded or resuming or finalizing):
         return None
     e = _tool_call_args(ctx, "check_vendor_eligibility") or {}
     lr = {
@@ -234,7 +236,8 @@ def _needs_legal(ctx: Context, report: dict) -> dict | None:
         "category": e.get("category", ""),
         "territory": e.get("territory", ""),
     }
-    print(f"[vendor_clearance] legal needed (onboarded={onboarded} resuming={resuming}): {lr}", flush=True)
+    print(f"[vendor_clearance] legal needed (onboarded={onboarded} resuming={resuming} "
+          f"finalizing={finalizing}): {lr}", flush=True)
     return lr
 
 
@@ -276,7 +279,7 @@ def _apply_legal(report: dict, passed: bool, contract_id: str,
         cid = contract_id or "executed"
         cert = f" · safety cert {safety_cert}" if safety_cert else ""
         report["legal_cleared"] = (
-            f"✅ Vendor {vid} onboarded & legally cleared — "
+            f"✅ Vendor {vid} legally cleared — "
             f"licensing contract {cid} executed{cert}."
         )
     else:
@@ -294,11 +297,15 @@ MAX_LEGAL_ROUNDS = 5
 async def clearance(ctx: Context, node_input):
     """Run the clearance reasoner and emit its report. (The reasoner is a local LlmAgent,
     so it runs via ctx.run_node — same as the orchestrator runs its LLM helpers.)"""
+    # The orchestrator's contract_finalize node marks its brief with FINALIZE-CONTRACT —
+    # a deterministic marker (not an LLM signal) the legal node triggers on.
+    text = _text_of(node_input) if hasattr(node_input, "parts") else (node_input if isinstance(node_input, str) else "")
+    finalize_requested = "FINALIZE-CONTRACT" in (text or "")
     await ctx.run_node(clearance_reasoner, node_input)
     report = _parse_report(_latest_text(ctx, "clearance_reasoner")) or {"status": "blocked", "issues": []}
     report.pop("legal_request", None)   # the legal trigger is the update_vendor fact
     report["agent"] = "vendor_clearance_agent"
-    yield Event(output=report)
+    yield Event(output=report, state={"finalize_requested": finalize_requested})
 
 
 @node(name="legal_clearance", rerun_on_resume=True)

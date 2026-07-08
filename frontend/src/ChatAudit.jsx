@@ -11,7 +11,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 const MARKETS = ['North America', 'Europe', 'Asia-Pacific', 'Global'];
 
 // The backend STREAMS incremental A2UI surfaceUpdate messages (plan → per-agent
-// fills → sourcing) and @a2ui/react patches the surface in place, so panels fill in
+// fills → closing report line) and @a2ui/react patches the surface in place, so panels fill in
 // live. Each audit RUN targets its OWN surface id (`audit-<n>`), so a re-run (e.g.
 // after supplying the medium) appends a fresh result below instead of overwriting
 // the first — the transcript reads as a conversation.
@@ -64,6 +64,19 @@ const MEDIA_OPTIONS = [
   { label: 'shot glass', valid: false }, { label: 'ashtray', valid: false },
   { label: 'beer stein', valid: false }, { label: 'vape wrap', valid: false },
 ];
+
+// Field title: same size as the input text, main (black) color — obvious, not muted.
+// Module-scope (NOT inside the component) so React keeps the subtree mounted across
+// re-renders — an inline component type would remount and drop input focus per keystroke.
+const LABEL_STYLE = { fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' };
+function Field({ label, children }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0 }}>
+      <label style={LABEL_STYLE}>{label}</label>
+      {children}
+    </div>
+  );
+}
 
 // Combobox: pick from the list OR type free text. Invalid options render red.
 function Combo({ value, onChange, options, placeholder }) {
@@ -270,7 +283,9 @@ export default function ChatAudit() {
   // Live workflow graph (right pane): keyed by node id, driven by `graph` SSE events.
   const [graph, setGraph] = useState(null);
 
-  const [imageUri, setImageUri] = useState('gs://vibeflix-approved-assets/vendor_request.jpg');
+  const [imageUri, setImageUri] = useState('');
+  // Set when a run ends fully passed with an executed contract — the session is final.
+  const [contractId, setContractId] = useState('');
   const [market, setMarket] = useState('North America');
   const [volume, setVolume] = useState(15000);
   const [medium, setMedium] = useState('');
@@ -384,7 +399,11 @@ export default function ChatAudit() {
           } else if (d.event === 'done') {
             if (d.run_token) runTokenRef.current = d.run_token;
             setGraph((g) => g ? { ...g, orchestrator: { ...g.orchestrator, status: 'done' } } : g);
-            setPhase('done'); ended = true;
+            // Fully passed (contract executed / all cleared) → the session is FINAL:
+            // re-submitting is disabled; only New starts another audit.
+            if (d.passed) { setContractId(d.contract_id || ''); setPhase('complete'); }
+            else setPhase('done');
+            ended = true;
           } else if (d.event === 'input_required') {
             if (d.run_token) runTokenRef.current = d.run_token;
             setGraph((g) => g ? { ...g, orchestrator: { ...g.orchestrator, status: 'awaiting' } } : g);
@@ -471,54 +490,65 @@ export default function ChatAudit() {
   const standardInputs = () => (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '0.5rem' }}>
-        <input className="top-textarea" placeholder="Vendor image link (gs://… or https://…)" value={imageUri} onChange={(e) => setImageUri(e.target.value)} />
-        <select className="top-textarea" value={market} onChange={(e) => setMarket(e.target.value)}>
-          {MARKETS.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <input className="top-textarea" type="number" placeholder="Volume" value={volume} onChange={(e) => setVolume(e.target.value)} />
+        <Field label="🖼 Mockup image — upload goes to gs://vibeflix-request-image">
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}>
+            <input className="top-textarea" style={{ flex: 1, minWidth: 0 }} placeholder="Enter your Cloud Storage URI gs://vibeflix-request-image/YOUR_IMAGE" value={imageUri} onChange={(e) => setImageUri(e.target.value)} />
+            <label className="preset-btn" style={{ cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
+              <Upload size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              {uploading ? 'Uploading…' : 'Upload image'}
+              <input type="file" accept="image/*" style={{ display: 'none' }} disabled={uploading}
+                onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+          </div>
+        </Field>
+        <Field label="🌍 Operating region">
+          <select className="top-textarea" value={market} onChange={(e) => setMarket(e.target.value)}>
+            {MARKETS.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label="📦 Volume (units)">
+          <input className="top-textarea" type="number" placeholder="e.g. 1000" value={volume} onChange={(e) => setVolume(e.target.value)} />
+        </Field>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-        <select className="top-textarea" value={character} onChange={(e) => setCharacter(e.target.value)}>
-          <option value="">Character / trademark — (blank → agent asks)</option>
-          {characters.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-        </select>
-        <input className="top-textarea" placeholder="Vendor — id (VND-1001) or name (blank → agent asks)" value={vendor} onChange={(e) => setVendor(e.target.value)} />
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <label className="preset-btn" style={{ cursor: uploading ? 'wait' : 'pointer', fontSize: '0.7rem' }}>
-          <Upload size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-          {uploading ? 'Uploading…' : 'Upload image'}
-          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={uploading}
-            onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ''; }} />
-        </label>
-        <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>→ uploads to gs://vibeflix-request-image</span>
+        <Field label="🧸 Character / trademark">
+          <select className="top-textarea" value={character} onChange={(e) => setCharacter(e.target.value)}>
+            <option value="">(blank → agent asks)</option>
+            {characters.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+        </Field>
+        <Field label="🏭 Manufacturing vendor">
+          <input className="top-textarea" placeholder="id (VND-1001) or name — blank → agent asks" value={vendor} onChange={(e) => setVendor(e.target.value)} />
+        </Field>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-        <Combo value={productCategory} onChange={setProductCategory} options={CATEGORY_OPTIONS}
-          placeholder="Product category (pick or type; blank -> agent asks)" />
-        <Combo value={medium} onChange={setMedium} options={MEDIA_OPTIONS}
-          placeholder="Product medium (blank -> auto-detected from image; pick/type to override)" />
+        <Field label="🗂 Product category">
+          <Combo value={productCategory} onChange={setProductCategory} options={CATEGORY_OPTIONS}
+            placeholder="Pick or type — blank → agent asks" />
+        </Field>
+        <Field label="🎨 Product medium">
+          <Combo value={medium} onChange={setMedium} options={MEDIA_OPTIONS}
+            placeholder="Blank → auto-detected from the image; pick/type to override" />
+        </Field>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-        <label style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>💰 Deal pricing — agreed total consideration (audited vs the rate card)</label>
+      <Field label="💰 Deal pricing — agreed total consideration (audited vs the rate card)">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.4rem' }}>
           <input className="top-textarea" type="number" step="0.01" placeholder="Net $/unit" value={netUnitPrice} onChange={(e) => setNetUnitPrice(e.target.value)} title="Wholesale price per unit ($) — the royalty basis" />
           <input className="top-textarea" type="number" step="0.1" placeholder="Royalty %" value={agreedRate} onChange={(e) => setAgreedRate(e.target.value)} title="Agreed royalty rate (%)" />
           <input className="top-textarea" type="number" placeholder="Advance $" value={agreedAdvance} onChange={(e) => setAgreedAdvance(e.target.value)} title="Agreed advance ($)" />
           <input className="top-textarea" type="number" placeholder="Min guar. $" value={agreedMg} onChange={(e) => setAgreedMg(e.target.value)} title="Agreed minimum guarantee ($)" />
         </div>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-        <label style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>💬 Question or extra context for the orchestrator (optional) — submitted with the audit</label>
-        <textarea className="top-textarea" rows={1} placeholder="e.g. treat the T-Shirt medium as pre-approved · or: why was the vendor blocked?"
-          value={note} onChange={(e) => setNote(e.target.value)} style={{ fontSize: '0.74rem', resize: 'vertical' }} />
-      </div>
+      </Field>
+      <Field label="💬 Question or extra context">
+        <textarea className="top-textarea" rows={1} placeholder="Optional — e.g. treat the T-Shirt medium as pre-approved · or: why was the vendor blocked?"
+          value={note} onChange={(e) => setNote(e.target.value)} style={{ fontSize: '0.8rem', resize: 'vertical' }} />
+      </Field>
     </>
   );
   const reset = () => {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
-    setFields(null); setSessionId(null); setPhase('start'); setGraph(null);
+    setFields(null); setSessionId(null); setPhase('start'); setGraph(null); setContractId('');
     setNote(''); setNetUnitPrice(''); setAgreedRate(''); setAgreedAdvance(''); setAgreedMg('');
   };
   const uploadImage = async (fileObj) => {
@@ -537,7 +567,7 @@ export default function ChatAudit() {
     } finally { setUploading(false); }
   };
 
-  const StatusIcon = phase === 'done' ? CheckCircle : phase === 'awaiting' ? HelpCircle : phase === 'running' ? Satellite : AlertTriangle;
+  const StatusIcon = (phase === 'done' || phase === 'complete') ? CheckCircle : phase === 'awaiting' ? HelpCircle : phase === 'running' ? Satellite : AlertTriangle;
 
   return (
     <A2UIProvider>
@@ -547,7 +577,6 @@ export default function ChatAudit() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h3 className="panel-title" style={{ margin: 0, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <StatusIcon size={16} style={{ color: 'var(--accent-purple)' }} /> Live Compliance Audit
-          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 400 }}>· real ADK orchestrator ({API_BASE || 'same origin'})</span>
         </h3>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontSize: '0.7rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.3rem',
@@ -584,6 +613,18 @@ export default function ChatAudit() {
                 </div>
                 <MeshStatus components={components} />
               </div>
+            ) : phase === 'complete' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-success, #3ddc84)' }}>
+                  <CheckCircle size={16} /> Audit session complete — all workflows passed{contractId ? ` · contract ${contractId} executed` : ''}.
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  This session is finalized, so re-submitting is disabled. The full report is archived in the <strong>Audit History</strong> tab (with PDF export).
+                </div>
+                <button className="preset-btn primary" onClick={reset} style={{ alignSelf: 'flex-start' }}>
+                  <Satellite size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> New audit session
+                </button>
+              </div>
             ) : phase === 'awaiting' && fields ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
@@ -601,7 +642,7 @@ export default function ChatAudit() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)' }}>
                   {phase === 'done' ? 'Adjust inputs & re-run:' : 'Start an audit — fill in and submit:'}
                 </div>
                 {standardInputs()}

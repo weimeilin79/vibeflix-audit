@@ -12,6 +12,14 @@ The orchestrator fans out to **brand_style ‖ vendor_clearance ‖ deal_pricing
 a standalone agent that, **in this demo, only `vendor_clearance` hands off to** (only that
 service is given `LEGAL_A2A_URL`), though any agent could.
 
+**Contract finalization**: the orchestrator's `contract_finalize` node (after
+`generate_report`, the step that closes every run) owns the *decision* that a fully-passed audit must end with an executed
+licensing contract — but it *delegates* the execution: it re-invokes `vendor_clearance`
+with a `FINALIZE-CONTRACT` brief, and `vendor_clearance` hands off to its private legal
+agent exactly as it does for onboarding (legal never gets a second caller). If onboarding
+already papered a contract in this audit chain, the orchestrator reuses that LC-####
+instead. Result → `aggregate["contract"]` → the final clearance report + audit history.
+
 ```
                             ┌──────────── app (:8000) ────────────┐
    browser ◄──SSE──────────►│  React + FastAPI + Orchestrator      │
@@ -99,84 +107,87 @@ three `ClearanceReport.status` values: `cleared` / `blocked` / `needs_input`.
 There is **no defined legal workflow** — the process is scattered across the docs in
 `resource/legal/docs/`. The agent **RAG-discovers** it with **`search_legal_docs`**
 (local keyword retriever by default; Vertex AI RAG Engine when `RAG_CORPUS` is set),
-reconstructing the steps + the two facts it must ask for, and reconciling contradictions
-(e.g. the 2022 risk memo's $5M insurance supersedes the 2019 SOP's $2M). It then replies
-with ONE JSON object — `ask_vendor`, `needs_user`, or `done`:
+reconstructing the steps + the one fact it must ask for, and reconciling contradictions
+(e.g. the 2022 risk memo's $5M insurance supersedes the 2019 SOP's $2M). The licensee
+**safety-certification id does NOT block**: if the brief provides a real one it's used,
+otherwise legal **generates a PROVISIONAL id** (`PROV-<STD>-<YYYYMMDD>-<serial>`, per the
+documented format — real cert due within 30 days) and reports which one it used. It
+replies with ONE JSON object — `ask_vendor` or `done` (a bare `done` without the real
+`contract_id` from `upsert_contract` is invalid and gets re-briefed):
 
 ```
    receive {vendor, character, category, territory, (royalty tier?), (safety cert?)}
         │
         ├─ no royalty tier in brief   →  {status:"ask_vendor", question}   (Flow A, see §5)
-        ├─ no safety cert in brief    →  {status:"needs_user", question, needs:[legal_safety_cert]}  (Flow B)
-        └─ have both  →  loop until nothing pending:
+        └─ have the tier  →  loop until nothing pending:
              draft_license_amendment ──► LA-####
              verify_certifications ──► request_certification (each missing) ─► cleared
              assign_customs_hs_code ──► HS code + recordation
              set_royalty_rate ──► rate %
              verify_liability_insurance ──► request_insurance_rider ─► cleared
+             safety cert: use the provided one, else GENERATE PROV-<STD>-<date>-<serial>
              upsert_contract(...) ──► LC-#### (REAL write to mcp_licensing._CONTRACTS)
                   │
                   ▼
-             {status:"done", contract_id:"LC-####", summary}
+             {status:"done", contract_id:"LC-####", safety_cert, summary}
 ```
 
 ---
 
-## 4. The legal hand-off — current vs. planned
+## 4. The legal hand-off — how it works
 
-**Streaming today:** app → browser is streamed (SSE). But the vendor_clearance → legal
-call is currently an **`AgentTool`** — a *blocking sub-call folded into one
-vendor_clearance turn*. That single turn ends up doing `update_vendor` + the whole legal
-loop + emitting the big final report, which is too long and makes the final report
-malform.
-
-**Implemented — `vendor_clearance` is a declarative ADK 2.0 graph; the app never touches
-legal.** Each step is its own node (so `legal_clearance` shows up distinctly in the
-Agent Platform / ADK trace):
+**`vendor_clearance` is a declarative ADK 2.0 graph; the app never touches legal.** Each
+step is its own node (so `legal_clearance` shows up distinctly in the Agent Platform /
+ADK trace):
 
 ```
   START → clearance → legal_clearance → finalize
 
   clearance (@node):        ctx.run_node(clearance_reasoner)  # conversational LLM (no output_schema)
-                            → emit ClearanceReport
-  legal_clearance (@node):  runs ONLY if a category was onboarded (the update_vendor fact);
-                            ctx.run_node(legal, {vendor,character,category,territory})
-                            # ▲ vendor_clearance → legal directly (A2A); the app is NOT involved
+                            → emit ClearanceReport (+ state finalize_requested, from the
+                              deterministic FINALIZE-CONTRACT marker in the brief)
+  legal_clearance (@node):  runs on onboarding / finalize / resume (see below);
+                            _call_legal(brief)  # plain A2A message/send in a FRESH context
+                            # ▲ vendor_clearance → legal directly; the app is NOT involved
                             legal: self-loop ─► upsert_contract ─► PASS/FAIL + LC-####
-                            → merge legal's pass/fail into the report
+                            → merge legal's pass/fail into the report (fail-closed: no
+                              LC-#### after MAX rounds → blocked, never silent success)
   finalize:                 emit the final report (content = what A2A returns to the orchestrator)
 ```
 
-(Earlier this was one `clear_and_legal` node doing all three; it was split into three
-nodes purely for observability — same behavior, `legal` now visible as its own step.)
-
-Why this fixed the malform: with the old `AgentTool`, legal's result came back *inside*
-the reasoner's turn, so that one turn did update + legal + the big `set_model_response`
-report → malformed. Now (a) the reasoner is **conversational** (no `output_schema`, so
-no `set_model_response` finalizer to malform), and (b) legal runs as its **own child
-run** via `ctx.run_node`; the node then writes the final report in a small deterministic
-step. Legal **reports pass/fail back** (the contract id), and the node "picks up where
-it left off."
+(History: this began as a blocking `AgentTool` inside one reasoner turn — too long, the
+final report malformed — then one `clear_and_legal` node, then three nodes for
+observability. The legal call itself was later changed from `ctx.run_node(RemoteA2aAgent)`
+to a **fresh-context A2A `message/send`**: forwarding the workflow's session history made
+legal intermittently ECHO the clearance report back as its own reply, and the hop's event
+relabeling made the reply unreliable to read back. A clean per-call context removed both.)
 
 **How the node knows legal is needed (no guessing):** it does NOT rely on the reasoner
-emitting a signal or on string-matching `add_category_approved`. It runs legal when a
-**fact in the event log** says a vendor was onboarded for a category — the reasoner
-actually called **`create_vendor`** (a NEW vendor) or **`update_vendor`** (a NEW category
-on an existing vendor) and the vendor came back `cleared` — OR when we're **resuming a
-legal Q&A** (a `legal_safety_cert` was echoed into the report; see §5 Flow B). Params
-(vendor/character/category/territory) are read from the reasoner's real
+emitting a signal or on string-matching `add_category_approved`. It runs legal when:
+- a **fact in the event log** says a vendor was onboarded for a category — the reasoner
+  actually called **`create_vendor`** (a NEW vendor) or **`update_vendor`** (a NEW
+  category) and the vendor came back `cleared`; or
+- the **orchestrator requested contract finalization** — its `contract_finalize` node
+  re-invokes this agent with a brief starting with the literal `FINALIZE-CONTRACT`
+  marker (see §1) after every workflow passed; or
+- we're **resuming a legal Q&A** (a `legal_safety_cert` was echoed into the report —
+  a legacy Flow-B path, see §5).
+
+Params (vendor/character/category/territory) are read from the reasoner's real
 `check_vendor_eligibility` call args. A normal cleared result (no onboarding, no
-pending answer) never triggers legal.
+finalize request, no pending answer) never triggers legal.
 
 Notes:
 - A remote-agent workflow node's **`node_input` and `ctx.state` are unreliable** (state
   doesn't propagate over A2A; node_input is often empty). What DOES work is **LlmAgent
-  state templates** — the reasoner resolves `{vendor?}`, `{add_category_approved?}`,
-  `{legal_safety_cert?}` etc. from the orchestrator-seeded state. So values the graph
-  code needs (like the safety cert) are **echoed by the reasoner into its report**, and
-  the nodes read them from there.
-- `mcp_licensing`'s stores are **in-memory and persist** across requests until the
-  container restarts — restart `mcp_licensing` (+ its dependents) to reset test data.
+  state templates** — the reasoner resolves `{vendor?}`, `{add_category_approved?}` etc.
+  from the orchestrator-seeded state. Values the graph code needs are **echoed by the
+  reasoner into its report**, and the nodes read them from there.
+- `mcp_licensing`'s **vendors are Firestore-backed** (collection `vendors` when
+  `FIRESTORE_DATABASE` is set — the compose default): onboarded vendors/categories
+  SURVIVE restarts; reset demo state with `RESET_VENDORS=1 python
+  deploy/seed_firestore.py`. Trademarks/exclusivity/contracts remain in-memory
+  (reset by restarting `mcp_licensing` + its dependents).
 
 ---
 
@@ -197,23 +208,14 @@ legal. This loops inside the node — it never leaves the service, no user invol
          → re-brief legal with the answer → legal continues
 ```
 
-**Flow B — legal → user (propagates all the way up and back):** legal needs a fact only
-the user/licensee has (the safety certification id). It replies `needs_user`; the node
-turns the `clearance_report` into `needs_input` carrying legal's question + the
-`legal_safety_cert` token. This rides the **existing** needs_input path up to the user:
-
-```
-  UP:   legal → needs_user  →  clearance_report = needs_input{question, needs:[legal_safety_cert]}
-        → orchestrator compile_ui  →  app renders a field  →  USER
-  DOWN: /api/audit/resume{legal_safety_cert} → orchestrator ingest → state
-        → reasoner echoes legal_safety_cert into its report → legal_clearance re-enters
-          (resuming=True) → legal has the cert → done → LC-####
-```
-
-Note the re-run trigger: on resume the category is already onboarded, so `update_vendor`
-won't recur — the **echoed `legal_safety_cert`** is what re-enters legal (see §4). Both
-loops were verified end-to-end (Flow A: liaison answers the royalty question; Flow B:
-`input_required` → resume → contract executed).
+**Flow B — legal → user (LEGACY for the safety cert; the channel remains):** legal used
+to block on the licensee safety-certification id with a `needs_user` reply that rode the
+existing needs_input path up to the user and back (`legal_safety_cert` field →
+`/api/audit/resume` → reasoner echoes it → legal resumes). **Since 2026-07-07 the cert no
+longer blocks** — legal generates a provisional `PROV-…` id when none is provided (skill
+v4) — so this path doesn't fire in the demo anymore. The plumbing (the `legal_safety_cert`
+token, the resume trigger in §4) is kept: it's the generic pattern for any future fact
+only the user holds, and a real cert id supplied up-front is still used verbatim.
 
 ---
 
@@ -258,32 +260,40 @@ Registry reference below the table.
 | E2 | grogu | Europe | Vinyl Figures | VND-1004 | not cleared for **Europe** (Osaka = APAC only) |
 | E3 | grogu | Latin America | Resin Statues | VND-1011 | vendor **pending_review** (not active) |
 
-### F. Fully cleared (happy path, no legal)
+### F. Fully cleared (happy path — no *onboarding* legal; if brand + pricing also pass, the orchestrator's `contract_finalize` still ends the audit with an executed contract)
 | # | Character | Market | Category | Vendor | Note |
 |---|---|---|---|---|---|
 | F1 | grogu | Europe | Resin Statues | VND-1002 | active, in-territory, native category, no exclusivity |
 | F2 | stitch | Latin America | Plush | VND-1009 | clean clear (stitch registered everywhere, no exclusivity in LatAm/Plush) |
 | F3 | grogu | Latin America | Vinyl Figures | VND-1003 | cleared **+ trademark_customs warning** (grogu LatAm = *pending*) |
 
-### G. Category onboarding → **Legal** (Flow A always, Flow B on the cert)
+### G. Category onboarding → **Legal** (Flow A royalty Q&A; cert self-generated)
 | # | Character | Market | Category | Vendor | Flow |
 |---|---|---|---|---|---|
-| G1 | grogu | Europe | Apparel | VND-1002 | Ineligible **only** for category → asks **Approve add category?** = `yes` → `update_vendor` → **legal fires**: liaison answers royalty (**Flow A**), then legal asks **safety cert** (**Flow B**) → `input_required` → answer **legal_safety_cert** (e.g. `UL-778812`) → contract `LC-####` |
+| G1 | grogu | Europe | Apparel | VND-1002 | Ineligible **only** for category → asks **Approve add category?** = `yes` → `update_vendor` → **legal fires**: liaison answers royalty (**Flow A**), legal **generates a provisional safety cert** (`PROV-…`, no user ask) → contract `LC-####` in the report |
 | G2 | grogu | North America | Premium Collectibles | VND-1008 | same onboarding→legal path on a different vendor |
 
-### H. Sourcing gate (HITL) — volume over the 25 000 cap
+### H. Volume over the 25 000 cap → sourcing decision (HITL, inside `generate_report`)
 | # | Inputs | → Outcome / follow-up |
 |---|---|---|
 | H1 | F1's inputs **+ Volume = 40000** | cleared, then **sourcing choice** asked → answer `A` (split excess to addendum SC-7798-EU) or `B` (cap + cancel excess) |
 
-### I. Orchestrator dispatch (which workflows run)
+### I. Orchestrator dispatch (which workflows run) + contract finalization
 | # | Action | → Outcome |
 |---|---|---|
 | I1 | Any initial audit | dispatch runs **all 3** (brand_style ‖ vendor_clearance ‖ deal_pricing) |
 | I2 | Re-submit changing only the market/vendor | dispatch **re-runs only the affected** workflow(s), reuses the rest (see the `__plan__`) |
+| I3 | Re-submit changing only the **pricing terms** or adding a **note** about a workflow's domain | dispatch re-runs just that workflow (the note is *considered*, never obeyed — rules can't be waived by a note) |
+| I4 | Every workflow **passes** (cleared/compliant, volume within cap) | orchestrator `contract_finalize` → vendor_clearance → legal execute the contract → **📜 Final Clearance Report** card with the full contract + saved to the **Audit History** tab |
 
-> In the mesh **brand_style** returns `needs_input` (no real image travels over A2A) and
-> **deal_pricing** audits the agreed price (royalty + advance + MG) — both appear on every audit alongside vendor_clearance.
+> **deal_pricing** audits the agreed price (royalty + advance + MG) against the rate card
+> (cards exist for `grogu`, `minions`, `stitch`, `gremlins` — `et` / `little_green_men`
+> have none, which triggers the "no rate card found" path);
+> **brand_style** first verifies the artwork DEPICTS the character under audit (e.g.
+> claim `minions` with a Grogu mockup → `rejected` + critical `character_mismatch`,
+> audit blocked until a correct image is supplied), then classifies the product medium
+> from the image (an explicit medium in the form overrides — e.g. `shot glass` triggers
+> the unapproved-medium path).
 
 ### Registry reference (from `mcp_licensing/data.py`)
 - **Vendors** — 1001 Shenzhen (APAC/NA · Vinyl/Action/BlindBox), 1002 Bavaria (EU/NA ·
