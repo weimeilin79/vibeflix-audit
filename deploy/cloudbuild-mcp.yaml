@@ -1,0 +1,20 @@
+# Cloud Build config for one MCP-server image (Dockerfile.mcp is generic; the
+# functional group is selected via the GROUP build-arg). Invoked per group by
+# deploy/deploy_mcp_cloudrun.sh:
+#   gcloud builds submit --config deploy/cloudbuild-mcp.yaml \
+#     --substitutions=_GROUP=mcp_licensing,_IMAGE=<region>-docker.pkg.dev/<proj>/vibeflix/mcp-licensing
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/Dockerfile.mcp
+      - --build-arg
+      - GROUP=${_GROUP}
+      - -t
+      - ${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}
+options:
+  logging: CLOUD_LOGGING_ONLY

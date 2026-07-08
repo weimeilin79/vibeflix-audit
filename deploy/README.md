@@ -140,6 +140,36 @@ categories survive restarts; auto-seeded from the in-code defaults on first use,
 executed contract). Edit a registry doc → the check reflects it (e.g. bump
 `market_policy/sourcing_caps.authorized_max_skus` to change the vendor cap).
 
+## Cloud phase 1 — MCP servers on Cloud Run (Terraform)
+
+The three MCP servers run on Cloud Run, owned by **`deploy/terraform/mcp/`** (the
+source of truth for the tier — services, runtime SAs, IAM). Build + apply with:
+
+```bash
+./deploy/deploy_mcp_cloudrun.sh              # gcloud builds ×3 → terraform apply
+./deploy/deploy_mcp_cloudrun.sh --no-build   # infra changes only
+```
+
+| Service | Runtime SA | IAM (least privilege) |
+|---|---|---|
+| `vibeflix-mcp-licensing` | `vibeflix-mcp-licensing@…` | `datastore.user` (vendors CRUD) + `pubsub.publisher` on the telemetry topic only |
+| `vibeflix-mcp-market` | `vibeflix-mcp-readonly@…` | `datastore.viewer` (registry reads) + topic-scoped `pubsub.publisher` |
+| `vibeflix-mcp-brand-style` | `vibeflix-mcp-readonly@…` | same as market |
+
+Deliberately **no GCS / no Vertex** bindings — the MCP servers use neither. All
+three deploy `--no-allow-unauthenticated`: callers need `roles/run.invoker` on the
+service plus an ID token (`Authorization: Bearer`). Grant the agents' runtime SA
+at the agents phase via `TF_VAR_invoker_members='["serviceAccount:…"]'` (or the
+`invoker_members` var) and re-apply.
+
+Endpoints (terraform output `mcp_urls`): `https://vibeflix-mcp-<name>-….run.app/mcp`.
+
+Caveats: `mcp_licensing` keeps trademarks/exclusivity/**contracts** in-memory →
+pinned to `max_instances=1`; executed contracts still reset on instance recycle
+(the app's audit history snapshots them — durable fix later is moving `_CONTRACTS`
+to Firestore). The cloud services publish telemetry to the SAME topic as local —
+a locally running app's bridge will consume those events.
+
 ## Pub/Sub (live mesh telemetry → the Workflow graph)
 
 Agents, MCP servers, and app functions emit fine-grained events (started ·
