@@ -38,10 +38,10 @@ alone means you MUST stop and ask** (return `needs_input` with `needs` including
 - **CHARACTER** — the licensed character / trademark (`{character_id?}`).
 - **TERRITORY** — the target market (`{target_market?}`).
 - **CATEGORY** — the manufactured product category (`{product_category?}`). Derive it
-  ONLY if a manufacturing medium makes it unambiguous (vinyl figure box → `Vinyl
-  Figures`, plush → `Plush`, T-shirt → `Apparel`, statue → `Resin Statues`, blind box →
-  `Blind Box`). **Never** guess the category from the character; a "poster / print ad"
-  medium is NOT a manufacturable category.
+  ONLY if a manufacturing medium makes it unambiguous (vinyl figure box / vinyl figures /
+  figures → `Vinyl Figures`, plush → `Plush`, T-shirt → `Apparel`, statue → `Resin
+  Statues`, blind box → `Blind Box`). **Never** guess the category from the character; a
+  "poster / print ad" medium is NOT a manufacturable category.
 
 If any of these is missing/empty, return the ClearanceReport with `status:
 "needs_input"`, a `question` naming exactly what you need, and `needs` listing the

@@ -778,85 +778,74 @@ export default function App() {
                     </marker>
                   </defs>
 
-                  {/* edges (solid) */}
-                  <path d="M 102 134 L 165 35" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 102 134 L 165 102" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 102 134 L 165 200" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 313 35 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 313 102 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 313 200 L 420 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 538 119 L 578 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  <path d="M 686 119 L 718 119" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
-                  {/* legal hand-off from Vendor & Licensing (dashed) */}
-                  <path d="M 245 122 L 258 128" stroke="var(--accent-purple)" strokeWidth="1.5" fill="none" strokeDasharray="3 3" markerEnd="url(#arrow)" />
+                  {/* edges (solid): App → Orchestrator, App → UI Renderer */}
+                  <path d="M 112 120 L 200 62" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 112 148 L 200 210" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  {/* Orchestrator fan-out → brand ‖ vendor ‖ pricing */}
+                  <path d="M 330 45 L 470 33" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 330 59 L 470 113" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  <path d="M 330 73 L 470 223" stroke="var(--glass-border)" strokeWidth="1.5" fill="none" markerEnd="url(#arrow)" />
+                  {/* Vendor & Licensing ⇢ Legal (private hand-off, dotted) */}
+                  <path d="M 620 115 L 658 116" stroke="var(--accent-purple)" strokeWidth="1.5" fill="none" strokeDasharray="3 3" markerEnd="url(#arrow)" />
 
                   {/* animated active flow */}
-                  <path d="M 102 134 L 165 102" stroke="#1a73e8" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                  <path d="M 313 102 L 420 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                  <path d="M 538 119 L 578 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
-                  <path d="M 686 119 L 718 119" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 112 120 L 200 62" stroke="#fbbc05" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 112 148 L 200 210" stroke="#1a73e8" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
+                  <path d="M 330 59 L 470 113" stroke="#34a853" strokeWidth="1.5" fill="none" strokeDasharray="6 6" className="animated-flow" />
 
-                  {/* Ingestion */}
+                  {/* App — serves the console, streams SSE, talks to orchestrator + presenter */}
                   <g transform="translate(12, 105)">
-                    <rect width="90" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
-                    <text x="45" y="25" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold" textAnchor="middle">Mockup Ingestion</text>
-                    <text x="45" y="39" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">Ingest assets</text>
-                    <text x="45" y="51" fill="var(--text-muted)" fontSize="7" textAnchor="middle">Computer Vision</text>
+                    <rect width="100" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
+                    <text x="50" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">🌐 App (:8000)</text>
+                    <text x="50" y="37" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">React + FastAPI</text>
+                    <text x="50" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">SSE · A2UI stream</text>
+                  </g>
+
+                  {/* Orchestrator — dispatches the three compliance workflows */}
+                  <g transform="translate(200, 30)">
+                    <rect width="130" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
+                    <text x="65" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Orchestrator</text>
+                    <text x="65" y="37" fill="var(--color-warning)" fontSize="7.5" fontWeight="bold" textAnchor="middle">dispatch · recover · HITL</text>
+                    <text x="65" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">report + contract finalize</text>
+                  </g>
+
+                  {/* UI Renderer — standalone presenter, called only by the App */}
+                  <g transform="translate(200, 190)">
+                    <rect width="130" height="54" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
+                    <text x="65" y="20" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer (:8004)</text>
+                    <text x="65" y="34" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
+                    <text x="65" y="47" fill="var(--text-muted)" fontSize="7" textAnchor="middle">standalone · reports → surface</text>
                   </g>
 
                   {/* Brand Style */}
-                  <g transform="translate(165, 15)">
-                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                  <g transform="translate(470, 13)">
+                    <rect width="150" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
                     <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">🎨 Brand Style</text>
-                    <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">fonts · swatches · medium</text>
-                    <circle cx="138" cy="12" r="3.5" fill="#34a853" />
+                    <text x="10" y="32" fill="#1a73e8" fontSize="7" fontWeight="bold">trademark match · medium · fonts</text>
+                    <circle cx="140" cy="12" r="3.5" fill="#34a853" />
                   </g>
 
                   {/* Vendor & Licensing */}
-                  <g transform="translate(165, 82)">
-                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                  <g transform="translate(470, 95)">
+                    <rect width="150" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
                     <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">⚖️ Vendor &amp; Licensing</text>
                     <text x="10" y="32" fill="#ea4335" fontSize="7" fontWeight="bold">exclusivity · trademark · vendors</text>
-                    <circle cx="138" cy="12" r="3.5" fill="#fbbc05" />
-                  </g>
-
-                  {/* Legal Clearance — hangs off Vendor & Licensing */}
-                  <g transform="translate(198, 128)">
-                    <rect width="120" height="38" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
-                    <text x="10" y="17" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance</text>
-                    <text x="10" y="30" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
+                    <circle cx="140" cy="12" r="3.5" fill="#fbbc05" />
                   </g>
 
                   {/* Deal Pricing */}
-                  <g transform="translate(165, 180)">
-                    <rect width="148" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
+                  <g transform="translate(470, 205)">
+                    <rect width="150" height="40" rx="6" fill="var(--bg-card)" stroke="var(--glass-border)" strokeWidth="1" />
                     <text x="10" y="18" fill="var(--text-dark)" fontSize="9" fontWeight="bold">💰 Deal Pricing</text>
                     <text x="10" y="32" fill="#c9922e" fontSize="7" fontWeight="bold">royalty · advance · MG</text>
-                    <circle cx="138" cy="12" r="3.5" fill="#34a853" />
+                    <circle cx="140" cy="12" r="3.5" fill="#34a853" />
                   </g>
 
-                  {/* Orchestrator */}
-                  <g transform="translate(420, 90)">
-                    <rect width="118" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-warning)" strokeWidth="2" />
-                    <text x="59" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">Orchestrator</text>
-                    <text x="59" y="37" fill="var(--color-warning)" fontSize="7.5" fontWeight="bold" textAnchor="middle">dispatch · recover · HITL</text>
-                    <text x="59" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">report + contract finalize</text>
-                  </g>
-
-                  {/* UI Renderer (A2UI) */}
-                  <g transform="translate(578, 90)">
-                    <rect width="108" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
-                    <text x="54" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer</text>
-                    <text x="54" y="37" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
-                    <text x="54" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">reports → surface</text>
-                  </g>
-
-                  {/* Final report */}
-                  <g transform="translate(718, 90)">
-                    <rect width="88" height="58" rx="6" fill="var(--bg-card)" stroke="var(--color-success)" strokeWidth="2" />
-                    <text x="44" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">📜 Final Report</text>
-                    <text x="44" y="37" fill="var(--color-success)" fontSize="7.5" fontWeight="bold" textAnchor="middle">contract LC-#</text>
-                    <text x="44" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">→ Audit History</text>
+                  {/* Legal Clearance — private, only Vendor & Licensing calls it (dotted) */}
+                  <g transform="translate(660, 94)">
+                    <rect width="150" height="44" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
+                    <text x="10" y="18" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance (:8005)</text>
+                    <text x="10" y="32" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
                   </g>
                 </svg>
               </div>

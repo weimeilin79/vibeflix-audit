@@ -8,7 +8,9 @@ injectStyles();
 
 // Talks to the real ADK orchestrator (app.py). Same origin in prod; override for dev.
 const API_BASE = import.meta.env.VITE_API_URL || '';
-const MARKETS = ['North America', 'Europe', 'Asia-Pacific', 'Global'];
+// Mirrors the licensing registry's territory vocabulary (mcp_licensing _TERRITORIES) —
+// vendors, exclusivity contracts, and trademark records are keyed on these.
+const MARKETS = ['North America', 'Europe', 'Asia-Pacific', 'Latin America', 'Middle East & Africa'];
 
 // The backend STREAMS incremental A2UI surfaceUpdate messages (plan → per-agent
 // fills → closing report line) and @a2ui/react patches the surface in place, so panels fill in
@@ -53,6 +55,7 @@ const CATEGORY_OPTIONS = [
   { label: 'Footwear', valid: false },
 ];
 const MEDIA_OPTIONS = [
+  { label: 'figures', valid: true }, { label: 'vinyl figures', valid: true },
   { label: 'vinyl figure box', valid: true }, { label: 'poster', valid: true },
   { label: 'trading card', valid: true }, { label: 'apparel tag', valid: true },
   { label: 'sticker sheet', valid: true }, { label: 'art print', valid: true },

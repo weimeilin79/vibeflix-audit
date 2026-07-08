@@ -29,7 +29,9 @@ _BRAND_ALLOWLIST_DEFAULT = [
     "boba", "fett", "ahsoka", "tano", "obi", "wan", "kenobi", "vader",
 ]
 _ALLOWED_PRINTED_MEDIA_DEFAULT = [
-    "vinyl figure box", "poster", "trading card", "apparel tag",
+    # Order matters: the categorizer takes the FIRST normalized contains-match, so
+    # more-specific entries ("vinyl figures") must precede generic ones ("figures").
+    "vinyl figure box", "vinyl figures", "figures", "poster", "trading card", "apparel tag",
     "sticker sheet", "art print", "enamel pin card", "mug wrap", "T-shirt", "book cover", "comic book cover", "magazine cover",
     "shoes", "hat", "hoodie", "jacket", "backpack", "lunchbox", "water bottle", "phone case", "tablet case", "laptop sleeve",
 ]
