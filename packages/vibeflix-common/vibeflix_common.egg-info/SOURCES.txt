@@ -1,5 +1,6 @@
 pyproject.toml
 vibeflix_common/__init__.py
+vibeflix_common/cloud_auth.py
 vibeflix_common/health.py
 vibeflix_common/image_input.py
 vibeflix_common/mcp_clients.py

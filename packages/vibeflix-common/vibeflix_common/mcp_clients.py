@@ -13,6 +13,8 @@ import os
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
+from vibeflix_common.cloud_auth import run_local, mcp_httpx_factory
+
 # Env var holding the URL for each MCP server group.
 _URL_ENV = {
     "mcp_brand_style": "MCP_BRAND_STYLE_URL",
@@ -37,7 +39,11 @@ def mcp_toolset(group: str, tool_filter: list[str] | None = None) -> McpToolset:
             f"MCP URL not configured for {group}: set the {env} environment variable "
             f"(e.g. http://{group}:9001/mcp)."
         )
-    return McpToolset(
-        connection_params=StreamableHTTPConnectionParams(url=url),
-        tool_filter=tool_filter,
+    # RUN_LOCAL=false (cloud): every connection the toolset opens attaches a
+    # fresh Google ID token — Cloud Run / Agent Gateway MCP endpoints are IAM-gated.
+    params = (
+        StreamableHTTPConnectionParams(url=url)
+        if run_local()
+        else StreamableHTTPConnectionParams(url=url, httpx_client_factory=mcp_httpx_factory)
     )
+    return McpToolset(connection_params=params, tool_filter=tool_filter)

@@ -39,9 +39,9 @@ is its own container/instance.
         │  brand_style   │ │ vendor_clearance │ │ pricing  │ │ ui_renderer │
         │     :8001      │ │      :8002       │ │  :8003   │ │   :8004     │
         └──┬─────────────┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
-   HTTP/MCP│            HTTP/MCP │           │ HTTP/MCP         │  no MCP)    │
-    ┌──────▼──────┐ ┌────────────▼─┐ ┌───────▼──────┐           │             │
-    │mcp_brand_   │ │mcp_licensing │ │  mcp_market  │           └─────────────┘
+   HTTP/MCP│            HTTP/MCP │           │ HTTP/MCP      └─────────────┘
+    ┌──────▼──────┐ ┌────────────▼─┐ ┌───────▼──────┐           
+    │mcp_brand_   │ │mcp_licensing │ │  mcp_market  │           
     │style  :9004 │ │    :9002     │ │    :9003     │  (streamable-HTTP)
     └─────────────┘ └──────────────┘ └──────────────┘
   brand_style → mcp_brand_style · vendor_clearance → mcp_licensing + mcp_market
@@ -571,6 +571,24 @@ non-streaming collect loop.
 > environment contract and **Cloud Run / Agent Engine** deployment.
 
 ---
+
+## ☁️ Deploying to Google Cloud
+
+Cloud rollout is phased; everything lives in **`deploy/`** (scripts + Terraform)
+with the full guide in **[`deploy/README.md`](deploy/README.md)**.
+
+**Phase 1 — MCP servers → Cloud Run** (done, repeatable):
+
+```bash
+# project + region are variables — set them in deploy/.env, or per-run:
+PROJECT=pokedemo-test REGION=us-central1 ./deploy/deploy_mcp_cloudrun.sh
+```
+
+Builds the 3 images with Cloud Build and applies `deploy/terraform/mcp/`
+(IAM-gated Cloud Run services + least-privilege runtime service accounts).
+See deploy/README.md § "Cloud phase 1" for prerequisites, verification, and teardown.
+
+Next phases: agents → Agent Runtime, registry + Agent Gateway.
 
 ## 🎭 Interactive Flow Walkthrough
 

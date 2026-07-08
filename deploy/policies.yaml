@@ -1,0 +1,56 @@
+# Agent Gateway access policies — deny-by-default tool allowlists.
+# Caller identities = the agents' runtime principal(s); with the shared
+# vibeflix-agents SA these bind per registered AGENT entry, with per-agent
+# Agent Identity (preview) they bind per identity. The app is a caller too.
+#
+# This file is the SOURCE OF TRUTH the gateway bindings are applied from
+# (deploy/setup_gateway.sh step 3).
+
+policies:
+  - caller: vibeflix-brand-style
+    mcp_server: vibeflix-mcp-brand-style
+    allow_tools: [run_brand_audit]
+
+  - caller: vibeflix-deal-pricing
+    mcp_server: vibeflix-mcp-licensing
+    allow_tools: [get_license_pricing]
+
+  - caller: vibeflix-vendor-clearance
+    mcp_server: vibeflix-mcp-licensing
+    allow_tools:
+      - get_vendor
+      - find_vendors
+      - create_vendor        # onboarding
+      - update_vendor        # category add
+      - list_trademarks
+      - verify_trademark_record
+      - scan_global_exclusivity_clauses
+      - check_vendor_eligibility
+  - caller: vibeflix-vendor-clearance
+    mcp_server: vibeflix-mcp-market
+    allow_tools: [scan_ecom_marketplaces, check_sku_volume_caps, capture_audit_map]
+
+  - caller: vibeflix-legal
+    mcp_server: vibeflix-mcp-licensing
+    allow_tools:
+      - get_vendor
+      - verify_trademark_record
+      - scan_global_exclusivity_clauses
+      - upsert_contract      # legal is the ONLY contract writer
+      - get_contract
+
+  # The console app: pickers, note_responder, Database tab, contract reads +
+  # the volume annotation. Read-only except upsert_contract (administrative
+  # production_volume stamp) and reset_vendors (the demo Reset button).
+  - caller: vibeflix-app
+    mcp_server: vibeflix-mcp-licensing
+    allow_tools:
+      - list_trademarks
+      - get_vendor
+      - find_vendors
+      - verify_trademark_record
+      - scan_global_exclusivity_clauses
+      - get_contract
+      - upsert_contract
+      - dump_stores
+      - reset_vendors

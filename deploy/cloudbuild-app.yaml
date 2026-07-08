@@ -1,0 +1,10 @@
+# Cloud Build config for the console app image (frontend + FastAPI + orchestrator).
+#   gcloud builds submit . --config deploy/cloudbuild-app.yaml \
+#     --substitutions "_IMAGE=<region>-docker.pkg.dev/<proj>/vibeflix/app"
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -f, deploy/Dockerfile.app, -t, "${_IMAGE}", .]
+images:
+  - ${_IMAGE}
+options:
+  logging: CLOUD_LOGGING_ONLY

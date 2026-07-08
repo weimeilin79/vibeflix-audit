@@ -143,14 +143,70 @@ executed contract). Edit a registry doc → the check reflects it (e.g. bump
 ## Cloud phase 1 — MCP servers on Cloud Run (Terraform)
 
 The three MCP servers run on Cloud Run, owned by **`deploy/terraform/mcp/`** (the
-source of truth for the tier — services, runtime SAs, IAM). Build + apply with:
+source of truth for the tier — services, runtime SAs, IAM).
+`deploy/deploy_mcp_cloudrun.sh` builds the images (Cloud Build) and applies it.
+
+### How to run it
+
+**0. Prerequisites (one-time)**
+
+```bash
+gcloud auth login && gcloud auth application-default login
+brew tap hashicorp/tap && brew install hashicorp/tap/terraform   # if not installed
+
+./deploy/setup_firestore.sh     # registries + vendors + audit_history live here
+./deploy/setup_pubsub.sh        # telemetry topic — Terraform binds publishers to it
+```
+
+**1. Pick the project + region.** Both are plain variables; set them in
+`deploy/.env` (used by every deploy script):
+
+```bash
+PROJECT=pokedemo-test
+REGION=us-central1
+```
+
+…or override per-run on the command line — no file edits needed:
+
+```bash
+PROJECT=my-other-project REGION=europe-west1 ./deploy/deploy_mcp_cloudrun.sh
+```
+
+> The Firestore db and Pub/Sub topic must exist in whatever project you target
+> (step 0). The local Terraform state tracks ONE deployment at a time — if you
+> switch project/region, the next apply builds the new target from scratch
+> (destroy the old one first, or use `terraform workspace` to keep both).
+
+**2. Deploy**
 
 ```bash
 ./deploy/deploy_mcp_cloudrun.sh              # gcloud builds ×3 → terraform apply
-./deploy/deploy_mcp_cloudrun.sh --no-build   # infra changes only
+./deploy/deploy_mcp_cloudrun.sh --no-build   # infra/IAM changes only, reuse images
 ```
 
-| Service | Runtime SA | IAM (least privilege) |
+It prints the three MCP endpoints when done (again anytime with
+`terraform -chdir=deploy/terraform/mcp output mcp_urls`).
+
+**3. Verify**
+
+```bash
+# anonymous must be rejected (IAM-gated):
+curl -s -o /dev/null -w '%{http_code}\n' -X POST <MCP_LICENSING_URL>   # → 403
+# authenticated reaches the MCP server:
+curl -s -o /dev/null -w '%{http_code}\n' -X POST <MCP_LICENSING_URL> \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"       # → 4xx≠403 (handshake, not IAM)
+```
+
+**4. Undo everything** (services, IAM, service accounts, image repo):
+
+```bash
+terraform -chdir=deploy/terraform/mcp destroy \
+  -var project=<PROJECT> -var region=<REGION> -var deployer=user:<you@example.com>
+```
+
+### IAM (least privilege — what each server actually touches)
+
+| Service | Runtime SA | IAM |
 |---|---|---|
 | `vibeflix-mcp-licensing` | `vibeflix-mcp-licensing@…` | `datastore.user` (vendors CRUD) + `pubsub.publisher` on the telemetry topic only |
 | `vibeflix-mcp-market` | `vibeflix-mcp-readonly@…` | `datastore.viewer` (registry reads) + topic-scoped `pubsub.publisher` |
@@ -161,8 +217,6 @@ three deploy `--no-allow-unauthenticated`: callers need `roles/run.invoker` on t
 service plus an ID token (`Authorization: Bearer`). Grant the agents' runtime SA
 at the agents phase via `TF_VAR_invoker_members='["serviceAccount:…"]'` (or the
 `invoker_members` var) and re-apply.
-
-Endpoints (terraform output `mcp_urls`): `https://vibeflix-mcp-<name>-….run.app/mcp`.
 
 Caveats: `mcp_licensing` keeps trademarks/exclusivity/**contracts** in-memory →
 pinned to `max_instances=1`; executed contracts still reset on instance recycle

@@ -39,6 +39,7 @@ from agents.a2ui_surface import (
     build_surface, panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
+from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth
 from vibeflix_common.memory import (
     APP_NAME,
     build_session_service,
@@ -160,6 +161,7 @@ presenter_runner = (
         root_agent=RemoteA2aAgent(
             name="a2ui_presenter",
             agent_card=f"{_UI_RENDERER_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+            **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
         ),
     ))
     if _UI_RENDERER_URL else None
@@ -363,7 +365,7 @@ async def _fetch_trademarks() -> list:
     try:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
-        async with streamablehttp_client(_MCP_LICENSING_URL) as (read, write, _):
+        async with streamablehttp_client(_MCP_LICENSING_URL, headers=auth_headers(_MCP_LICENSING_URL)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 res = await session.call_tool("list_trademarks", {})
@@ -627,7 +629,7 @@ async def _licensing_call(tool: str, args: dict) -> dict | None:
     try:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
-        async with streamablehttp_client(url) as (read, write, _):
+        async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 res = await session.call_tool(tool, args)
@@ -665,7 +667,7 @@ async def _annotate_contract_volume(contract: dict, volume: int) -> dict:
         payload = {k: contract.get(k) for k in ("contract_id", "vendor_id", "character_id",
                                                 "category", "territory")}
         payload["production_volume"] = volume
-        async with streamablehttp_client(url) as (read, write, _):
+        async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 res = await session.call_tool("upsert_contract", {"contract_json": json.dumps(payload)})
@@ -782,7 +784,7 @@ async def reset_database():
         try:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
-            async with streamablehttp_client(url) as (read, write, _):
+            async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     res = await session.call_tool("reset_vendors", {})
@@ -1102,7 +1104,7 @@ async def mcp_tools_listing():
         if not url:
             continue
         try:
-            async with streamablehttp_client(url) as (read, write, _):
+            async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     res = await session.list_tools()
@@ -1146,7 +1148,7 @@ async def _probe_agent(svc: dict) -> dict:
         return comp
     t0 = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=6.0, auth=maybe_auth()) as client:
             resp = await client.get(f"{base}/healthz")
             resp.raise_for_status()
             data = resp.json()
