@@ -63,7 +63,13 @@ app.add_middleware(
 
 # Models
 class AuditRequest(BaseModel):
-    """The initial form: image link + market + volume kick off the audit."""
+    """The initial form: image link + market + volume kick off the audit.
+
+    extra="allow": asked-field tokens collected on a resume (sourcing_choice,
+    legal_safety_cert, future tokens) must flow through to the orchestrator —
+    pydantic silently DROPPING them re-asks the same question forever."""
+
+    model_config = {"extra": "allow"}
 
     image_path: str = "grogu_mockup_box.png"
     # Image LINK (e.g. a gs:// Cloud Storage URI). Passed to the agents by
@@ -89,6 +95,11 @@ class AuditRequest(BaseModel):
     # Free-text operator note / question (the chat field) — threaded into the orchestrator
     # brief as extra context for the agents.
     note: str = ""
+    # Sourcing-cap decision ("A"/"B") collected when volume exceeds the vendor cap —
+    # fed back on the follow-up run so generate_report applies it instead of re-asking.
+    sourcing_choice: str = ""
+    # The licensee safety-cert id (legacy Flow-B answer) — threaded down when provided.
+    legal_safety_cert: str = ""
     # Deal pricing — the vendor's AGREED total consideration + royalty basis (deal_pricing agent).
     net_unit_price: float = 0.0
     agreed_royalty_rate: float = 0.0
@@ -180,17 +191,16 @@ async def _respond_to_note(note: str, reports: dict) -> str | None:
         return None
 
 
-async def _present(reports: dict) -> list | None:
-    """Call the UI-Render agent (over A2A) on an arbitrary set of reports → panels,
-    or None if it's unconfigured/unreachable or produced nothing."""
+async def _run_presenter(payload: dict) -> dict | None:
+    """One UI-Render agent round-trip (over A2A) → its Presentation dict, or None
+    if it's unconfigured/unreachable or produced nothing parseable."""
     if presenter_runner is None:
         return None
-    payload = json.dumps(reports)
     user_id = "presenter"
     session = await presenter_runner.session_service.create_session(app_name=PRESENTER_APP, user_id=user_id)
     data = None
     async for event in presenter_runner.run_async(
-        user_id=user_id, session_id=session.id, new_message=_content(payload)
+        user_id=user_id, session_id=session.id, new_message=_content(json.dumps(payload))
     ):
         content = getattr(event, "content", None)
         parts = getattr(content, "parts", None) if content else None
@@ -198,10 +208,16 @@ async def _present(reports: dict) -> list | None:
         if text:
             try:
                 parsed = json.loads(text)
-                if isinstance(parsed, dict) and "panels" in parsed:
+                if isinstance(parsed, dict) and ("panels" in parsed or "fields" in parsed):
                     data = parsed
             except ValueError:
                 pass
+    return data
+
+
+async def _present(reports: dict) -> list | None:
+    """Reports → user-friendly panels (None on failure → rule-based fallback)."""
+    data = await _run_presenter(reports)
     if not data or not data.get("panels"):
         return None
     return [
@@ -209,6 +225,61 @@ async def _present(reports: dict) -> list | None:
          "lines": [(ln["text"], ln.get("resolve", "")) for ln in p.get("lines", [])]}
         for p in data["panels"]
     ]
+
+
+_FIELD_TYPES = {"text", "textarea", "number", "select"}
+
+
+async def _design_fields(tokens: list, prompts: list, aggregate: dict, request: dict) -> dict | None:
+    """Ask the UI-Render agent to DESIGN the input form for the requested tokens —
+    it reasons from the reports/questions what each token means and picks the right
+    control (textarea vs select vs text…), label, format hint, and prefill. Returns
+    {prompt, fields} or None (caller falls back to the deterministic specs)."""
+    payload = {
+        "task": "design_input_form",
+        "needs": tokens,
+        "questions": prompts,
+        "reports": {k: v for k, v in aggregate.items() if k.endswith("_report") and isinstance(v, dict)},
+        "known_inputs": {k: v for k, v in request.items()
+                         if isinstance(v, (str, int, float)) and v not in ("", 0)
+                         and k not in ("prior_reports", "prior_inputs", "run_token")},
+        "select_options": {"character": _TRADEMARK_OPTIONS} if _TRADEMARK_OPTIONS else {},
+    }
+    try:
+        data = await _run_presenter(payload)
+    except Exception as e:
+        print(f"[app] form designer failed ({type(e).__name__}: {e}); fallback specs", flush=True)
+        return None
+    if not data or not data.get("fields"):
+        return None
+    # Validate hard requirements: one field per token, names verbatim, sane types.
+    by_name = {f.get("name"): f for f in data["fields"] if isinstance(f, dict)}
+    fields = []
+    for token in tokens:
+        f = by_name.get(token)
+        if not f:
+            return None                      # a token was dropped → don't trust the design
+        spec = {
+            "name": token,
+            "label": f.get("label") or token,
+            "type": f.get("type") if f.get("type") in _FIELD_TYPES else "text",
+            "placeholder": f.get("placeholder", ""),
+            "required": bool(f.get("required", True)),
+        }
+        if f.get("value"):
+            spec["value"] = f["value"]
+        if spec["type"] == "select":
+            options = [o for o in f.get("options", []) if isinstance(o, dict) and o.get("value")]
+            if not options:
+                spec["type"] = "text"
+            else:
+                spec["options"] = options
+        # Data correctness beats LLM judgment: the character picker always uses the
+        # licensing registry's list.
+        if token == "character" and _TRADEMARK_OPTIONS:
+            spec = {**spec, "type": "select", "options": _TRADEMARK_OPTIONS}
+        fields.append(spec)
+    return {"prompt": data.get("prompt") or " ".join(prompts), "fields": fields}
 
 
 async def _render_surface(aggregate: dict, market, volume) -> dict:
@@ -335,13 +406,15 @@ _FIELD_SPECS = {
 }
 
 
-def _pending_input(aggregate: dict) -> dict | None:
+async def _pending_input(aggregate: dict, request: dict | None = None) -> dict | None:
     """If the run needs more input, return {prompt, fields:[...]} to collect it.
 
     Generic: ANY `*_report` with status `needs_input`/`rejected` surfaces here — the
     agent lists what it needs via `needs` (a list of field tokens) and a `question`.
-    The sourcing gate over cap asks for the A/B decision. Returns None when nothing
-    is pending.
+    The UI-Render agent DESIGNS the form (control types, labels, format hints,
+    prefills) from the surrounding context; the deterministic _FIELD_SPECS are the
+    fallback. The sourcing gate over cap asks for the A/B decision. Returns None
+    when nothing is pending.
     """
     style = aggregate.get("style_report") or {}
     tokens, prompts = [], []
@@ -357,6 +430,9 @@ def _pending_input(aggregate: dict) -> dict | None:
         if report.get("question"):
             prompts.append(report["question"])
     if tokens:
+        designed = await _design_fields(tokens, prompts, aggregate, request or {})
+        if designed:
+            return designed
         fields = []
         for token in tokens:
             spec = dict(_FIELD_SPECS.get(token, {"name": token, "label": token, "type": "text", "required": True}))
@@ -396,7 +472,7 @@ async def _collect_or_complete(request: dict, token: str | None = None) -> dict:
     aggregate["a2ui_payload"] = await _render_surface(
         aggregate, request.get("target_market", "North America"), request.get("volume", 0)
     )
-    pending = _pending_input(aggregate)
+    pending = await _pending_input(aggregate, request)
     if pending is not None:
         tok = token or uuid.uuid4().hex[:12]
         _SESSIONS[tok] = {"user_id": user_id, "request": request}
@@ -431,7 +507,9 @@ def _cache_audit(aggregate: dict, request: dict) -> str:
     inputs = {
         "image_uri": request.get("image_uri") or "",
         "target_market": request.get("target_market", "North America"),
-        "volume": request.get("volume", 0),
+        # Cache the EFFECTIVE volume (a capped order is 25k from here on) so the
+        # next re-submit diffs against reality, not the original ask.
+        "volume": _effective_volume(request, aggregate.get("sourcing") or {}),
         "medium": request.get("medium", ""),
         "character_id": request.get("character") or "",
         "product_category": request.get("product_category") or "",
@@ -443,7 +521,16 @@ def _cache_audit(aggregate: dict, request: dict) -> str:
         "agreed_advance": request.get("agreed_advance") or 0,
         "agreed_mg": request.get("agreed_mg") or 0,
         "note": request.get("note") or "",
+        "sourcing_choice": request.get("sourcing_choice") or "",
     }
+    # DYNAMIC inputs (tokens agents asked for) join the history generically so the
+    # dispatcher can diff them on the next re-submit — no per-field plumbing.
+    inputs.update({
+        k: v for k, v in request.items()
+        if k not in inputs and k not in ("image_path", "character", "prior_reports",
+                                         "prior_inputs", "run_token")
+        and isinstance(v, (str, int, float, bool)) and v != ""
+    })
     token = uuid.uuid4().hex[:12]
     _AUDIT_CACHE[token] = {"reports": reports, "inputs": inputs}
     return token
@@ -532,10 +619,10 @@ def _all_passed(reports: dict, sourcing: dict) -> bool:
     return (sourcing or {}).get("status") != "needs_choice"
 
 
-async def _fetch_contract(contract_id: str) -> dict | None:
-    """Fetch the full executed contract record from mcp_licensing (get_contract)."""
+async def _licensing_call(tool: str, args: dict) -> dict | None:
+    """One mcp_licensing tool call (fresh MCP session) → parsed JSON, or None."""
     url = os.environ.get("MCP_LICENSING_URL")
-    if not (url and contract_id):
+    if not url:
         return None
     try:
         from mcp import ClientSession
@@ -543,13 +630,51 @@ async def _fetch_contract(contract_id: str) -> dict | None:
         async with streamablehttp_client(url) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                res = await session.call_tool("get_contract", {"contract_id": contract_id})
-                text = "".join(getattr(c, "text", "") or "" for c in res.content)
-                contract = json.loads(text)
-                return None if contract.get("error") else contract
+                res = await session.call_tool(tool, args)
+                return json.loads("".join(getattr(c, "text", "") or "" for c in res.content))
     except Exception as e:
-        print(f"[history] get_contract({contract_id}) failed: {type(e).__name__}: {e}", flush=True)
+        print(f"[app] mcp_licensing {tool} failed: {type(e).__name__}: {e}", flush=True)
         return None
+
+
+async def _fetch_contract(contract_id: str) -> dict | None:
+    """Fetch the full executed contract record from mcp_licensing (get_contract)."""
+    if not contract_id:
+        return None
+    contract = await _licensing_call("get_contract", {"contract_id": contract_id})
+    return None if not contract or contract.get("error") else contract
+
+
+def _effective_volume(request: dict, sourcing: dict) -> int:
+    """The volume actually in force: the vendor cap when the operator chose to cap
+    or split (primary contract), else the requested volume."""
+    if (sourcing or {}).get("status") in ("capped", "split_addendum"):
+        return int(sourcing.get("primary_units") or 0)
+    return int(request.get("volume") or 0)
+
+
+async def _annotate_contract_volume(contract: dict, volume: int) -> dict:
+    """Stamp the effective production volume onto the executed contract record
+    (administrative annotation via upsert_contract — the legal terms are untouched)."""
+    url = os.environ.get("MCP_LICENSING_URL")
+    if not (url and contract and volume) or contract.get("production_volume") == volume:
+        return contract
+    try:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+        payload = {k: contract.get(k) for k in ("contract_id", "vendor_id", "character_id",
+                                                "category", "territory")}
+        payload["production_volume"] = volume
+        async with streamablehttp_client(url) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                res = await session.call_tool("upsert_contract", {"contract_json": json.dumps(payload)})
+                text = "".join(getattr(c, "text", "") or "" for c in res.content)
+                updated = (json.loads(text) or {}).get("contract")
+                return updated or {**contract, "production_volume": volume}
+    except Exception as e:
+        print(f"[history] contract volume annotation failed: {type(e).__name__}: {e}", flush=True)
+        return contract
 
 
 async def _record_history(request: dict, aggregate: dict, order_id: str | None = None) -> dict:
@@ -561,6 +686,8 @@ async def _record_history(request: dict, aggregate: dict, order_id: str | None =
     m = re.search(r"LC-\w+", json.dumps(reports))
     cid = (aggregate.get("contract") or {}).get("contract_id") or (m.group(0) if m else "")
     contract = await _fetch_contract(cid)
+    if contract and _all_passed(reports, sourcing):
+        contract = await _annotate_contract_volume(contract, _effective_volume(request, sourcing))
     order_id = order_id or uuid.uuid4().hex[:10]
     entry = {
         "id": order_id,
@@ -604,6 +731,27 @@ async def _record_history(request: dict, aggregate: dict, order_id: str | None =
 def list_audits():
     """Completed audits, newest first (the console's Audit History tab)."""
     return {"audits": list(reversed(_AUDIT_HISTORY))}
+
+
+@app.get("/api/database")
+async def database_dump():
+    """Everything the mesh runs on, for the console's Database tab (loaded only on
+    demand): mcp_licensing's stores (vendors/trademarks/exclusivity/contracts/rate
+    cards) + the Firestore registries + the audit history."""
+    out: dict = {"stores": {}, "registries": {}, "audit_history": list(reversed(_AUDIT_HISTORY)),
+                 "firestore_database": _FIRESTORE_DB or "(unset — in-memory fallbacks)"}
+    dump = await _licensing_call("dump_stores", {})
+    if isinstance(dump, dict):
+        out["stores"] = dump
+    if _FIRESTORE_DB:
+        try:
+            from google.cloud import firestore
+            db = firestore.Client(database=_FIRESTORE_DB)
+            for col in ("brand_style_registry", "legal_registry", "market_policy"):
+                out["registries"][col] = {d.id: d.to_dict() for d in db.collection(col).stream()}
+        except Exception as e:
+            out["registries_error"] = f"{type(e).__name__}: {e}"
+    return out
 
 
 def _clear_upload_bucket() -> int:
@@ -803,7 +951,7 @@ async def _stream_audit(request: dict):
     #    chain also defines the ORDER: re-submits update one history entry.
     token = _cache_audit(aggregate, request)
     order_id = _order_for(request, new_token=token)
-    pending = _pending_input(aggregate)
+    pending = await _pending_input(aggregate, request)
     if pending is not None:
         yield _sse({"event": "input_required", "run_token": token,
                     "prompt": pending["prompt"], "fields": pending["fields"]})
@@ -826,8 +974,14 @@ async def _stream_audit(request: dict):
         await _persist_audit(user_id, session.id, aggregate)
         # `passed` + contract let the client CLOSE the session (a fully-cleared,
         # contract-executed audit is final — re-submitting it makes no sense).
-        yield _sse({"event": "done", "run_token": token, "passed": entry["passed"],
-                    "contract_id": (entry.get("contract") or {}).get("contract_id", "")})
+        # `capped_volume` tells the client the sourcing decision changed the
+        # effective volume — the form updates itself to the real number.
+        done_evt = {"event": "done", "run_token": token, "passed": entry["passed"],
+                    "contract_id": (entry.get("contract") or {}).get("contract_id", "")}
+        sourcing = aggregate.get("sourcing") or {}
+        if sourcing.get("status") in ("capped", "split_addendum"):
+            done_evt["capped_volume"] = int(sourcing.get("primary_units") or 0)
+        yield _sse(done_evt)
 
 
 @app.post("/api/audit/stream")
@@ -845,18 +999,127 @@ async def audit_stream(req: AuditRequest):
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
         "note": req.note or "",
+        "sourcing_choice": req.sourcing_choice or "",
+        "legal_safety_cert": req.legal_safety_cert or "",
         "net_unit_price": req.net_unit_price,
         "agreed_royalty_rate": req.agreed_royalty_rate,
         "agreed_advance": req.agreed_advance,
         "agreed_mg": req.agreed_mg,
         "run_token": req.run_token,
     }
+    # Any OTHER asked-field tokens ride along generically (model allows extras).
+    request.update({k: v for k, v in (req.model_extra or {}).items() if v is not None})
     return StreamingResponse(_stream_audit(request), media_type="text/event-stream")
 
 
 @app.get("/api/health")
 def health():
     return {"message": "ADK 2.0 Agent Mesh Backend is online."}
+
+
+# MCP tool inventory for the Workflow graph (tool rows with activity LEDs).
+# Short names match the graph's chip labels (env name minus MCP_/_URL, lowercased).
+_MCP_SERVER_ENVS = {
+    "licensing": "MCP_LICENSING_URL",
+    "brand_style": "MCP_BRAND_STYLE_URL",
+    "market": "MCP_MARKET_URL",
+}
+_MCP_TOOLS_CACHE: dict | None = None
+
+
+# ---- Live mesh telemetry bridge: Pub/Sub streaming pull → SSE ----------------
+# Agents/MCP servers publish node/tool events onto PUBSUB_TOPIC (see
+# vibeflix_common.telemetry); this bridge fans them out to every connected console
+# so the Workflow graph's tool LEDs and node states light up in real time.
+_MESH_QUEUES: set = set()
+_MESH_BRIDGE_STARTED = False
+
+
+def _start_mesh_bridge(loop) -> bool:
+    subscription = os.environ.get("PUBSUB_SUBSCRIPTION", "").strip()
+    if not subscription:
+        return False
+    try:
+        from google.cloud import pubsub_v1
+        client = pubsub_v1.SubscriberClient()
+        path = client.subscription_path(os.environ.get("GOOGLE_CLOUD_PROJECT", ""), subscription)
+
+        def _on_message(msg):
+            try:
+                data = json.loads(msg.data.decode())
+            except Exception:
+                data = {"raw": msg.data.decode(errors="replace")}
+            msg.ack()
+            for q in list(_MESH_QUEUES):
+                try:
+                    loop.call_soon_threadsafe(q.put_nowait, data)
+                except Exception:
+                    pass
+
+        client.subscribe(path, callback=_on_message)   # background streaming pull
+        print(f"[mesh-bridge] streaming pull started on {subscription}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[mesh-bridge] failed to start: {type(e).__name__}: {e}", flush=True)
+        return False
+
+
+@app.get("/api/mesh/events")
+async def mesh_events():
+    """SSE stream of live mesh telemetry (node/tool started/completed events)."""
+    global _MESH_BRIDGE_STARTED
+    if not _MESH_BRIDGE_STARTED:
+        _MESH_BRIDGE_STARTED = _start_mesh_bridge(asyncio.get_running_loop())
+    q: asyncio.Queue = asyncio.Queue(maxsize=1000)
+    _MESH_QUEUES.add(q)
+
+    async def gen():
+        try:
+            yield _sse({"event": "bridge", "ok": _MESH_BRIDGE_STARTED})
+            while True:
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=25)
+                    yield _sse(item)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            _MESH_QUEUES.discard(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/mcp/tools")
+async def mcp_tools_listing():
+    """Every MCP server's tool names (cached — the inventory is static per build)."""
+    global _MCP_TOOLS_CACHE
+    if _MCP_TOOLS_CACHE is not None:
+        return _MCP_TOOLS_CACHE
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+    servers: dict = {}
+    for short, env in _MCP_SERVER_ENVS.items():
+        url = os.environ.get(env)
+        if not url:
+            continue
+        try:
+            async with streamablehttp_client(url) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    res = await session.list_tools()
+                    # A tool can declare its INTERNAL workflow in its docstring
+                    # ("PIPELINE STEPS: a, b, c") — the graph renders those as
+                    # sub-rows with their own LEDs (telemetry key `tool.step`).
+                    steps = {}
+                    for t in res.tools:
+                        m = re.search(r"PIPELINE STEPS:\s*([\w ,→>./-]+)", t.description or "")
+                        if m:
+                            steps[t.name] = [s.strip() for s in re.split(r"[,→>]", m.group(1)) if s.strip()]
+                    servers[short] = {"url": url, "tools": sorted(t.name for t in res.tools),
+                                      "steps": steps}
+        except Exception as e:
+            servers[short] = {"url": url, "tools": [], "steps": {}, "error": type(e).__name__}
+    _MCP_TOOLS_CACHE = {"servers": servers}
+    return _MCP_TOOLS_CACHE
 
 
 # The domain agents the orchestrator depends on (label + A2A base-URL env var).
@@ -958,11 +1221,14 @@ async def run_audit(req: AuditRequest):
         "add_category_approved": req.add_category_approved or "",
         "medium": req.medium or "",
         "note": req.note or "",
+        "sourcing_choice": req.sourcing_choice or "",
+        "legal_safety_cert": req.legal_safety_cert or "",
         "net_unit_price": req.net_unit_price,
         "agreed_royalty_rate": req.agreed_royalty_rate,
         "agreed_advance": req.agreed_advance,
         "agreed_mg": req.agreed_mg,
     }
+    request.update({k: v for k, v in (req.model_extra or {}).items() if v is not None})
     try:
         return await _collect_or_complete(request)
     except HTTPException:

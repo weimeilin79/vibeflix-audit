@@ -39,6 +39,7 @@ function printEntry(entry) {
     ['Vendor', contract.vendor_id], ['Character', contract.character_id],
     ['Category', contract.category], ['Territory', contract.territory],
     ['Royalty', contract.royalty_pct != null ? `${contract.royalty_pct}%` : null],
+    ['Production volume', contract.production_volume ? `${Number(contract.production_volume).toLocaleString()} units` : null],
     ['Safety certification', contract.safety_cert_id], ['HS code', contract.hs_code],
     ['License amendment', contract.amendment_id],
   ].filter(([, v]) => v != null && v !== '') : [];
@@ -115,6 +116,7 @@ function ContractBlock({ contract }) {
     ['Vendor', contract.vendor_id], ['Character', contract.character_id],
     ['Category', contract.category], ['Territory', contract.territory],
     ['Royalty', contract.royalty_pct != null ? `${contract.royalty_pct}%` : null],
+    ['Production volume', contract.production_volume ? `${Number(contract.production_volume).toLocaleString()} units` : null],
     ['Safety cert', contract.safety_cert_id], ['HS code', contract.hs_code],
     ['Amendment', contract.amendment_id],
   ].filter(([, v]) => v != null && v !== '');

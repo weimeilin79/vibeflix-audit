@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import functools
 
 from spellchecker import SpellChecker
 from mcp.server.fastmcp import FastMCP
@@ -11,6 +12,29 @@ from mcp.server.fastmcp import FastMCP
 # job is only to extract the inputs and call the workflow — it does not orchestrate
 # the checks itself.
 mcp = FastMCP("Brand Style Compliance Registry")
+
+# Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
+# (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
+# registration, so new tools are instrumented automatically.
+from vibeflix_common.telemetry import instrument_fastmcp, emit_event
+instrument_fastmcp(mcp, source="mcp_brand_style")
+
+
+def _pipeline_step(name: str):
+    """Telemetry ON the check function itself: emits `started` when the step is
+    CALLED and `completed` (with the step's status) right before it returns — so
+    every caller lights the step's LED in the Workflow graph (`tool.step` keys),
+    not just run_brand_audit's call sites."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            emit_event("mcp_brand_style", "started", tool=f"run_brand_audit.{name}")
+            out = fn(*args, **kwargs)
+            emit_event("mcp_brand_style", "completed", tool=f"run_brand_audit.{name}",
+                       status=out.get("status", ""), detail=f"{name}: {out.get('status', '')}")
+            return out
+        return wrapped
+    return deco
 
 
 # ===========================================================================
@@ -61,6 +85,7 @@ def _words(text_arg: str):
                 yield w
 
 
+@_pipeline_step("typo")
 def _check_typos(text: str) -> dict:
     """Deterministic spellcheck over the printed copy; brand terms allow-listed."""
     findings = []
@@ -91,6 +116,7 @@ def _norm_medium(s: str) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
 
+@_pipeline_step("printed_medium")
 def _check_printed_medium(medium: str) -> dict:
     """Categorize the observed medium against the approved allowlist (forgiving
     normalized contains-match). On a match, `medium_category` names the canonical
@@ -116,6 +142,7 @@ def _check_printed_medium(medium: str) -> dict:
     }]}
 
 
+@_pipeline_step("asset_source")
 def _check_asset_source(image_uri: str) -> dict:
     """Deterministic image-link provenance check against approved sources."""
     uri = (image_uri or "").strip()
@@ -163,8 +190,13 @@ def run_brand_audit(text: str, medium: str, image_uri: str) -> str:
     medium_category}. `medium_category` is the canonical approved medium the input
     was categorized as (absent if it matched none). status is 'rejected' (gate
     failed), 'flagged' (issues found), or 'compliant'.
+
+    PIPELINE STEPS: asset_source, typo, printed_medium
     """
     # Gate: the asset source must be approved before we audit its contents.
+    # (Each check function emits its own telemetry so the Workflow graph shows the
+    # pipeline live;
+    # on a gate rejection the remaining steps never run — their LEDs stay dark.)
     src = _check_asset_source(image_uri)
     if src["status"] != "approved":
         return json.dumps({

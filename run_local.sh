@@ -31,7 +31,7 @@ cd "$ROOT"
 API_BASE="${API_BASE:-http://localhost:8000}"
 VENV="$ROOT/.venv"
 # group -> local streamable-http port
-MCP_PORTS=("mcp_vision_ui:9001" "mcp_licensing:9002" "mcp_market:9003" "mcp_brand_style:9004")
+MCP_PORTS=("mcp_licensing:9002" "mcp_market:9003" "mcp_brand_style:9004")
 
 c_info() { printf "\033[1;36m[run_local]\033[0m %s\n" "$*"; }
 c_warn() { printf "\033[1;33m[run_local]\033[0m %s\n" "$*"; }
@@ -80,7 +80,7 @@ start_a2a_agents() {
   ensure_venv
   A2A_PIDS=()
   A2A_AGENT=brand_style A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8001 \
-    MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp MCP_VISION_UI_URL=http://127.0.0.1:9001/mcp \
+    MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp \
     "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_brand_style.log 2>&1 &
   A2A_PIDS+=("$!")
   A2A_AGENT=vendor_clearance A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8002 \
@@ -149,7 +149,7 @@ case "${1:-up}" in
     start_mcp_servers
     start_a2a_agents
     trap 'c_info "Stopping mesh…"; kill "${MCP_PIDS[@]}" "${A2A_PIDS[@]}" 2>/dev/null || true' EXIT INT TERM
-    c_info "Mesh up: MCP :9001-:9004, agent cards :8001-:8004 (incl. ui_renderer:8004)."
+    c_info "Mesh up: MCP :9002-:9004, agent cards :8001-:8004 (incl. ui_renderer:8004)."
     c_info "Test the orchestrator in another shell:"
     c_info "  export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \\"
     c_info "         VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \\"

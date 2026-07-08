@@ -111,7 +111,7 @@ function Combo({ value, onChange, options, placeholder }) {
   );
 }
 
-function FieldDock({ fields, onSubmit, busy, defaults = {} }) {
+function FieldDock({ fields, onSubmit, busy, defaults = {}, formId, hideSubmit = false }) {
   const [values, setValues] = useState(() =>
     Object.fromEntries(fields.map((f) => [
       f.name,
@@ -121,25 +121,31 @@ function FieldDock({ fields, onSubmit, busy, defaults = {} }) {
   const set = (name, v) => setValues((prev) => ({ ...prev, [name]: v }));
   const ready = fields.every((f) => !f.required || String(values[f.name] ?? '').trim() !== '');
   return (
-    <form onSubmit={(e) => { e.preventDefault(); if (ready && !busy) onSubmit(values); }}
+    <form id={formId} onSubmit={(e) => { e.preventDefault(); if (ready && !busy) onSubmit(values); }}
       style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
       {fields.map((f) => (
         <div key={f.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-          <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{f.label}{f.required ? ' *' : ''}</label>
+          {/* These are the fields the mesh is WAITING on — make them unmissable. */}
+          <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>⚠️ {f.label}{f.required ? ' *' : ''}</label>
           {f.type === 'select' ? (
             <select className="top-textarea" value={values[f.name]} onChange={(e) => set(f.name, e.target.value)}>
               {(f.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
+          ) : f.type === 'textarea' ? (
+            <textarea className="top-textarea" rows={3} placeholder={f.placeholder || ''}
+              value={values[f.name]} onChange={(e) => set(f.name, e.target.value)} style={{ resize: 'vertical' }} />
           ) : (
             <input className="top-textarea" type={f.type === 'number' ? 'number' : 'text'}
               placeholder={f.placeholder || ''} value={values[f.name]} onChange={(e) => set(f.name, e.target.value)} />
           )}
         </div>
       ))}
-      <button type="submit" className="preset-btn primary" disabled={!ready || busy} style={{ alignSelf: 'flex-start' }}>
-        <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-        {busy ? 'Sending…' : 'Submit answer'}
-      </button>
+      {!hideSubmit && (
+        <button type="submit" className="preset-btn primary" disabled={!ready || busy} style={{ alignSelf: 'flex-start' }}>
+          <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+          {busy ? 'Sending…' : 'Submit answer'}
+        </button>
+      )}
     </form>
   );
 }
@@ -223,31 +229,154 @@ const ESCALATABLE = new Set(['flagged', 'unverified', 'blocked', 'needs_input', 
 // through submitFields from the standard inputs' state).
 const STD_TOKENS = new Set(['image', 'image_uri', 'medium', 'character', 'vendor', 'market', 'target_market', 'volume', 'category', 'product_category']);
 
-function WorkflowGraph({ graph }) {
+function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   const nodes = graph ? Object.values(graph) : [];
   if (!nodes.length) {
     return <div style={{ padding: '1.2rem 0.6rem', fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5 }}>
       Run an audit — the workflow graph builds here, lighting up each agent as it runs.
     </div>;
   }
-  const W = 380, NW = 116, NH = 46;
+  const W = 760, NW = 224, NH = 60;                 // 2× type on a wider canvas
+  const BOX_HDR = 22, ROW_H = 16, BOX_PAD = 6, BOX_GAP = 12, STACK_DY = 14;
+
+  // MCP servers each agent talks to — from the live readiness probe (/api/ready),
+  // so the topology isn't hardcoded and each server box carries real health. The
+  // private legal agent isn't in readiness; it writes contracts via mcp_licensing,
+  // so it reuses that server's entry from its parent's list (box only, no tools —
+  // the licensing tools are already boxed under Vendor Clearance).
+  const chipLabel = (m) => (m.name || '').replace(/^MCP_/, '').replace(/_URL$/, '').toLowerCase();
+  const mcpFor = (n) => {
+    const comp = (components || []).find((c) => (n.id || '').startsWith(c.name));
+    if (comp) return comp.mcp || [];
+    if (n.id === 'legal') {
+      const lic = (components || []).flatMap((c) => c.mcp || []).find((m) => (m.name || '').includes('LICENSING'));
+      return lic ? [lic] : [];
+    }
+    return [];
+  };
+  const toolsOf = (m) => (((mcpTools || {})[chipLabel(m)] || {}).tools || []);
+  const stepsOf = (m) => (((mcpTools || {})[chipLabel(m)] || {}).steps || {});
+  // Row count for a server box: one row per tool + one per declared pipeline step.
+  const rowCount = (m) => toolsOf(m).reduce((n, t) => n + 1 + ((stepsOf(m)[t] || []).length), 0);
+
   const root = nodes.find((n) => !n.parent);
   const l1 = nodes.filter((n) => root && n.parent === root.id);
   const l2 = nodes.filter((n) => n.parent && (!root || n.parent !== root.id));
+  const l1Y = 116;
   const pos = {};
   if (root) pos[root.id] = { x: (W - NW) / 2, y: 14 };
-  const gap = 14;
+  const gap = 24;
   const total = l1.length * NW + Math.max(0, l1.length - 1) * gap;
-  const x0 = Math.max(6, (W - total) / 2);
-  l1.forEach((n, i) => { pos[n.id] = { x: x0 + i * (NW + gap), y: 120 }; });
-  l2.forEach((n) => { const p = pos[n.parent] || { x: (W - NW) / 2 }; pos[n.id] = { x: p.x, y: 226 }; });
-  const H = l2.length ? 292 : 190;
+  const x0 = Math.max(8, (W - total) / 2);
+  l1.forEach((n, i) => { pos[n.id] = { x: x0 + i * (NW + gap), y: l1Y }; });
+  // l2 (legal) x under its parent now; its y is set BELOW the MCP layer (computed
+  // next) so the agent→MCP edges don't have to weave around it.
+  l2.forEach((n) => { const p = pos[n.parent] || { x: (W - NW) / 2 }; pos[n.id] = { x: p.x, y: 0 }; });
+
+  // ---- Shared MCP layer: each server appears ONCE, with dashed edges from every
+  // agent that talks to it (no duplicate boxes). Tools live INSIDE the server box.
+  const servers = {};
+  [...l1, ...l2].forEach((n) => {
+    mcpFor(n).forEach((m) => {
+      const label = chipLabel(m);
+      if (!servers[label]) servers[label] = { label, url: m.url, ok: m.ok, tools: toolsOf(m),
+        steps: stepsOf(m), rows: rowCount(m), consumers: [] };
+      if (!servers[label].consumers.includes(n.id)) servers[label].consumers.push(n.id);
+    });
+  });
+  const consumerX = (s) => s.consumers.reduce((sum, id) => sum + ((pos[id]?.x ?? 0) + NW / 2), 0) / (s.consumers.length || 1);
+  const serverList = Object.values(servers).sort((a, b) => consumerX(a) - consumerX(b));
+  const k = serverList.length;
+  const SBW = k ? Math.min(NW, (W - 16 * (k - 1) - 16) / k) : NW;
+  const mcpY = l1Y + NH + 46;
+  serverList.forEach((s, i) => {
+    s.x = Math.max(8, (W - (k * SBW + (k - 1) * 16)) / 2) + i * (SBW + 16);
+    s.h = BOX_HDR + s.rows * ROW_H + BOX_PAD;
+  });
+  const mcpMaxH = Math.max(40, ...serverList.map((s) => s.h));
+  // Legal sits BELOW the MCP layer (its vendor→legal edge ducks behind the server
+  // boxes, which paint over it — no crowding in the agent/MCP band).
+  const l2Y = mcpY + mcpMaxH + 42;
+  l2.forEach((n) => { pos[n.id].y = l2Y; });
+  const H = l2.length ? l2Y + NH + 14 : mcpY + mcpMaxH + 14;
 
   const edge = (a, b, dashed) => {
     const pa = pos[a], pb = pos[b]; if (!pa || !pb) return null;
     const x1 = pa.x + NW / 2, y1 = pa.y + NH, x2 = pb.x + NW / 2, y2 = pb.y, my = (y1 + y2) / 2;
     return <path key={`${a}-${b}`} d={`M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`}
-      fill="none" stroke="var(--glass-border, #444)" strokeWidth="1.4" strokeDasharray={dashed ? '3 3' : undefined} />;
+      fill="none" stroke="var(--glass-border, #444)" strokeWidth="2" strokeDasharray={dashed ? '5 5' : undefined} />;
+  };
+
+  // Dashed agent → MCP-server edge (MCP-over-HTTP), fanned across the box edge so
+  // multiple consumers don't overlap. Consumers ABOVE the layer attach to the box
+  // top; consumers BELOW it (legal) attach to the box bottom.
+  const mcpEdge = (nodeId, s, idx) => {
+    const pa = pos[nodeId]; if (!pa) return null;
+    const below = pa.y > mcpY;
+    const x1 = pa.x + NW / 2, y1 = below ? pa.y : pa.y + NH;
+    const spread = SBW / (s.consumers.length + 1);
+    const x2 = s.x + spread * (idx + 1), y2 = below ? mcpY + Math.max(40, s.h) : mcpY;
+    const my = (y1 + y2) / 2;
+    return <path key={`${nodeId}-${s.label}`} d={`M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`}
+      fill="none" stroke="var(--glass-border, #444)" strokeWidth="1.6" strokeDasharray="4 4" />;
+  };
+
+  // One MCP-server box: header (name + health) with the server's TOOLS inside, each
+  // with an activity LED. LEDs are addressable two ways:
+  //   • React: the `toolLights` map — key `<mcp>/<tool>` → 'on' | 'blink'
+  //     (window.vibeflixToolLight('licensing/get_vendor', 'blink') from anywhere)
+  //   • DOM: every row carries data-led="<mcp>/<tool>" for direct manipulation.
+  const ServerBox = ({ s }) => {
+    const color = s.ok === true ? '#3ddc84' : s.ok === false ? '#ff5c5c' : '#777';
+    const maxChars = Math.floor((SBW - 34) / 6.2);
+    return (
+      <g>
+        <rect x={s.x} y={mcpY} width={SBW} height={Math.max(40, s.h)} rx="7"
+          fill="var(--bg-tertiary, #1c1c1c)" stroke={color} strokeWidth="1.2" opacity="0.96" />
+        <circle cx={s.x + 12} cy={mcpY + BOX_HDR / 2 + 1} r="3.5" fill={color} />
+        <text x={s.x + 21} y={mcpY + BOX_HDR / 2 + 5} fontSize="12" fontWeight="700"
+          fill="var(--wf-mcp-title, #174ea6)">{`mcp_${s.label}`}</text>
+        <title>{`mcp_${s.label} — ${s.url || ''} (${s.ok === true ? 'ok' : s.ok === false ? 'DOWN' : 'unknown'})`}</title>
+        {s.tools.length > 0 && (
+          <line x1={s.x + 8} y1={mcpY + BOX_HDR} x2={s.x + SBW - 8} y2={mcpY + BOX_HDR}
+            stroke="var(--glass-border, #444)" strokeWidth="0.8" />
+        )}
+        {(() => {
+          // Flatten tools + their declared PIPELINE STEPS into rows; steps render
+          // indented under their tool with their own LEDs (key `<mcp>/<tool>.<step>`).
+          const rows = [];
+          s.tools.forEach((t) => {
+            rows.push({ key: `${s.label}/${t}`, text: t, indent: 0 });
+            ((s.steps || {})[t] || []).forEach((st) =>
+              rows.push({ key: `${s.label}/${t}.${st}`, text: st, indent: 1 }));
+          });
+          return rows.map((row, j) => {
+            const ty = mcpY + BOX_HDR + 11 + j * ROW_H;
+            const mode = (toolLights || {})[row.key];
+            const lit = mode === 'on' || mode === 'blink';
+            const ind = row.indent * 14;
+            return (
+              <g key={row.key} data-led={row.key}>
+                {row.indent > 0 && (
+                  <path d={`M ${s.x + 16} ${ty - ROW_H + 5} L ${s.x + 16} ${ty} L ${s.x + 22 + ind - 12} ${ty}`}
+                    stroke="var(--glass-border, #555)" strokeWidth="0.8" fill="none" />
+                )}
+                <circle className={mode === 'blink' ? 'wf-led-blink' : ''}
+                  cx={s.x + 14 + ind} cy={ty} r={row.indent ? 3.2 : 4}
+                  fill={lit ? '#3ddc84' : 'var(--glass-border, #555)'} />
+                <text x={s.x + 26 + ind} y={ty + 4} fontSize={row.indent ? 10 : 11}
+                  fontWeight={lit ? 700 : 400}
+                  fill={lit ? 'var(--wf-mcp-title, #174ea6)' : 'var(--text-muted, #999)'}>
+                  {row.text.length > maxChars - row.indent * 2
+                    ? row.text.slice(0, maxChars - row.indent * 2 - 1) + '…' : row.text}
+                </text>
+                <title>{`${s.label} · ${row.key.split('/')[1]}`}</title>
+              </g>
+            );
+          });
+        })()}
+      </g>
+    );
   };
 
   const NodeBox = ({ n }) => {
@@ -257,11 +386,13 @@ function WorkflowGraph({ graph }) {
     const s = WF_STATUS[n.status] || { ...WF_STATUS.pending, label: n.status || 'queued' };
     return (
       <g className={n.status === 'running' ? 'wf-running' : ''}>
-        <rect x={p.x} y={p.y} width={NW} height={NH} rx="9" fill={s.fill} stroke={s.border}
-          strokeWidth={n.status === 'running' ? 2 : 1.3} strokeDasharray={n.status === 'reused' ? '4 3' : undefined} />
-        <circle cx={p.x + 13} cy={p.y + 15} r="4" fill={s.dot} />
-        <text x={p.x + NW / 2} y={p.y + 19} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text-primary, #e8e8e8)">{n.label}</text>
-        <text x={p.x + NW / 2} y={p.y + 34} textAnchor="middle" fontSize="9" fill={s.dot}>{s.label}</text>
+        <rect x={p.x} y={p.y} width={NW} height={NH} rx="11" fill={s.fill} stroke={s.border}
+          strokeWidth={n.status === 'running' ? 2.6 : 1.6} strokeDasharray={n.status === 'reused' ? '5 4' : undefined} />
+        <circle cx={p.x + 18} cy={p.y + 20} r="5.5" fill={s.dot} />
+        {/* Node fills are dark in BOTH themes (status colors), so the title is a
+            fixed light color — theme-aware text would go black-on-dark in light mode. */}
+        <text x={p.x + NW / 2} y={p.y + 26} textAnchor="middle" fontSize="16" fontWeight="700" fill="#e8eaed">{n.label}</text>
+        <text x={p.x + NW / 2} y={p.y + 46} textAnchor="middle" fontSize="12" fill={s.dot}>{s.label}</text>
       </g>
     );
   };
@@ -269,7 +400,11 @@ function WorkflowGraph({ graph }) {
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxHeight: '100%' }}>
       {root && l1.map((n) => edge(root.id, n.id, false))}
-      {l2.map((n) => edge(n.parent, n.id, true))}
+      {/* vendor → legal is a real A2A hand-off: SOLID. Drawn before the server
+          boxes so the long edge ducks behind the MCP layer. */}
+      {l2.map((n) => edge(n.parent, n.id, false))}
+      {serverList.flatMap((s) => s.consumers.map((id, i) => mcpEdge(id, s, i)))}
+      {serverList.map((s) => <ServerBox key={s.label} s={s} />)}
       {nodes.map((n) => <NodeBox key={n.id} n={n} />)}
     </svg>
   );
@@ -317,6 +452,55 @@ export default function ChatAudit() {
   // busy never hides the inputs.
   const [ready, setReady] = useState(null);        // null=checking | true | false
   const [components, setComponents] = useState([]);
+  // MCP tool inventory ({ licensing: [tool, ...], ... }) for the graph's tool rows.
+  const [mcpTools, setMcpTools] = useState({});
+  // Tool activity LEDs: key `<mcp>/<tool>` → 'on' | 'blink' | undefined (off).
+  // Driven by the Pub/Sub live-telemetry bridge (window.vibeflixToolLight below).
+  const [toolLights, setToolLights] = useState({});
+  useEffect(() => {
+    fetch(`${API_BASE}/api/mcp/tools`)
+      .then((r) => r.json())
+      .then((d) => setMcpTools(Object.fromEntries(
+        Object.entries(d.servers || {}).map(([k, v]) => [k, { tools: v.tools || [], steps: v.steps || {} }]))))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    // Global hook for manual control too: vibeflixToolLight('licensing/get_vendor',
+    // 'blink'), 'on', or null/undefined to turn it off.
+    window.vibeflixToolLight = (key, mode) => setToolLights((m) => ({ ...m, [key]: mode || undefined }));
+    return () => { delete window.vibeflixToolLight; };
+  }, []);
+  useEffect(() => {
+    // Live mesh telemetry (Pub/Sub → app bridge → SSE): tool events drive the LEDs —
+    // blink while the tool runs, linger solid green for a beat on completion so even
+    // fast calls are visible. EventSource auto-reconnects.
+    const timers = {};
+    const es = new EventSource(`${API_BASE}/api/mesh/events`);
+    es.onmessage = (ev) => {
+      let e; try { e = JSON.parse(ev.data); } catch { return; }
+      // The legal hand-off announces itself (node: "legal") the moment it starts —
+      // materialize/update the graph node immediately instead of waiting for
+      // vendor_clearance's final report to reach the audit stream.
+      if (e.node === 'legal' && e.source === 'vendor_clearance') {
+        const status = e.event === 'started' ? 'running'
+          : e.event === 'needs_input' ? 'needs_input'
+          : e.event === 'failed' ? 'blocked' : (e.status || 'cleared');
+        setGraph((g) => g ? { ...g, legal: { id: 'legal', label: '⚖️ Legal Clearance',
+          parent: 'vendor_clearance_agent', status } } : g);
+        return;
+      }
+      if (!e.tool) return;
+      const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
+      clearTimeout(timers[key]);
+      if (e.event === 'started') {
+        setToolLights((m) => ({ ...m, [key]: 'blink' }));
+      } else {  // completed / failed → solid, then off
+        setToolLights((m) => ({ ...m, [key]: 'on' }));
+        timers[key] = setTimeout(() => setToolLights((m) => ({ ...m, [key]: undefined })), 1600);
+      }
+    };
+    return () => { es.close(); Object.values(timers).forEach(clearTimeout); };
+  }, []);
   const failsRef = useRef(0);
   useEffect(() => {
     let alive = true;
@@ -401,6 +585,12 @@ export default function ChatAudit() {
             push({ role: 'agent', text: d.text });
           } else if (d.event === 'done') {
             if (d.run_token) runTokenRef.current = d.run_token;
+            // The sourcing decision changed the effective volume (cap/split) — sync
+            // the form to the REAL number so re-submits don't re-trip the cap gate.
+            if (d.capped_volume) {
+              setVolume(d.capped_volume);
+              push({ role: 'system', text: `📦 Production volume updated to ${Number(d.capped_volume).toLocaleString()} units per your sourcing decision.` });
+            }
             setGraph((g) => g ? { ...g, orchestrator: { ...g.orchestrator, status: 'done' } } : g);
             // Fully passed (contract executed / all cleared) → the session is FINAL:
             // re-submitting is disabled; only New starts another audit.
@@ -440,6 +630,9 @@ export default function ChatAudit() {
     if (values.target_market) setMarket(values.target_market);
     push({ role: 'user', text: [Object.entries(values).map(([k, v]) => `${k} = ${v}`).join('\n'), note ? `💬 ${note}` : ''].filter(Boolean).join('\n') });
     runStream({
+      // Spread FIRST so every asked-field token (sourcing_choice, legal_safety_cert,
+      // future tokens) reaches the backend; the explicit keys below override.
+      ...values,
       image_uri: values.image_uri || imageUri,
       target_market: values.target_market || market,
       volume: Number(volume),
@@ -630,17 +823,31 @@ export default function ChatAudit() {
               </div>
             ) : phase === 'awaiting' && fields ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                  Provide what the mesh asked for below — you can also edit any earlier input; all of it is submitted together:
-                </div>
-                {standardInputs()}
+                {/* The fields the mesh ASKED for come FIRST (highlighted); the earlier
+                    inputs follow so they can be edited too — one submit sends it all. */}
                 {fields.filter((f) => !STD_TOKENS.has(f.name)).length > 0 ? (
-                  <FieldDock fields={fields.filter((f) => !STD_TOKENS.has(f.name))} onSubmit={submitFields} busy={busy}
-                    defaults={{ image_uri: imageUri, medium, character, product_category: productCategory, vendor, target_market: market }} />
+                  <>
+                    <FieldDock fields={fields.filter((f) => !STD_TOKENS.has(f.name))} onSubmit={submitFields} busy={busy}
+                      defaults={{ image_uri: imageUri, medium, character, product_category: productCategory, vendor, target_market: market }}
+                      formId="mesh-asked-fields" hideSubmit />
+                    <div style={{ borderTop: '1px dashed var(--glass-border)', paddingTop: '0.5rem', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      You can also edit any earlier input — everything is submitted together:
+                    </div>
+                    {standardInputs()}
+                    <button type="submit" form="mesh-asked-fields" className="preset-btn primary" disabled={busy} style={{ alignSelf: 'flex-start' }}>
+                      <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> {busy ? 'Sending…' : 'Submit answer'}
+                    </button>
+                  </>
                 ) : (
-                  <button className="preset-btn primary" onClick={() => submitFields({})} disabled={busy} style={{ alignSelf: 'flex-start' }}>
-                    <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> {busy ? 'Sending…' : 'Submit'}
-                  </button>
+                  <>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Adjust the inputs the mesh flagged and re-submit:
+                    </div>
+                    {standardInputs()}
+                    <button className="preset-btn primary" onClick={() => submitFields({})} disabled={busy} style={{ alignSelf: 'flex-start' }}>
+                      <Send size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} /> {busy ? 'Sending…' : 'Submit'}
+                    </button>
+                  </>
                 )}
               </div>
             ) : (
@@ -674,12 +881,14 @@ export default function ChatAudit() {
     </div>
     {/* Right pane: the live workflow graph — adds nodes as the plan arrives, lights
         each up as its agent runs, and shows the final status. */}
-    <aside className="canvas-panel" style={{ width: '380px', flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0.7rem' }}>
+    {/* flex 0.6 vs the chat's 1 → the graph takes 37.5% of the row: exactly 75% of
+        the 50% share it had before. */}
+    <aside className="canvas-panel" style={{ flex: 0.6, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0.7rem' }}>
       <h3 className="panel-title" style={{ margin: '0 0 0.4rem', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
         <Share2 size={14} style={{ color: 'var(--accent-purple)' }} /> Workflow graph
       </h3>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
-        <WorkflowGraph graph={graph} />
+        <WorkflowGraph graph={graph} components={components} mcpTools={mcpTools} toolLights={toolLights} />
       </div>
     </aside>
     </div>

@@ -27,6 +27,8 @@
   --text-main: #202124;
   --text-muted: #5f6368;
   --text-dark: #181818;
+  /* Workflow graph: MCP server titles + lit tool labels — dark blue in light mode. */
+  --wf-mcp-title: #174ea6;
 
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   --shadow-neon: 0 4px 12px rgba(26, 115, 232, 0.15), 0 0 1px rgba(26, 115, 232, 0.3);
@@ -60,6 +62,7 @@ body.dark-mode {
   --text-main: #e8eaed;
   --text-muted: #9aa0a6;
   --text-dark: #ffffff;
+  --wf-mcp-title: #8ab4f8;
 
   --shadow-neon: 0 0 15px rgba(138, 180, 248, 0.2), 0 0 3px rgba(138, 180, 248, 0.4);
   --shadow-neon-warning: 0 0 15px rgba(253, 214, 99, 0.2), 0 0 3px rgba(253, 214, 99, 0.4);
@@ -728,3 +731,7 @@ body.dark-mode .prompt-bar-container {
 /* Live workflow-graph node pulse while an agent is running. */
 @keyframes wfPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .wf-running { animation: wfPulse 1.2s ease-in-out infinite; }
+
+/* MCP tool activity LED — blinks while its tool is being invoked. */
+@keyframes wfLedBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.12; } }
+.wf-led-blink { animation: wfLedBlink 0.7s linear infinite; }

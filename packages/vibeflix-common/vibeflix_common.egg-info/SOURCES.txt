@@ -7,6 +7,7 @@ vibeflix_common/memory.py
 vibeflix_common/registry.py
 vibeflix_common/schema_guard.py
 vibeflix_common/serve_a2a.py
+vibeflix_common/telemetry.py
 vibeflix_common.egg-info/PKG-INFO
 vibeflix_common.egg-info/SOURCES.txt
 vibeflix_common.egg-info/dependency_links.txt

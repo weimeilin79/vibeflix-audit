@@ -28,10 +28,10 @@ instead. Result → `aggregate["contract"]` → the final clearance report + aud
                     ┌───────────▼─┐ ┌─────▼──────┐ ┌▼────────┐ ┌▼───────────┐
    orchestrator ──► │ brand_style │ │  vendor_   │ │ pricing │ │ ui_renderer│
    fans out to      │             │ │ clearance  │ │         │ │            │
-   these 3          └──┬───────┬──┘ └─┬────┬───┬─┘ └─────────┘ └────────────┘
-                       │       │      │    │   │
-             mcp_brand │  mcp_ │ mcp_ │ mcp│   │  A2A  (hand-off — only vendor_clearance
-              _style   │ vision│ lic. │ mkt│   └──────►  has LEGAL_A2A_URL) ────────┐
+   these 3          └──────┬──────┘ └─┬────┬───┬─┘ └─────────┘ └────────────┘
+                           │          │    │   │
+                 mcp_brand │     mcp_ │ mcp│   │  A2A  (hand-off — only vendor_clearance
+                  _style   │     lic. │ mkt│   └──────►  has LEGAL_A2A_URL) ────────┐
                                                                                     ▼
                                                               ┌──────────────────────────┐
                                                               │  legal  (:8005)          │
@@ -240,18 +240,20 @@ Registry reference below the table.
 | B1 | grogu | Europe | Resin Statues | `Acme Toys Ltd` (unknown) | Asks for **new-vendor details** (reads `create_vendor` fields) → answer **New Vendor** → vendor created `active` → clears |
 
 ### C. Active exclusivity collision → `blocked`
-| # | Character | Market | Category | Vendor | Contract hit |
-|---|---|---|---|---|---|
-| C1 | grogu | North America | Vinyl Figures | VND-1001 | EXC-4471 Hasbro |
-| C2 | gremlins | North America | Action Figures | VND-1001 | EXC-5120 NECA |
-| C3 | gremlins | Europe | Vinyl Figures | VND-1006 | EXC-5588 Super7 |
-| C4 | stitch | Asia-Pacific | Vinyl Figures | VND-1004 | EXC-5333 Bandai |
-| C5 | minions | North America | Plush | VND-1003 | EXC-5567 Mattel |
+Four exclusivity contracts — ONE per region, each a different trademark, and every
+partner is a **registry vendor** (name + vendor_id). Audit a *different* vendor for
+that character × category × territory to hit the lock:
 
-### D. Expired exclusivity → does NOT block (clears)
-| # | Character | Market | Category | Vendor | Note |
+| # | Character | Market | Category | Vendor | Contract hit (exclusive partner) |
 |---|---|---|---|---|---|
-| D1 | little_green_men | North America | Action Figures | VND-1001 | EXC-5450 Mattel **expired** → cleared |
+| C1 | grogu | North America | Vinyl Figures | VND-1001 | EXC-4471 · Liberty Figure Works (VND-1008) |
+| C2 | gremlins | Europe | Vinyl Figures | VND-1002 | EXC-5588 · Kraków Vinyl Studio (VND-1006) |
+| C3 | stitch | Asia-Pacific | Vinyl Figures | VND-1012 | EXC-5333 · Osaka Craft Works (VND-1004) |
+| C4 | minions | Latin America | Plush | VND-1003 | EXC-5567 · Amazônia Brinquedos (VND-1009) |
+
+### D. ~~Expired exclusivity~~ (removed with the 4-contract trim)
+The trimmed registry keeps no expired examples — e.g. `little_green_men` × North
+America × Action Figures now simply clears (no exclusivity exists for it at all).
 
 ### E. Vendor ineligible for a reason OTHER than category → `blocked`
 | # | Character | Market | Category | Vendor | Reason |
@@ -303,9 +305,10 @@ Registry reference below the table.
   Action/Vinyl/Resin), 1009 Amazônia/BR (LatAm/NA · Plush/Vinyl/Novelty), 1010 Andina/CO
   (LatAm · Action/Apparel/Accessories), **1011 Pampas/AR (LatAm · Resin/Premium —
   PENDING_REVIEW)**, 1012 Taipei (APAC/NA · Vinyl/BlindBox/Action).
-- **Active exclusivity** — grogu·NA·Vinyl/Action (Hasbro), gremlins·NA·Action (NECA),
-  gremlins·EU·Vinyl (Super7), et·EU·BlindBox (Funko), stitch·APAC·Vinyl (Bandai),
-  minions·NA·Plush (Mattel). **Expired** — grogu·EU·BlindBox (Funko), lgm·NA·Action (Mattel).
+- **Active exclusivity (4 — one per region, partners are registry vendors)** —
+  grogu·NA·Vinyl (Liberty Figure Works / VND-1008), gremlins·EU·Vinyl (Kraków Vinyl
+  Studio / VND-1006), stitch·APAC·Vinyl (Osaka Craft Works / VND-1004),
+  minions·LatAm·Plush (Amazônia Brinquedos / VND-1009). No expired examples remain.
 - **Trademark caveats** — grogu & lgm are *pending* in Latin America, *unregistered* in
   Middle East & Africa (→ trademark_customs warnings); stitch/gremlins/minions registered
   everywhere.

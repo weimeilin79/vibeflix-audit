@@ -1,15 +1,16 @@
 # Deploying the Vibeflix audit mesh
 
-The system is split into **7 independently deployable services**:
+The system is split into **9 independently deployable services**:
 
 | Service | Role | Protocol | Local port |
 |---|---|---|---|
 | `app` | frontend (static) + FastAPI + Sourcing Orchestrator (A2A **client**) | HTTP | 8000 |
 | `brand_style` | Brand Style agent (A2A **server**) | A2A/HTTP | 8001 |
-| `ip_counsel` | IP Counsel agent (A2A **server**) | A2A/HTTP | 8002 |
-| `storyline` | Storyline agent (A2A **server**) | A2A/HTTP | 8003 |
-| `mcp_vision_ui` | Mockup parse + A2UI canvas helpers | streamable-HTTP | 9001 |
-| `mcp_legal` | Legal/compliance MCP server | streamable-HTTP | 9002 |
+| `vendor_clearance` | Vendor & Licensing Clearance agent (A2A **server**) | A2A/HTTP | 8002 |
+| `deal_pricing` | Deal Pricing agent (A2A **server**) | A2A/HTTP | 8003 |
+| `ui_renderer` | A2UI presenter agent (A2A **server**) | A2A/HTTP | 8004 |
+| `legal` | Legal Clearance agent (private to vendor_clearance) | A2A/HTTP | 8005 |
+| `mcp_licensing` | Vendor/trademark/exclusivity/contract registry MCP server | streamable-HTTP | 9002 |
 | `mcp_market` | Market & telemetry MCP server | streamable-HTTP | 9003 |
 | `mcp_brand_style` | Brand compliance checks (typo, printed-medium, asset-source) | streamable-HTTP | 9004 |
 
@@ -17,24 +18,26 @@ Wiring is entirely by environment variable, so the same images run locally
 (compose) or on Cloud Run.
 
 ```
-orchestrator ──A2A──> brand_style ──HTTP──> mcp_brand_style, mcp_vision_ui
-            ──A2A──> ip_counsel  ──HTTP──> mcp_legal, mcp_market
-            ──A2A──> storyline   (local FunctionTool, no MCP)
+orchestrator ──A2A──> brand_style      ──HTTP──> mcp_brand_style
+            ──A2A──> vendor_clearance ──HTTP──> mcp_licensing, mcp_market
+                     vendor_clearance ──A2A───> legal ──HTTP──> mcp_licensing
+            ──A2A──> deal_pricing     ──HTTP──> mcp_licensing
+   app      ──A2A──> ui_renderer   (reports → A2UI panels, no MCP)
 ```
 
 ## Environment contract
 
 **app** (orchestrator / A2A client **+ in-process UI-Render agent**)
-- `BRAND_STYLE_A2A_URL`, `IP_COUNSEL_A2A_URL`, `STORYLINE_A2A_URL` — base URLs of the agent services.
+- `BRAND_STYLE_A2A_URL`, `VENDOR_CLEARANCE_A2A_URL`, `DEAL_PRICING_A2A_URL`, `UI_RENDERER_A2A_URL` — base URLs of the agent services.
 - `PORT` — serves UI + `/api/*`.
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI=true` — **the app now calls Gemini itself** for the in-process A2UI presenter (`agents/ui_renderer`), so it needs Vertex access. In compose these come from the `x-vertex-env` anchor + the ADC mount; **on Cloud Run the app's runtime service account needs `roles/aiplatform.user`** (it didn't before — the orchestrator alone made no model calls). Optional `PRESENTER_MODEL` (default `gemini-flash-latest`). If Vertex is unreachable, the presenter falls back to a rule-based summary, so the UI still renders.
 - `REQUEST_IMAGE_BUCKET` (default `vibeflix-request-image`) — target for `/api/upload`; SA needs write.
 - The UI-Render agent runs **in-process** (no service/port of its own) — its code + skill ship inside the app image (`COPY agents/`).
 
-**agents** (`brand_style` / `ip_counsel` / `storyline`)
+**agents** (`brand_style` / `vendor_clearance` / `deal_pricing` / `ui_renderer` / `legal`)
 - `A2A_AGENT` — which agent this container serves.
 - `A2A_HOST`, `A2A_PROTOCOL`, `PORT` — shape the URL published in the agent card (what the orchestrator calls).
-- `MCP_BRAND_STYLE_URL` / `MCP_VISION_UI_URL` / `MCP_LEGAL_URL` / `MCP_MARKET_URL` — only the groups the agent uses (brand_style → brand_style + vision_ui; ip_counsel → legal + market).
+- `MCP_BRAND_STYLE_URL` / `MCP_LICENSING_URL` / `MCP_MARKET_URL` — only the groups the agent uses (brand_style → brand_style; vendor_clearance → licensing + market).
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI=true` — Vertex AI.
 
 **mcp servers**
@@ -121,9 +124,9 @@ Enable it:
 - **Local:** `export FIRESTORE_DATABASE=vibeflix-registry` before `./run_local.sh mcp`
   (uses your ADC).
 - **Mesh/compose:** the **app** service defaults to `vibeflix-registry` for the audit
-  history; the 3 registry servers (`mcp_legal`, `mcp_market`, `mcp_brand_style`) opt in
+  history; the registry servers (`mcp_market`, `mcp_brand_style`) opt in
   via `FIRESTORE_DATABASE=vibeflix-registry docker compose up` (var + ADC mount);
-  `mcp_vision_ui` has no registries.
+  (mcp_licensing's vendors use the same database).
 - **Cloud Run:** set `FIRESTORE_DATABASE` on the app + those services; runtime SA needs
   `roles/datastore.user`.
 
@@ -136,6 +139,24 @@ categories survive restarts; auto-seeded from the in-code defaults on first use,
 `audit_history/{<order_id>}` (the app's completed audits — inputs, per-workflow reports,
 executed contract). Edit a registry doc → the check reflects it (e.g. bump
 `market_policy/sourcing_caps.authorized_max_skus` to change the vendor cap).
+
+## Pub/Sub (live mesh telemetry → the Workflow graph)
+
+Agents, MCP servers, and app functions emit fine-grained events (started ·
+tool_call · needs_input · completed · handoff) onto one topic; the app pulls and
+relays them to the console, so the Workflow graph renders from REAL mesh signals.
+The graph's connections don't change — events only drive each node's state/detail.
+
+```bash
+./deploy/setup_pubsub.sh   # enables the API, creates topic + pull subscription, smoke-tests
+```
+
+Env contract: `PUBSUB_TOPIC=vibeflix-mesh-events` (emitters),
+`PUBSUB_SUBSCRIPTION=vibeflix-mesh-events-app` (the app's bridge). The event JSON
+schema lives in the script header — `{run_id, source, node, event, status, detail,
+ts}` with `source`/`event` mirrored as message attributes. On Cloud Run, emitters
+need `roles/pubsub.publisher` on the topic and the app `roles/pubsub.subscriber`
+on the subscription.
 
 **Reset to the original demo state** — either the **Reset database** button in the
 console's Audit History tab (calls `POST /api/reset`: default vendors, contracts
@@ -207,7 +228,7 @@ REPO=us-central1-docker.pkg.dev/$PROJECT/vibeflix
 
 # 1) Build & push images (Cloud Build or local docker buildx)
 gcloud builds submit --tag $REPO/mcp-legal     --config /dev/stdin <<< "steps: [{name: gcr.io/cloud-builders/docker, args: [build, -f, deploy/Dockerfile.mcp, --build-arg, GROUP=mcp_legal, -t, $REPO/mcp-legal, .]}]"
-# ...repeat for mcp_vision_ui, mcp_market (Dockerfile.mcp, different GROUP),
+# ...repeat for mcp_market, mcp_brand_style (Dockerfile.mcp, different GROUP),
 #    the agents (Dockerfile.agent), and app (Dockerfile.app).
 
 # 2) Deploy MCP servers (set MCP_TRANSPORT so they serve HTTP, not stdio)
@@ -220,7 +241,7 @@ gcloud run deploy brand-style --image $REPO/agent-brand-style --region $REGION \
   --set-env-vars A2A_AGENT=brand_style,A2A_PROTOCOL=https,A2A_PORT=443,\
 A2A_HOST=brand-style-XXXX.run.app,\
 GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=global,GOOGLE_GENAI_USE_VERTEXAI=true,\
-MCP_VISION_UI_URL=$MCP_VISION_UI_URL,MCP_LEGAL_URL=$MCP_LEGAL_URL \
+MCP_LICENSING_URL=$MCP_LICENSING_URL \
   --allow-unauthenticated
 # A2A_HOST must be this service's own *.run.app host so the published agent card
 # advertises the externally reachable URL.

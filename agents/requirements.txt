@@ -19,3 +19,5 @@ google-cloud-storage>=2.0.0
 # Audit history persistence (app.py) — collection `audit_history` in FIRESTORE_DATABASE.
 google-cloud-firestore>=2.16.0
 python-multipart>=0.0.9
+# Live mesh telemetry (vibeflix_common.telemetry -> Pub/Sub node/tool events).
+google-cloud-pubsub>=2.21.0

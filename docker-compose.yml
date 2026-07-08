@@ -4,7 +4,6 @@
 #   brand_style    Brand Style agent  (A2A server)                           :8001
 #   vendor_clearance  Vendor & Licensing Clearance agent (A2A server)        :8002
 #   deal_pricing   Deal Pricing agent (A2A server)                           :8003
-#   mcp_vision_ui  Vision & UI MCP server (streamable-http)                  :9001
 #   mcp_licensing  Vendor & licensing registry MCP server (streamable-http)  :9002
 #   mcp_market     Market & telemetry MCP server (streamable-http)           :9003
 #
@@ -19,6 +18,9 @@ x-vertex-env: &vertex-env
   GOOGLE_CLOUD_PROJECT: pokedemo-test
   GOOGLE_CLOUD_LOCATION: global
   GOOGLE_GENAI_USE_VERTEXAI: "true"
+  # Live mesh telemetry: workflow nodes + MCP tools publish started/completed
+  # events here (vibeflix_common.telemetry; unset → telemetry no-ops).
+  PUBSUB_TOPIC: ${PUBSUB_TOPIC:-vibeflix-mesh-events}
 
 # Mount local gcloud ADC into agent containers so Vertex calls authenticate.
 x-gcloud-adc: &gcloud-adc
@@ -30,17 +32,10 @@ x-gcloud-adc: &gcloud-adc
 x-registry-env: &registry-env
   GOOGLE_CLOUD_PROJECT: pokedemo-test
   FIRESTORE_DATABASE: ${FIRESTORE_DATABASE:-}
+  PUBSUB_TOPIC: ${PUBSUB_TOPIC:-vibeflix-mesh-events}
 
 services:
   # ---- MCP servers (one per functional group) ----
-  mcp_vision_ui:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.mcp
-      args: { GROUP: mcp_vision_ui }
-    # Fully deterministic — no LLM, so no Vertex creds needed.
-    environment: { MCP_TRANSPORT: streamable-http, HOST: 0.0.0.0, PORT: "9001" }
-
   # Vendor & Licensing Clearance registry. VENDORS are Firestore-backed CRUD
   # (collection `vendors`, auto-seeded from the in-code defaults on first use) so
   # onboarded vendors/categories survive restarts; trademarks/exclusivity/contracts
@@ -94,12 +89,11 @@ services:
       A2A_HOST: brand_style
       A2A_PROTOCOL: http
       PORT: "8001"
-      # Branding compliance checks live on mcp_brand_style; parse/flash helpers
-      # on mcp_vision_ui. The agent does the extraction itself (Vertex).
+      # Deterministic branding checks live on mcp_brand_style; the agent does the
+      # extraction itself (Vertex vision).
       MCP_BRAND_STYLE_URL: http://mcp_brand_style:9004/mcp
-      MCP_VISION_UI_URL: http://mcp_vision_ui:9001/mcp
     volumes: *gcloud-adc
-    depends_on: [mcp_brand_style, mcp_vision_ui]
+    depends_on: [mcp_brand_style]
 
   vendor_clearance:
     build:
@@ -195,13 +189,19 @@ services:
       # The UI-Render agent (paints reports → A2UI panels).
       UI_RENDERER_A2A_URL: http://ui_renderer:8004
       # Read-only: the app pulls the licensed-trademark list (list_trademarks) to
-      # populate the character/trademark picker so callers select a valid id.
+      # populate the character/trademark picker, and lists every server's tools
+      # (/api/mcp/tools) for the Workflow graph's tool LEDs.
       MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
+      MCP_BRAND_STYLE_URL: http://mcp_brand_style:9004/mcp
+      MCP_MARKET_URL: http://mcp_market:9003/mcp
       # Bucket for vendor image uploads (/api/upload).
       REQUEST_IMAGE_BUCKET: vibeflix-request-image
       # Audit history: stored in Firestore (collection `audit_history` in this named
       # db) when reachable; the mounted JSONL below is the offline fallback.
       FIRESTORE_DATABASE: ${FIRESTORE_DATABASE:-vibeflix-registry}
+      # Live-telemetry bridge (/api/mesh/events): streaming pull from this
+      # subscription, fanned out to the console over SSE (tool LEDs, node states).
+      PUBSUB_SUBSCRIPTION: ${PUBSUB_SUBSCRIPTION:-vibeflix-mesh-events-app}
       AUDIT_HISTORY_DIR: /app/data
     volumes:
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro

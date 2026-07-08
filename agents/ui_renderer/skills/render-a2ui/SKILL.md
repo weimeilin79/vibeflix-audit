@@ -1,11 +1,14 @@
 ---
 name: render-a2ui
 description: >-
-  Turn an arbitrary set of compliance-workflow reports into user-friendly panels
-  (title, status, headline, and per-issue lines with a "how to resolve" hint).
-  Reasons about however many reports arrive and whatever shape they take.
+  Two presentation tasks: (1) turn an arbitrary set of compliance-workflow reports
+  into user-friendly panels (title, status, headline, per-issue lines with a "how
+  to resolve" hint); (2) DESIGN the console's dynamic input form — given the tokens
+  the mesh asked for and the surrounding context, choose the right control for
+  each (text / textarea / number / select with options), label it, hint the
+  expected format, and prefill what's already known.
 metadata:
-  version: "2.1.0"
+  version: "3.0.0"
   domain: presentation
 ---
 
@@ -42,3 +45,39 @@ Produce **one panel per report**, in the order the reports appear. For each pane
 
 Be strictly faithful to the data — NEVER invent issues that aren't in a report.
 Keep every string concise. Respond only with the structured schema.
+
+(In this task, leave `prompt` empty and `fields` an empty list.)
+
+# Design the input form (task: "design_input_form")
+
+When the input JSON instead has `"task": "design_input_form"`, the mesh paused to
+ask the operator for more information, and YOU design the form. You receive:
+
+- `needs` — the field tokens the workflows asked for. **One field per token, and the
+  field's `name` MUST be the token VERBATIM** — the backend merges answers by name.
+- `questions` — what the workflows asked, in their words.
+- `reports` — the current workflow reports (context for what each token means:
+  a report's `question`, findings, or `pending_workflow` often spell out exactly
+  what's needed, e.g. create_vendor's required sub-fields).
+- `known_inputs` — everything the operator already provided.
+- `select_options` — authoritative option lists for specific tokens (e.g. the
+  registry's licensed characters). If present for a token, you MUST use them.
+
+For each token, reason from the context and design the control:
+
+- **type** — `textarea` for free-form / multi-part details (e.g. onboarding info
+  listing several sub-fields); `select` (with `options`) when the answer is a
+  choice the question enumerates (yes/no approvals, option A/B decisions, or a
+  `select_options` list); `number` for quantities/amounts; `text` for ids, names,
+  and short values.
+- **label** — short, human-friendly, says what the value is FOR.
+- **placeholder** — the expected format or the sub-fields to include, extracted
+  from the question/report (e.g. "legal name, HQ country, operating territories,
+  product categories…" or "UL / CE / ASTM certificate id").
+- **value** — prefill when the context already contains the obvious answer
+  (e.g. a visual guess the report extracted, or a matching `known_inputs` entry).
+- **required** — true unless the question marks it optional.
+
+Set `prompt` to ONE clear instruction merging the workflows' questions (plain
+language, no duplication). Leave `panels` an empty list in this task. Never
+invent tokens that aren't in `needs`, and never drop one.

@@ -3,3 +3,5 @@ fastmcp>=0.1.0
 # Deterministic typo audit.
 pyspellchecker>=0.8.0
 google-cloud-firestore>=2.0.0
+# Live mesh telemetry (vibeflix_common.telemetry -> Workflow-graph tool LEDs).
+google-cloud-pubsub>=2.21.0

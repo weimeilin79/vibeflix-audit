@@ -199,6 +199,7 @@ def stream_final_report(entry):
             ("Category", contract.get("category")),
             ("Territory", contract.get("territory")),
             ("Royalty", f"{contract.get('royalty_pct')}%" if contract.get("royalty_pct") is not None else None),
+            ("Volume", f"{_fmt(contract.get('production_volume'))} units" if contract.get("production_volume") else None),
             ("Safety cert", contract.get("safety_cert_id")),
             ("HS code", contract.get("hs_code")),
             ("Amendment", contract.get("amendment_id")),

@@ -358,81 +358,49 @@ _TRADEMARKS: dict[str, dict] = {
 
 # ---------------------------------------------------------------------------
 # EXCLUSIVITY — active contracts locking a category to a partner in a territory.
+# Exactly FOUR: one per region, each a different trademark, and every partner is
+# a REGISTRY vendor (name + vendor_id match _VENDORS) so the data is coherent.
 # ---------------------------------------------------------------------------
 _EXCLUSIVITY: dict[str, dict] = {
     "EXC-4471": {
         "contract_id": "EXC-4471",
-        "partner": "Hasbro Inc.",
+        "partner": "Liberty Figure Works LLC",
+        "partner_vendor_id": "VND-1008",
         "character_id": "grogu",
-        "category": "Stylized Vinyl Figurines / Action Figures",
+        "category": "Vinyl Figures",
         "territory": "North America",
         "type": "exclusive",
         "effective": "2023-01-01",
         "expiration": "2028-12-31",
         "status": "active",
     },
-    "EXC-3390": {
-        "contract_id": "EXC-3390",
-        "partner": "Funko LLC",
-        "character_id": "grogu",
-        "category": "Blind Box",
-        "territory": "Europe",
-        "type": "exclusive",
-        "effective": "2022-06-01",
-        "expiration": "2024-05-31",
-        "status": "expired",
-    },
-    "EXC-5120": {
-        "contract_id": "EXC-5120",
-        "partner": "NECA (National Entertainment Collectibles Association)",
-        "character_id": "gremlins",
-        "category": "Action Figures",
-        "territory": "North America",
-        "type": "exclusive",
-        "effective": "2021-03-01", "expiration": "2027-02-28", "status": "active",
-    },
     "EXC-5588": {
         "contract_id": "EXC-5588",
-        "partner": "Super7",
+        "partner": "Kraków Vinyl Studio Sp. z o.o.",
+        "partner_vendor_id": "VND-1006",
         "character_id": "gremlins",
         "category": "Vinyl Figures",
         "territory": "Europe",
         "type": "exclusive",
         "effective": "2023-01-01", "expiration": "2026-12-31", "status": "active",
     },
-    "EXC-5211": {
-        "contract_id": "EXC-5211",
-        "partner": "Funko LLC",
-        "character_id": "et",
-        "category": "Blind Box",
-        "territory": "Europe",
-        "type": "exclusive",
-        "effective": "2020-10-01", "expiration": "2025-09-30", "status": "active",
-    },
     "EXC-5333": {
         "contract_id": "EXC-5333",
-        "partner": "Bandai Namco Holdings Inc.",
+        "partner": "Osaka Craft Works K.K.",
+        "partner_vendor_id": "VND-1004",
         "character_id": "stitch",
         "category": "Vinyl Figures",
         "territory": "Asia-Pacific",
         "type": "exclusive",
         "effective": "2022-04-01", "expiration": "2029-03-31", "status": "active",
     },
-    "EXC-5450": {
-        "contract_id": "EXC-5450",
-        "partner": "Mattel, Inc.",
-        "character_id": "little_green_men",
-        "category": "Action Figures",
-        "territory": "North America",
-        "type": "exclusive",
-        "effective": "2019-01-01", "expiration": "2024-12-31", "status": "expired",
-    },
     "EXC-5567": {
         "contract_id": "EXC-5567",
-        "partner": "Mattel, Inc.",
+        "partner": "Amazônia Brinquedos Ltda.",
+        "partner_vendor_id": "VND-1009",
         "character_id": "minions",
         "category": "Plush",
-        "territory": "North America",
+        "territory": "Latin America",
         "type": "exclusive",
         "effective": "2023-06-01", "expiration": "2028-05-31", "status": "active",
     },
@@ -491,7 +459,7 @@ _RATE_CARDS: dict[str, dict] = {
         "tolerance_pct": 0.05,
     },
     # Lilo & Stitch — A-list evergreen; plush is the signature category and APAC is
-    # the strongest territory (hence the premium there, mirroring the Bandai demand).
+    # the strongest territory (hence the premium there, mirroring the APAC exclusivity demand).
     "stitch": {
         "property": "Stitch (Lilo & Stitch)",
         "character_tier": "A-list",
@@ -514,7 +482,7 @@ _RATE_CARDS: dict[str, dict] = {
         "tolerance_pct": 0.05,
     },
     # Gremlins — cult/retro B-list; collector formats (resin/premium/action) carry a
-    # premium, mass-market plush discounts, Europe strongest (Super7 collector base).
+    # premium, mass-market plush discounts, Europe strongest (EU collector base).
     "gremlins": {
         "property": "Gremlins",
         "character_tier": "B-list",

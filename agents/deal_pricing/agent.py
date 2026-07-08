@@ -27,6 +27,9 @@ from google.adk.agents.context import Context
 from google.adk.events.event import Event
 
 from vibeflix_common.mcp_clients import mcp_toolset
+# Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
+# when unset) — lets the Workflow graph show the mesh working in real time.
+from vibeflix_common.telemetry import instrument_node
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "deal-pricing-audit"
@@ -116,6 +119,7 @@ resolver = LlmAgent(
 
 # ---- the graph -------------------------------------------------------------
 @node(name="evaluate", rerun_on_resume=True)
+@instrument_node("deal_pricing")
 async def evaluate(ctx: Context, node_input):
     """Run the reasoner -> parse its per-component verdict."""
     await ctx.run_node(pricing_reasoner, node_input)
@@ -125,6 +129,7 @@ async def evaluate(ctx: Context, node_input):
 
 
 @node(name="reconcile", rerun_on_resume=True)
+@instrument_node("deal_pricing")
 async def reconcile(ctx: Context, node_input):
     """LOOP: adjudicate UNRESOLVED components until none remain (or MAX_ROUNDS), then rule."""
     report = node_input if isinstance(node_input, dict) else {}
@@ -155,6 +160,7 @@ async def reconcile(ctx: Context, node_input):
     yield Event(output=report)
 
 
+@instrument_node("deal_pricing")
 def finalize(node_input):
     """Emit the final DealPricingReport (content = what A2A returns)."""
     report = node_input if isinstance(node_input, dict) else {}

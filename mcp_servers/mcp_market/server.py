@@ -8,6 +8,12 @@ from vibeflix_common.registry import registry_get
 
 mcp = FastMCP("Market Operations & Telemetry")
 
+# Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
+# (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
+# registration, so new tools are instrumented automatically.
+from vibeflix_common.telemetry import instrument_fastmcp
+instrument_fastmcp(mcp, source="mcp_market")
+
 @mcp.tool()
 def scan_ecom_marketplaces(character_id: str, region: str) -> str:
     """

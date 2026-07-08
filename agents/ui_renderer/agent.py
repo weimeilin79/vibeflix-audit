@@ -36,8 +36,28 @@ class Panel(BaseModel):
     lines: list[Line] = Field(default_factory=list)
 
 
+class Option(BaseModel):
+    value: str
+    label: str
+
+
+class FieldSpec(BaseModel):
+    """One input control for the console's dynamic form (task: design_input_form)."""
+
+    name: str                # MUST equal the requested token verbatim (merged by name)
+    label: str               # human-friendly title for the control
+    type: str = "text"       # text | textarea | number | select
+    placeholder: str = ""    # hint text incl. expected format / required sub-fields
+    value: str = ""          # prefill, when a sensible value is already known
+    required: bool = True
+    options: list[Option] = Field(default_factory=list)   # for type=select
+
+
 class Presentation(BaseModel):
-    panels: list[Panel]
+    # Report-rendering task → panels; input-form design task → prompt + fields.
+    panels: list[Panel] = Field(default_factory=list)
+    prompt: str = ""
+    fields: list[FieldSpec] = Field(default_factory=list)
 
 
 presenter_agent = LlmAgent(

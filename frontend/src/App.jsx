@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import ChatAudit from './ChatAudit';
 import AuditHistory from './AuditHistory';
+import DatabaseView from './DatabaseView';
 
 // Backend base URL. Empty = same origin (the app container's FastAPI serves both
 // the static frontend and /api). Set VITE_API_URL for the Vite dev server (e.g.
@@ -638,6 +639,12 @@ export default function App() {
               <Database size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Audit History
             </button>
             <button
+              className={`tab-btn ${activeTab === 'database' ? 'active' : ''}`}
+              onClick={() => setActiveTab('database')}
+            >
+              <Layers size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Database
+            </button>
+            <button
               className={`tab-btn ${activeTab === 'usecase' ? 'active' : ''}`}
               onClick={() => setActiveTab('usecase')}
             >
@@ -872,6 +879,12 @@ export default function App() {
         {activeTab === 'history' && (
           <div style={{ width: '100%', height: '100%', overflowY: 'auto' }}>
             <AuditHistory />
+          </div>
+        )}
+
+        {activeTab === 'database' && (
+          <div style={{ width: '100%', height: '100%', overflowY: 'auto' }}>
+            <DatabaseView />
           </div>
         )}
 

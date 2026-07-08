@@ -12,15 +12,14 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 2. **ADK 2.0 Python Agents**: A mesh of independent Python agents:
    - **Sourcing Orchestrator (Router)**: Captures uploads, checks parameters, coordinates state, and invokes display layouts.
    - **Brand Style Compliance Agent (Designer)**: Analyzes logo, fonts, hex swatches, and typographical compliance.
-   - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. Hasbro), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
+   - **Vendor & Licensing Clearance Agent (Counsel)**: Verifies exclusivity collisions (e.g. an exclusive partner vendor holding a territory lock), trademark/customs registration, and marketplace leaks — AND recommends approved manufacturing vendors eligible for the territory + product category.
    - **Deal Pricing Auditor (Cost)**: Audits the vendor's AGREED total consideration (royalty + advance + minimum guarantee) for using the IP against the licensor's rate card — an internal **evaluate→validate→iterate** loop reconciles each component and rules APPROVED / NEEDS-ADJUSTMENT / UNDERPRICED.
    - **Legal Clearance Agent**: A standalone A2A agent — **in this demo only Vendor & Licensing hands off to it, but any agent could**. It clears the legal work (license amendment, certifications, customs/tariff, royalties, insurance) and executes the licensing contract — **reconstructing the process via RAG** over scattered "tribal knowledge" docs (see *Data sources & schemas → Legal knowledge base*). It asks Vendor Clearance for the royalty tier; the licensee safety cert never blocks (it **generates a provisional `PROV-…` id** when none is on file and reports it). It fires on vendor/category **onboarding**, and on the orchestrator's **contract finalization**: when every workflow passes, the orchestrator's `contract_finalize` node re-invokes Vendor Clearance with a `FINALIZE-CONTRACT` brief so the audit always ends with an executed `LC-####` — rendered in the **📜 Final Clearance Report** and archived in the **Audit History** tab.
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
-   - `mcp_vision_ui`: Vision Analyzer & UI Rendering tools.
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
 
-### 10-service distributed mesh
+### 9-service distributed mesh
 
 The orchestrator (a deterministic Workflow graph) fans out to the three domain
 agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
@@ -39,13 +38,13 @@ is its own container/instance.
         ┌──────────────▼─┐ ┌──────────▼───────┐ ┌────▼─────┐ ┌──▼──────────┐
         │  brand_style   │ │ vendor_clearance │ │ pricing  │ │ ui_renderer │
         │     :8001      │ │      :8002       │ │  :8003   │ │   :8004     │
-        └──┬──────────┬──┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
-   HTTP/MCP│          │  HTTP/MCP          │ HTTP/MCP         │  no MCP)    │
-    ┌──────▼──────┐ ┌─▼────────┐ ┌─────────▼────┐ ┌──────────┴───┐
-    │mcp_brand_   │ │mcp_visio │ │mcp_licensing │ │  mcp_market  │  (streamable-HTTP)
-    │style  :9004 │ │n_ui :9001│ │    :9002     │ │    :9003     │
-    └─────────────┘ └──────────┘ └──────────────┘ └──────────────┘
-  brand_style → mcp_brand_style + mcp_vision_ui · vendor_clearance → mcp_licensing + mcp_market
+        └──┬─────────────┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
+   HTTP/MCP│            HTTP/MCP │           │ HTTP/MCP         │  no MCP)    │
+    ┌──────▼──────┐ ┌────────────▼─┐ ┌───────▼──────┐           │             │
+    │mcp_brand_   │ │mcp_licensing │ │  mcp_market  │           └─────────────┘
+    │style  :9004 │ │    :9002     │ │    :9003     │  (streamable-HTTP)
+    └─────────────┘ └──────────────┘ └──────────────┘
+  brand_style → mcp_brand_style · vendor_clearance → mcp_licensing + mcp_market
 ```
 
 Plus a standalone **`legal` agent (:8005)** — **in this demo only `vendor_clearance` hands
@@ -84,7 +83,6 @@ vibeflix/
 │                               #   (each agent's procedure = a versioned ADK Skill / SKILL.md)
 ├── resource/legal/docs/        # 10 scattered "tribal knowledge" legal docs (the RAG corpus source)
 ├── mcp_servers/                # Decoupled MCP servers (one running instance each)
-│   ├── mcp_vision_ui/          # Mockup parse + A2UI canvas helpers
 │   ├── mcp_brand_style/        # Brand compliance checks (typo, printed-medium, asset-source)
 │   ├── mcp_licensing/          # Vendor + trademark + exclusivity registry (in-memory, CRUD)
 │   └── mcp_market/             # Scrapers, ledger limits, governance logs
@@ -113,7 +111,6 @@ overridden from Firestore when `FIRESTORE_DATABASE` is set.
 | **Trademarks** | `mcp_licensing` | in-memory dict | seed | IP/trademark registration per character |
 | **Exclusivity contracts** | `mcp_licensing` | in-memory dict | seed | category × territory exclusivity locks |
 | **Brand allowlist / printed media / approved asset sources** | `mcp_brand_style` | canned defaults, Firestore-overridable (`brand_style_registry`) | via Firestore | brand-compliance reference lists |
-| **Mockup parse** | `mcp_vision_ui` | canned CV stub (`_parse`) | — | structural parse of the uploaded mockup |
 | **Sourcing caps** | `mcp_market` | canned default, Firestore-overridable (`market_policy/sourcing_caps`) | via Firestore | primary-vendor volume ceiling (25,000) |
 | **Marketplace scan / audit map** | `mcp_market` | simulated | — | e-com leak scan, telemetry log |
 | **Audit results** | app | Vertex Agent Engine / Firestore when `AGENT_ENGINE_ID` set, else none | ✅ | persisted audit runs |
@@ -166,7 +163,7 @@ overridden from Firestore when `FIRESTORE_DATABASE` is set.
 **Exclusivity contract** — `scan_global_exclusivity_clauses(character_id, territory)`:
 ```jsonc
 {
-  "contract_id": "EXC-4471", "partner": "Hasbro Inc.", "character_id": "grogu",
+  "contract_id": "EXC-4471", "partner": "Liberty Figure Works LLC", "character_id": "grogu",
   "category": "Stylized Vinyl Figurines / Action Figures",
   "territory": "North America", "type": "exclusive",
   "effective": "2023-01-01", "expiration": "2028-12-31",
@@ -183,10 +180,10 @@ category, **and** no active exclusivity contract locks that category × territor
   Poland, Canada, USA, Brazil, Colombia, Argentina, Taiwan — mixed tiers/statuses.
 - **6 trademarks**: Grogu (Lucasfilm), Gremlins (Warner Bros.), E.T. (Universal),
   Stitch (Disney), Little Green Men (Disney/Pixar), Minions (Universal).
-- **8 exclusivity contracts** — e.g. Hasbro (Grogu vinyl, NA), NECA (Gremlins figures,
-  NA), Super7 (Gremlins vinyl, EU), Bandai (Stitch vinyl, APAC), Funko (E.T. blind box,
-  EU), Mattel (Minions plush, NA) — plus a couple **expired** ones (Funko/Grogu,
-  Mattel/Little Green Men) that correctly no longer block.
+- **4 exclusivity contracts** — one per region, each held by a REGISTRY vendor:
+  Liberty Figure Works/VND-1008 (Grogu vinyl, NA), Kraków Vinyl Studio/VND-1006
+  (Gremlins vinyl, EU), Osaka Craft Works/VND-1004 (Stitch vinyl, APAC), and
+  Amazônia Brinquedos/VND-1009 (Minions plush, LatAm).
 
 ### Legal knowledge base — RAG over "tribal knowledge" (`resource/legal/docs`)
 
@@ -286,7 +283,7 @@ To iterate on a single agent without bringing up the whole A2A mesh, start the
 MCP servers locally and run the agent in-process. In one shell:
 
 ```bash
-./run_local.sh mcp        # starts mcp_vision_ui:9001, mcp_licensing:9002, mcp_market:9003, mcp_brand_style:9004
+./run_local.sh mcp        # starts mcp_licensing:9002, mcp_market:9003, mcp_brand_style:9004
 ```
 
 In another shell:
@@ -304,10 +301,10 @@ against North America calls its `mcp_licensing` + `mcp_market` tools over HTTP a
 returns the real `ClearanceReport`:
 
 ```
-→ scan_global_exclusivity_clauses(grogu, North America)   → Hasbro lock (EXC-4471)
+→ scan_global_exclusivity_clauses(grogu, North America)   → Liberty Figure Works lock (EXC-4471)
 → verify_trademark_record(grogu, North America)           → registered
 → find_vendors(North America, Vinyl Figures, active)      → VND-1001, VND-1003
-→ check_vendor_eligibility(VND-1001, North America, …)    → ineligible (Hasbro)
+→ check_vendor_eligibility(VND-1001, North America, …)    → ineligible (exclusivity lock)
 → scan_ecom_marketplaces(grogu, North America)            → secure
 status: "blocked" · exclusivity_collision (critical) · 2 vendors, both ineligible
 ```
@@ -328,7 +325,6 @@ folder with the MCP URLs exported:
 cd ~/work/vibeflix-audit
 source .venv/bin/activate
 export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
-export MCP_VISION_UI_URL=http://127.0.0.1:9001/mcp
 adk web agents/brand_style
 ```
 
@@ -352,7 +348,7 @@ short-circuits to `status: rejected` (content checks skipped). Output is one
   vision and reports the merged findings.
 
 Export only the `MCP_*_URL`s that agent uses: brand_style needs
-`MCP_BRAND_STYLE_URL` + `MCP_VISION_UI_URL`; `vendor_clearance` needs `MCP_LICENSING_URL` +
+`MCP_BRAND_STYLE_URL`; `vendor_clearance` needs `MCP_LICENSING_URL` +
 `MCP_MARKET_URL`; `deal_pricing` needs `MCP_LICENSING_URL` (for the rate card). Point `adk web` at the **single agent
 folder** (not the
 whole `agents/` dir, which would also try to load the orchestrator and its A2A
@@ -375,13 +371,13 @@ adk web agents/vendor_clearance
 Open http://127.0.0.1:8000, pick **vendor_clearance**, and try:
 
 - *"clear grogu for North America"* → runs the exclusivity + trademark checks, finds
-  Vinyl-Figure vendors, and returns the `ClearanceReport` — **blocked** by the Hasbro
+  Vinyl-Figure vendors, and returns the `ClearanceReport` — **blocked** by the Liberty Figure Works
   lock, with every matching vendor marked ineligible.
 - *"clear grogu for Asia-Pacific"* → **cleared**, with eligible vendors (China / Japan /
   Taiwan).
 - *"which active vendors can make Plush in Latin America?"* → `find_vendors`.
 - *"is Gremlins locked for action figures in North America?"* → `scan_global_exclusivity_clauses`
-  (NECA holds it).
+  (Kraków Vinyl Studio holds the EU vinyl lock).
 - *"onboard a vendor: Hanoi Figure Co in Vietnam, makes Vinyl Figures, operates in
   Asia-Pacific"* → `create_vendor`; *"suspend VND-1003"* → `update_vendor`.
 
@@ -453,7 +449,7 @@ Vendor submitted gs://vibeflix-approved-assets/vendor_request.jpg for North Amer
 ```
 It pulls out the `gs://`/`https` link, the market (say "North America" / "Europe" /
 "Asia"), and the volume (a number):
-- `North America` → `vendor_clearance` returns the Hasbro **blocked** exclusivity collision.
+- `North America` → `vendor_clearance` returns the Liberty Figure Works **blocked** exclusivity collision.
 - `40000` (> 25,000 cap) → **`generate_report`** asks for a split/cap sourcing decision
   (a collected field, Option A/B); `Europe` + `15000` → clean pass.
 
@@ -579,6 +575,6 @@ non-streaming collect loop.
 ## 🎭 Interactive Flow Walkthrough
 
 - **Step 1: Ingest Image / Presets**: Choose a preset scenario or type a prompt commands to start. Sourcing Orchestrator initiates parallel checks across all 3 agents (Brand Style, Vendor & Licensing, Deal Pricing).
-- **Step 2: Style & Exclusivity Collision (Scenario 2)**: The Style Agent flags uncertified font family `SpaceGrotesk` for the text `THE CHILD`. The Vendor & Licensing Clearance Agent flags a North American exclusive distribution conflict with Hasbro (and marks the matching vendors ineligible). Warning overlays are drawn over the product box.
+- **Step 2: Style & Exclusivity Collision (Scenario 2)**: The Style Agent flags uncertified font family `SpaceGrotesk` for the text `THE CHILD`. The Vendor & Licensing Clearance Agent flags a North American exclusive distribution conflict with the exclusive partner vendor (Liberty Figure Works) (and marks the matching vendors ineligible). Warning overlays are drawn over the product box.
 - **Step 3: Autonomous Mesh Resolution / User Remediation**: In Scenario 2, agents negotiate and resolve checks automatically. Otherwise, user manually swaps the market dropdown to **Europe**, re-running verification checks and clearing the blocks.
 - **Step 4: Human-in-the-Loop Sourcing Cap Override (Scenario 3)**: In Scenario 3, procurement volume (40,000) exceeds the primary vendor limit (25,000). Sourcing freezes, presenting a choices card. The user must explicitly choose **Option A** (Split excess 15k units to secondary Addendum Contract SC-7798-EU) or **Option B** (Strictly cap volume at 25k and cancel excess) before they can finalize the release.

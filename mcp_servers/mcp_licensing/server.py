@@ -8,7 +8,7 @@ tools to read, search, create and update them:
   * TRADEMARKS   — IP/trademark registrations per character/mark (owner, classes,
                    per-jurisdiction status, customs recordation, renewal).
   * EXCLUSIVITY  — active exclusivity contracts that lock a product category to a
-                   partner in a territory (the "Hasbro blocks NA vinyl figures" rule).
+                   partner in a territory (the "VND-1008 holds NA grogu vinyl" rule).
 
 STORAGE: plain in-memory dicts, seeded with realistic sample data. They are
 *writable* (create/update mutate them), which is exactly why this isn't the
@@ -27,6 +27,12 @@ from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Vendor & Licensing Clearance Registry")
+
+# Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
+# (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
+# registration, so new tools are instrumented automatically.
+from vibeflix_common.telemetry import instrument_fastmcp
+instrument_fastmcp(mcp, source="mcp_licensing")
 
 # Seed data lives in data.py (keeps this file focused on the tools).
 from data import (_TRADEMARKS, _EXCLUSIVITY, _CONTRACTS, _RATE_CARDS,
@@ -165,6 +171,20 @@ def update_vendor(
 
 
 @mcp.tool()
+def dump_stores() -> str:
+    """READ-ONLY dump of every licensing store — vendors (Firestore-backed),
+    trademarks, exclusivity contracts, executed licensing contracts, and rate
+    cards. Powers the console's Database tab; not for agent reasoning."""
+    return json.dumps({
+        "vendors": vendors_all(),
+        "trademarks": _TRADEMARKS,
+        "exclusivity": _EXCLUSIVITY,
+        "contracts": _CONTRACTS,
+        "rate_cards": _RATE_CARDS,
+    })
+
+
+@mcp.tool()
 def reset_vendors() -> str:
     """DEMO RESET: restore the vendor registry to its pristine default records —
     vendors onboarded at runtime are deleted, default vendors are overwritten (any
@@ -219,7 +239,7 @@ def scan_global_exclusivity_clauses(
     territory: Annotated[str, Field(description=f'Territory to check for an exclusivity lock: {_TERRITORIES}.')],
 ) -> str:
     """Crawl active exclusivity contracts to see if a competitor holds an exclusive
-    lock on this character's product category in this territory (e.g. Hasbro on
+    lock on this character's product category in this territory (e.g. an exclusive partner vendor on
     vinyl figures in North America). Only ACTIVE, non-expired contracts count."""
     cid = (character_id or "").strip().lower()
     hits = [

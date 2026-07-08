@@ -49,10 +49,10 @@ REGISTRIES = {
         },
         "exclusivity_grogu_north_america": {
             "has_conflict": True,
-            "conflicting_partner": "Hasbro Inc.",
+            "conflicting_partner": "Liberty Figure Works LLC (VND-1008)",
             "exclusivity_type": "Stylized Vinyl Figurines / Action Figures",
             "contract_expiration": "2028-12-31",
-            "message": "Block release. Hasbro has exclusive rights for vinyl figures in North America.",
+            "message": "Block release. Liberty Figure Works LLC (VND-1008) holds exclusive rights for Grogu vinyl figures in North America.",
         },
         "trademark_grogu": {
             "character_id": "grogu",
@@ -64,6 +64,7 @@ REGISTRIES = {
     "market_policy": {
         "sourcing_caps": {
             "authorized_max_skus": 25000,
+            "secondary_addendum_contract": "SC-7798-EU",
             "current_sourcing_cap_rules": "Volume overrides > 25,000 trigger structural splitter agent workflows to split capacity into distinct addendums.",
         },
     },

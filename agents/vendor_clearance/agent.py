@@ -34,6 +34,9 @@ from google.adk.agents.context import Context
 from google.adk.events.event import Event
 
 from vibeflix_common.mcp_clients import mcp_toolset
+# Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
+# when unset) — lets the Workflow graph show the mesh working in real time.
+from vibeflix_common.telemetry import instrument_node, emit_event
 
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "vendor-clearance"
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -294,6 +297,7 @@ MAX_LEGAL_ROUNDS = 5
 
 
 @node(name="clearance", rerun_on_resume=True)
+@instrument_node("vendor_clearance")
 async def clearance(ctx: Context, node_input):
     """Run the clearance reasoner and emit its report. (The reasoner is a local LlmAgent,
     so it runs via ctx.run_node — same as the orchestrator runs its LLM helpers.)"""
@@ -309,6 +313,7 @@ async def clearance(ctx: Context, node_input):
 
 
 @node(name="legal_clearance", rerun_on_resume=True)
+@instrument_node("vendor_clearance")
 async def legal_clearance(ctx: Context, node_input):
     """DISTINCT node for the legal hand-off (visible in the trace). Goes back and forth
     with the independent legal agent (the app never touches it):
@@ -322,6 +327,13 @@ async def legal_clearance(ctx: Context, node_input):
     if not lr or not _LEGAL_URL:
         yield Event(output=report)
         return
+
+    # The legal hand-off is REALLY happening (this node also runs as a no-op
+    # pass-through on audits with no legal work, so its own started/completed events
+    # can't mean "legal is working"). This dedicated `node: legal` event makes the
+    # Legal node appear in the Workflow graph the moment the hand-off starts.
+    emit_event("vendor_clearance", "started", node="legal",
+               detail=f"hand-off: {lr.get('vendor_id')} × {lr.get('category')}")
 
     clarifications: list = []
     for _ in range(MAX_LEGAL_ROUNDS):
@@ -344,6 +356,8 @@ async def legal_clearance(ctx: Context, node_input):
             report["question"] = result.get("question", "")
             report["needs"] = result.get("needs") or ["legal_safety_cert"]
             print(f"[vendor_clearance] legal → USER: {report['question'][:70]!r}", flush=True)
+            emit_event("vendor_clearance", "needs_input", node="legal",
+                       detail=report["question"][:120])
             yield Event(output=report)
             return
 
@@ -365,14 +379,19 @@ async def legal_clearance(ctx: Context, node_input):
             continue
         _apply_legal(report, True, cid,
                      vendor_id=lr.get("vendor_id", ""), safety_cert=result.get("safety_cert", ""))
+        emit_event("vendor_clearance", "completed", node="legal", status="cleared",
+                   detail=f"contract {cid} executed")
         break
     else:
         # Loop exhausted without an executed contract — legal did NOT clear it.
         print("[vendor_clearance] legal never reached `done` — reporting blocked", flush=True)
         _apply_legal(report, False, "", vendor_id=lr.get("vendor_id", ""))
+        emit_event("vendor_clearance", "failed", node="legal", status="blocked",
+                   detail="legal never reached done")
     yield Event(output=report)
 
 
+@instrument_node("vendor_clearance")
 def finalize(node_input):
     """Emit the final ClearanceReport — content is what A2A surfaces to the orchestrator."""
     report = node_input if isinstance(node_input, dict) else {}
