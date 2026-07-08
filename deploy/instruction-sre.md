@@ -97,11 +97,15 @@ export LEGAL_A2A_URL=<legal's A2A card URL — printed above>
 
 Deploys take 5–10 min each and continue server-side if the CLI times out.
 
-**3c. Agent identity (preview).** Enable per-agent identity on each engine so
-every agent is its own principal — that's what step 4's policies bind to:
+**3c. Agent identity (preview).** `deploy_agents.sh` finishes by running
+`deploy/enable_agent_identity.py`, which sets the engine config field
+`identity_type = types.IdentityType.AGENT_IDENTITY` (v1beta1 update) on every
+vibeflix engine and writes each agent's `principal://…` to
+`deploy/agent_identities.json` — those principals are what step 4's policies and
+per-agent IAM bind to. Re-run it standalone anytime:
 
 ```bash
-agents-cli deploy --agent-identity …   # per engine; or the Agent Platform console
+PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity.py
 ```
 
 If the preview misbehaves, the shared `vibeflix-agents` SA from 3a is the

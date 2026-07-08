@@ -68,6 +68,11 @@ for SPEC in "${SPECS[@]}"; do
 done
 
 echo
+echo "[deploy_agents] enabling AGENT IDENTITY on the deployed engines (v1beta1)…"
+PROJECT="$PROJECT" REGION="$REGION" "$ROOT/.venv/bin/python" "$HERE/enable_agent_identity.py" \
+  || echo "  ⚠️ identity update failed — re-run deploy/enable_agent_identity.py (preview surface)"
+
+echo
 echo "[deploy_agents] engines:"
 gcloud ai reasoning-engines list --project "$PROJECT" --region "$REGION" \
   --format 'table(displayName,name)' 2>/dev/null \

@@ -8,8 +8,10 @@ credentials anywhere. In the cloud the same hops are IAM-gated:
 
 RUN_LOCAL decides which world we're in:
 
-    RUN_LOCAL=true   (or unset — the DEFAULT) → no auth attached; local behavior
-    RUN_LOCAL=false  → every helper below mints the right Google token per request
+    unset            → AUTO-DETECT: deployed on GCP (Cloud Run / Agent Runtime /
+                       GCE — K_SERVICE or metadata server) → auth ON; else local
+    RUN_LOCAL=true   → force local (no auth), even on GCP
+    RUN_LOCAL=false  → force cloud auth, even off GCP (laptop → cloud services)
 
 Token choice is by host: ``*.googleapis.com`` → OAuth access token (Vertex /
 Agent Runtime APIs); anything else (``*.run.app``, gateway domains) → OIDC ID
@@ -27,9 +29,40 @@ from urllib.parse import urlsplit
 import httpx
 
 
+_AUTO_DETECTED: bool | None = None
+
+
+def _on_gcp() -> bool:
+    """Are we running ON Google Cloud? Cloud Run / Functions set K_SERVICE; for
+    everything else (Agent Runtime, GCE) the metadata server is the canonical
+    tell — reachable only inside GCP."""
+    if os.environ.get("K_SERVICE") or os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+        return True
+    import socket
+    try:
+        with socket.create_connection(("metadata.google.internal", 80), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def run_local() -> bool:
-    """True unless RUN_LOCAL is explicitly false/0/no — local is the safe default."""
-    return os.environ.get("RUN_LOCAL", "true").strip().lower() not in ("false", "0", "no")
+    """Deployed to gcloud = not local — detected automatically. RUN_LOCAL, when
+    set, is an explicit OVERRIDE in either direction:
+
+        RUN_LOCAL=true    force local (no auth) even on GCP
+        RUN_LOCAL=false   force cloud auth even off GCP (e.g. laptop → cloud MCPs)
+        unset             auto-detect (on GCP → auth on; otherwise local)
+    """
+    v = os.environ.get("RUN_LOCAL", "").strip().lower()
+    if v in ("true", "1", "yes"):
+        return True
+    if v in ("false", "0", "no"):
+        return False
+    global _AUTO_DETECTED
+    if _AUTO_DETECTED is None:
+        _AUTO_DETECTED = not _on_gcp()
+    return _AUTO_DETECTED
 
 
 class _TokenMinter:

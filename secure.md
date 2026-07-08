@@ -2,12 +2,18 @@
 
 Every network hop in the mesh is plain http locally but IAM-gated in the cloud.
 This document lists **exactly which files changed** to attach Google credentials,
-and how the mechanism works. Everything is gated by one env var:
+and how the mechanism works. Deployed to gcloud = not local, so the mode is
+**auto-detected**; `RUN_LOCAL` exists only as an explicit override:
 
 | `RUN_LOCAL` | Behavior |
 |---|---|
-| `true` **or unset (default)** | No credentials attached anywhere — identical to the original local behavior |
-| `false` | Every MCP + A2A call carries a fresh Google token, minted per request |
+| **unset (normal)** | **Auto-detect**: running on GCP (Cloud Run/Functions set `K_SERVICE`; Agent Runtime/GCE are detected via the metadata server, which only resolves inside GCP) → credentials ON; anywhere else → local, no credentials |
+| `true` | Force local (no auth) even on GCP |
+| `false` | Force cloud auth even off GCP (e.g. laptop pointing at cloud MCPs) |
+
+Detection runs once per process and is cached. The compose file pins
+`RUN_LOCAL: "true"` and the cloud scripts pin `RUN_LOCAL=false` — both are
+now belt-and-suspenders rather than required.
 
 Token choice is automatic, by destination host:
 
