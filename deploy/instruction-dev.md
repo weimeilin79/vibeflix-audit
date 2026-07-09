@@ -148,48 +148,59 @@ for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
 done
 ```
 
-**3b. Deploy each agent as its own reasoning engine** (source-based, A2A mode;
-Agent Runtime is REGIONAL — Gemini inside the agents stays `global`):
+**3b. Deploy each agent as its own reasoning engine.** The ADK 2.3 CLI packages
+the agent FOLDER + a generated Dockerfile; the engine serves **A2A automatically**
+(no flag). Three things to know about this CLI:
+
+- it installs `agents/<name>/requirements.txt` from INSIDE the folder — each
+  agent has one (it pins `google-adk[a2a]==2.3.0` and pulls `vibeflix-common`
+  from the repo's git URL; private repo → publish the package to an Artifact
+  Registry python repo and swap that line);
+- env vars go in a file passed via `--env_file`; the runtime `service_account`
+  goes in a JSON passed via `--agent_engine_config_file`;
+- **without `--agent_engine_id` every run CREATES a new engine** — pass the
+  existing ID (from the list command below) to update instead.
 
 ```bash
-gsutil mb -p $PROJECT -l $REGION gs://$PROJECT-vibeflix-agent-staging
-
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
 export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
 export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
+export RAG_CORPUS=<from step 1d>
 
-COMMON="RUN_LOCAL=false,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=global,PUBSUB_TOPIC=vibeflix-mesh-events"
-
-export RAG_CORPUS=<from step 1d>          # projects/…/locations/us-central1/ragCorpora/…
+# engine config: the runtime SA (identity comes in 3c)
+cat > /tmp/engine_config.json <<EOF
+{"service_account": "vibeflix-agents@$PROJECT.iam.gserviceaccount.com"}
+EOF
 
 # 1/5 — brand_style (vision + deterministic brand checks)
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_BRAND_STYLE_URL=%s\n' "$MCP_BRAND_STYLE_URL" > /tmp/env_brand_style
 .venv/bin/adk deploy agent_engine agents/brand_style --project $PROJECT --region $REGION \
-  --staging_bucket gs://$PROJECT-vibeflix-agent-staging \
-  --service_account vibeflix-agents@$PROJECT.iam.gserviceaccount.com \
-  --display_name vibeflix-brand-style --a2a \
-  --env_vars "$COMMON,MCP_BRAND_STYLE_URL=$MCP_BRAND_STYLE_URL"
+  --display_name vibeflix-brand-style \
+  --env_file /tmp/env_brand_style --agent_engine_config_file /tmp/engine_config.json
 
 # 2/5 — deal_pricing (rate-card reconciliation)
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\n' "$MCP_LICENSING_URL" > /tmp/env_deal_pricing
 .venv/bin/adk deploy agent_engine agents/deal_pricing --project $PROJECT --region $REGION \
-  --staging_bucket gs://$PROJECT-vibeflix-agent-staging \
-  --service_account vibeflix-agents@$PROJECT.iam.gserviceaccount.com \
-  --display_name vibeflix-deal-pricing --a2a \
-  --env_vars "$COMMON,MCP_LICENSING_URL=$MCP_LICENSING_URL"
+  --display_name vibeflix-deal-pricing \
+  --env_file /tmp/env_deal_pricing --agent_engine_config_file /tmp/engine_config.json
 
 # 3/5 — ui_renderer (A2UI presenter + form designer; no MCP)
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\n' > /tmp/env_ui_renderer
 .venv/bin/adk deploy agent_engine agents/ui_renderer --project $PROJECT --region $REGION \
-  --staging_bucket gs://$PROJECT-vibeflix-agent-staging \
-  --service_account vibeflix-agents@$PROJECT.iam.gserviceaccount.com \
-  --display_name vibeflix-ui-renderer --a2a \
-  --env_vars "$COMMON"
+  --display_name vibeflix-ui-renderer \
+  --env_file /tmp/env_ui_renderer --agent_engine_config_file /tmp/engine_config.json
 
 # 4/5 — legal (RAG-discovered process; NO doc volume in the cloud → RAG_CORPUS)
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nRAG_CORPUS=%s\nRAG_LOCATION=%s\n' \
+  "$MCP_LICENSING_URL" "$RAG_CORPUS" "$REGION" > /tmp/env_legal
 .venv/bin/adk deploy agent_engine agents/legal --project $PROJECT --region $REGION \
-  --staging_bucket gs://$PROJECT-vibeflix-agent-staging \
-  --service_account vibeflix-agents@$PROJECT.iam.gserviceaccount.com \
-  --display_name vibeflix-legal --a2a \
-  --env_vars "$COMMON,MCP_LICENSING_URL=$MCP_LICENSING_URL,RAG_CORPUS=$RAG_CORPUS,RAG_LOCATION=$REGION"
+  --display_name vibeflix-legal \
+  --env_file /tmp/env_legal --agent_engine_config_file /tmp/engine_config.json
 ```
+
+(`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` are deliberately absent from the
+env files — the CLI intercepts them; Gemini's `global` location ships in each
+agent folder's own `.env`.)
 
 Each deploy takes 5–10 min (continues server-side if the CLI times out). List
 the engines and capture their ids:
@@ -212,13 +223,13 @@ resolves it for you if in doubt).
 
 ```bash
 # 5/5 — vendor_clearance LAST: it needs legal's A2A card URL for the hand-off
-export LEGAL_A2A_URL=<legal's A2A card base from the deploy output above>
+export LEGAL_A2A_URL=<legal's A2A base from the list above>
 
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nMCP_MARKET_URL=%s\nLEGAL_A2A_URL=%s\n' \
+  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "$LEGAL_A2A_URL" > /tmp/env_vendor_clearance
 .venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION \
-  --staging_bucket gs://$PROJECT-vibeflix-agent-staging \
-  --service_account vibeflix-agents@$PROJECT.iam.gserviceaccount.com \
-  --display_name vibeflix-vendor-clearance --a2a \
-  --env_vars "$COMMON,MCP_LICENSING_URL=$MCP_LICENSING_URL,MCP_MARKET_URL=$MCP_MARKET_URL,LEGAL_A2A_URL=$LEGAL_A2A_URL"
+  --display_name vibeflix-vendor-clearance \
+  --env_file /tmp/env_vendor_clearance --agent_engine_config_file /tmp/engine_config.json
 ```
 
 **3c. Agent identity (preview).** Give each engine its own principal — this is

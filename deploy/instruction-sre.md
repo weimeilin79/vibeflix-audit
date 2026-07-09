@@ -83,8 +83,13 @@ terraform -chdir=deploy/terraform/agents init
 terraform -chdir=deploy/terraform/agents apply -var project=$PROJECT -var region=$REGION
 ```
 
-**3b. Deploy the 5 engines** (source-based, A2A-exposed; regional — Gemini stays
-`global` inside, the script sets both):
+**3b. Deploy the 5 engines.** `deploy_agents.sh` drives the ADK 2.3 CLI: each
+agent folder (with its own `requirements.txt`, incl. `vibeflix-common` from the
+repo git URL) becomes one engine; A2A serving is automatic; the script passes the
+runtime SA via the engine-config file, ships env via `--env_file`, and re-runs
+UPDATE the same engine (it resolves `--agent_engine_id` by display name instead
+of duplicating). Engines are regional; Gemini's `global` location ships in each
+agent's own `.env`:
 
 ```bash
 export $(terraform -chdir=deploy/terraform/mcp output -json mcp_urls | jq -r 'to_entries[] | "\(.key)=\(.value)"')

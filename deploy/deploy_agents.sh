@@ -2,21 +2,24 @@
 #
 # deploy_agents.sh — push the 5 agents to Vertex AI Agent Runtime (cloud phase 2).
 #
-# Agent Runtime is SOURCE-based (no images): each agents/<name>/ package is
-# deployed as its own reasoning engine, exposed over A2A so the orchestrator
-# keeps speaking the same protocol it does locally. IAM lives in
-# deploy/terraform/agents (apply that first); this script only pushes code + env.
+# Built for the ADK 2.3 `adk deploy agent_engine` CLI, which:
+#   • packages the agent FOLDER + a generated Dockerfile (image-based; the
+#     engine serves A2A automatically — no flag)
+#   • installs agents/<name>/requirements.txt from INSIDE the folder — each
+#     agent has one (incl. vibeflix-common via the repo git URL)
+#   • takes env via --env_file and extra engine config (service_account) via
+#     --agent_engine_config_file
+#   • CREATES a new engine unless --agent_engine_id is passed → we look up the
+#     existing engine by display name so re-runs UPDATE instead of duplicating
 #
-# Prereqs:
-#   terraform -chdir=deploy/terraform/agents apply       # SAs + IAM
-#   deploy/terraform/mcp applied (MCP endpoints exist)   # or gateway URLs ready
-#   .venv with google-adk[a2a] (repo dev venv works)
+# After the deploys it enables AGENT IDENTITY on every engine
+# (deploy/enable_agent_identity.py — v1beta1 `identity_type` config update) and
+# writes the principals to deploy/agent_identities.json.
 #
-# Config from deploy/.env (PROJECT, REGION, STAGING_BUCKET); per-run override:
-#   PROJECT=… REGION=us-central1 ./deploy/deploy_agents.sh [agent_name]
-#
-# ⚠️ Agent Runtime location is REGIONAL (us-central1) — Gemini keeps
-#    GOOGLE_CLOUD_LOCATION=global INSIDE the agents; the two coexist.
+# Prereqs: terraform -chdir=deploy/terraform/agents apply (SAs + IAM);
+#          MCP endpoints exported (terraform -chdir=deploy/terraform/mcp output mcp_urls).
+# Config from deploy/.env; usage:
+#   ./deploy/deploy_agents.sh [agent_name]
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(dirname "$HERE")"
@@ -24,58 +27,86 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(dirname "$HERE")"
 
 PROJECT="${PROJECT:?set PROJECT in deploy/.env}"
 REGION="${REGION:-us-central1}"
-STAGING_BUCKET="${STAGING_BUCKET:-gs://$PROJECT-vibeflix-agent-staging}"
 AGENTS_SA="vibeflix-agents@$PROJECT.iam.gserviceaccount.com"
-ADK="$ROOT/.venv/bin/adk"
+ADK="$ROOT/.venv/bin/adk"; PY="$ROOT/.venv/bin/python"
 ONLY="${1:-}"
+export PROJECT REGION
 
-# The MCP env contract — from the gateway once phase 2D is live, else the
-# terraform/mcp outputs. Export MCP_*_URL before running to override.
 MCP_LICENSING_URL="${MCP_LICENSING_URL:?export the MCP endpoints (terraform -chdir=deploy/terraform/mcp output mcp_urls)}"
 MCP_MARKET_URL="${MCP_MARKET_URL:?}"
 MCP_BRAND_STYLE_URL="${MCP_BRAND_STYLE_URL:?}"
 
-gsutil ls -b "$STAGING_BUCKET" >/dev/null 2>&1 || gsutil mb -p "$PROJECT" -l "$REGION" "$STAGING_BUCKET"
+# Engine config (beyond env): the runtime service account. (Agent identity is
+# applied post-deploy — it's a v1beta1 update, see enable_agent_identity.py.)
+CFG="$(mktemp -d)/engine_config.json"
+printf '{"service_account": "%s"}\n' "$AGENTS_SA" > "$CFG"
 
-# agent dir | extra env (comma-sep KEY=VALUE)
-COMMON="RUN_LOCAL=false,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=global,PUBSUB_TOPIC=${PUBSUB_TOPIC:-vibeflix-mesh-events}"
-SPECS=(
-  "brand_style|MCP_BRAND_STYLE_URL=$MCP_BRAND_STYLE_URL"
-  "deal_pricing|MCP_LICENSING_URL=$MCP_LICENSING_URL"
-  "ui_renderer|"
-  "legal|MCP_LICENSING_URL=$MCP_LICENSING_URL,RAG_CORPUS=${RAG_CORPUS:?legal needs RAG_CORPUS (deploy/setup_legal_rag.py) — no doc volumes on Agent Runtime},RAG_LOCATION=${RAG_LOCATION:-us-central1}"
-  # vendor_clearance LAST: needs legal's A2A URL. Deploy legal first, then set
-  # LEGAL_A2A_URL from deploy/agents_metadata.json and re-run for vendor_clearance.
-  "vendor_clearance|MCP_LICENSING_URL=$MCP_LICENSING_URL,MCP_MARKET_URL=$MCP_MARKET_URL,LEGAL_A2A_URL=${LEGAL_A2A_URL:-}"
-)
+# Env shipped to every engine. GOOGLE_CLOUD_PROJECT/LOCATION are deliberately
+# NOT here (the CLI intercepts them; Gemini's `global` location comes from the
+# agent folder's own .env, which ships with the source).
+COMMON_ENV="RUN_LOCAL=false
+GOOGLE_GENAI_USE_VERTEXAI=true
+PUBSUB_TOPIC=${PUBSUB_TOPIC:-vibeflix-mesh-events}"
 
-for SPEC in "${SPECS[@]}"; do
-  IFS='|' read -r NAME EXTRA <<<"$SPEC"
-  [ -n "$ONLY" ] && [ "$NAME" != "$ONLY" ] && continue
-  if [ "$NAME" = "vendor_clearance" ] && [ -z "${LEGAL_A2A_URL:-}" ]; then
-    echo "── skipping vendor_clearance (set LEGAL_A2A_URL to legal's runtime A2A URL first)"; continue
-  fi
-  ENVS="$COMMON"; [ -n "$EXTRA" ] && ENVS="$COMMON,$EXTRA"
-  echo "── deploying $NAME to Agent Runtime ($REGION)…"
+engine_id_for() {  # display name → existing engine resource ID ('' if none)
+  "$PY" - "$1" <<'PYEOF'
+import os, sys, vertexai
+c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
+for e in c.agent_engines.list():
+    if e.api_resource.display_name == sys.argv[1]:
+        print(e.api_resource.name.rsplit("/", 1)[-1]); break
+PYEOF
+}
+
+deploy_one() {  # $1 agent dir name, $2 extra env (newline-separated KEY=VALUE)
+  local NAME="$1" EXTRA="${2:-}" DISPLAY ENVF EID
+  DISPLAY="vibeflix-${NAME//_/-}"
+  ENVF="$(mktemp)"
+  printf '%s\n%s\n' "$COMMON_ENV" "$EXTRA" > "$ENVF"
+  EID="$(engine_id_for "$DISPLAY")"
+  echo "── $NAME → $DISPLAY $([ -n "$EID" ] && echo "(update $EID)" || echo "(create)")"
   "$ADK" deploy agent_engine "$ROOT/agents/$NAME" \
     --project "$PROJECT" --region "$REGION" \
-    --staging_bucket "$STAGING_BUCKET" \
-    --service_account "$AGENTS_SA" \
-    --display_name "vibeflix-$NAME" \
-    --a2a \
-    --env_vars "$ENVS" \
+    --display_name "$DISPLAY" \
+    --env_file "$ENVF" \
+    --agent_engine_config_file "$CFG" \
+    ${EID:+--agent_engine_id "$EID"} \
     | tee "$HERE/.deploy_$NAME.log"
-done
+}
+
+run_for() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+
+run_for brand_style  && deploy_one brand_style  "MCP_BRAND_STYLE_URL=$MCP_BRAND_STYLE_URL"
+run_for deal_pricing && deploy_one deal_pricing "MCP_LICENSING_URL=$MCP_LICENSING_URL"
+run_for ui_renderer  && deploy_one ui_renderer  ""
+run_for legal        && deploy_one legal "MCP_LICENSING_URL=$MCP_LICENSING_URL
+RAG_CORPUS=${RAG_CORPUS:?legal needs RAG_CORPUS (deploy/setup_legal_rag.py) — no doc volumes on Agent Runtime}
+RAG_LOCATION=${RAG_LOCATION:-us-central1}"
+if run_for vendor_clearance; then
+  if [ -n "${LEGAL_A2A_URL:-}" ]; then
+    deploy_one vendor_clearance "MCP_LICENSING_URL=$MCP_LICENSING_URL
+MCP_MARKET_URL=$MCP_MARKET_URL
+LEGAL_A2A_URL=$LEGAL_A2A_URL"
+  else
+    echo "── skipping vendor_clearance: export LEGAL_A2A_URL=<legal engine's A2A URL> and re-run"
+    echo "   ./deploy/deploy_agents.sh vendor_clearance"
+  fi
+fi
 
 echo
-echo "[deploy_agents] enabling AGENT IDENTITY on the deployed engines (v1beta1)…"
-PROJECT="$PROJECT" REGION="$REGION" "$ROOT/.venv/bin/python" "$HERE/enable_agent_identity.py" \
+echo "[deploy_agents] enabling AGENT IDENTITY (v1beta1 identity_type update)…"
+"$PY" "$HERE/enable_agent_identity.py" \
   || echo "  ⚠️ identity update failed — re-run deploy/enable_agent_identity.py (preview surface)"
 
 echo
 echo "[deploy_agents] engines:"
-gcloud ai reasoning-engines list --project "$PROJECT" --region "$REGION" \
-  --format 'table(displayName,name)' 2>/dev/null \
-  || echo "  (list via: python -c 'import vertexai; …agent_engines.list()' if gcloud lacks the surface)"
-echo "Record each agent's A2A card URL (…/reasoningEngines/<ID>/.well-known/agent-card.json)"
-echo "then export LEGAL_A2A_URL and re-run for vendor_clearance if it was skipped."
+"$PY" - <<'PYEOF'
+import os, vertexai
+c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
+for e in c.agent_engines.list():
+    r = e.api_resource
+    if r.display_name.startswith("vibeflix-"):
+        print(f"  {r.display_name:28s} {r.name}")
+PYEOF
+echo "A2A base per engine: https://$REGION-aiplatform.googleapis.com/v1/<resource name>"
+echo "If vendor_clearance was skipped: export LEGAL_A2A_URL from legal's entry above, re-run for it."
