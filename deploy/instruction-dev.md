@@ -224,13 +224,10 @@ Each deploy takes 5–10 min (continues server-side if the CLI times out). List
 the engines and capture their ids:
 
 ```bash
-.venv/bin/python - <<'PY'
-import os, vertexai
-client = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
-for e in client.agent_engines.list():
-    r = e.api_resource
-    print(f"{r.display_name or '(unnamed)':28s} {r.name}")
-PY
+# no gcloud surface exists for Agent Runtime — use its REST API directly:
+curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
+  | jq -r '.reasoningEngines[] | "\(.displayName // "(unnamed)")\t\(.name)"'
 ```
 
 An engine's A2A base is
@@ -299,10 +296,9 @@ and bind step-4 policies per registered-agent entry (coarser but works today).
 **3d. Verify each engine** answers over A2A:
 
 ```bash
-for E in $(.venv/bin/python -c "
-import os, vertexai
-c = vertexai.Client(project=os.environ['PROJECT'], location=os.environ['REGION'])
-print(' '.join(e.api_resource.name for e in c.agent_engines.list()))"); do
+for E in $(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
+  | jq -r '.reasoningEngines[] | select(.displayName // "" | startswith("vibeflix-")) | .name'); do
   echo "── $E"
   agents-cli run --url "$E" --mode a2a "ping — reply with your agent name"
 done
@@ -437,20 +433,15 @@ gcloud pubsub subscriptions add-iam-policy-binding vibeflix-mesh-events-app-clou
   --member serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com --role roles/pubsub.subscriber
 
 # 5b. collect the wiring: each agent's A2A base URL from its engine resource name
-declare -A ENGINE
-while read -r NAME RES; do ENGINE[$NAME]=$RES; done < <(.venv/bin/python - <<'PY'
-import os, vertexai
-c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
-for e in c.agent_engines.list():
-    r = e.api_resource
-    print(r.display_name or "(unnamed)", r.name)
-PY
-)
+#     (no gcloud surface for Agent Runtime — REST + jq)
 A2A_BASE="https://$REGION-aiplatform.googleapis.com/v1"
-BRAND_URL=$A2A_BASE/${ENGINE[vibeflix-brand-style]}
-VENDOR_URL=$A2A_BASE/${ENGINE[vibeflix-vendor-clearance]}
-PRICING_URL=$A2A_BASE/${ENGINE[vibeflix-deal-pricing]}
-UI_URL=$A2A_BASE/${ENGINE[vibeflix-ui-renderer]}
+ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "$A2A_BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
+eng() { echo "$ENGINES_JSON" | jq -r --arg n "$1" '.reasoningEngines[] | select(.displayName==$n) | .name'; }
+BRAND_URL=$A2A_BASE/$(eng vibeflix-brand-style)
+VENDOR_URL=$A2A_BASE/$(eng vibeflix-vendor-clearance)
+PRICING_URL=$A2A_BASE/$(eng vibeflix-deal-pricing)
+UI_URL=$A2A_BASE/$(eng vibeflix-ui-renderer)
 # MCP_*_URL: the gateway per-server endpoints from step 4e (still exported).
 
 # 5c. build + deploy
