@@ -89,7 +89,8 @@ repo git URL) becomes one engine; A2A serving is automatic; the script passes th
 runtime SA via the engine-config file, ships env via `--env_file`, and re-runs
 UPDATE the same engine (it resolves `--agent_engine_id` by display name instead
 of duplicating). Engines are regional; Gemini's `global` location ships in each
-agent's own `.env`:
+agent's own `.env` — those files are gitignored, so on a fresh clone the script
+**creates any missing `agents/<name>/.env`** from `$PROJECT` automatically:
 
 ```bash
 export $(terraform -chdir=deploy/terraform/mcp output -json mcp_urls | jq -r 'to_entries[] | "\(.key)=\(.value)"')

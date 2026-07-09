@@ -48,6 +48,20 @@ COMMON_ENV="RUN_LOCAL=false
 GOOGLE_GENAI_USE_VERTEXAI=true
 PUBSUB_TOPIC=${PUBSUB_TOPIC:-vibeflix-mesh-events}"
 
+# Each agent folder needs a .env — it SHIPS with the engine source and is what
+# the agent reads for Gemini config (GOOGLE_CLOUD_LOCATION=global) at import.
+# The files are GITIGNORED, so a fresh clone won't have them: create if missing.
+ensure_agent_env() {
+  local F="$ROOT/agents/$1/.env"
+  [ -f "$F" ] && return 0
+  echo "   creating $F (gitignored — absent on fresh clones)"
+  cat > "$F" <<ENVEOF
+GOOGLE_CLOUD_PROJECT=$PROJECT
+GOOGLE_CLOUD_LOCATION=global
+GOOGLE_GENAI_USE_VERTEXAI=true
+ENVEOF
+}
+
 engine_id_for() {  # display name → existing engine resource ID ('' if none)
   "$PY" - "$1" <<'PYEOF'
 import os, sys, vertexai
@@ -61,6 +75,7 @@ PYEOF
 deploy_one() {  # $1 agent dir name, $2 extra env (newline-separated KEY=VALUE)
   local NAME="$1" EXTRA="${2:-}" DISPLAY ENVF EID
   DISPLAY="vibeflix-${NAME//_/-}"
+  ensure_agent_env "$NAME"
   ENVF="$(mktemp)"
   printf '%s\n%s\n' "$COMMON_ENV" "$EXTRA" > "$ENVF"
   EID="$(engine_id_for "$DISPLAY")"

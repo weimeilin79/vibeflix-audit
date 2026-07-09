@@ -161,6 +161,24 @@ the agent FOLDER + a generated Dockerfile; the engine serves **A2A automatically
 - **without `--agent_engine_id` every run CREATES a new engine** — pass the
   existing ID (from the list command below) to update instead.
 
+First, create each agent's `.env`. These files are **gitignored** (a fresh clone
+won't have them) but they SHIP with the engine source — inside the container the
+agent reads them at import for its Gemini config (notably
+`GOOGLE_CLOUD_LOCATION=global`, which must NOT go through the deploy CLI's env
+file — the CLI intercepts it):
+
+```bash
+for A in brand_style vendor_clearance deal_pricing legal ui_renderer; do
+  cat > agents/$A/.env <<EOF
+GOOGLE_CLOUD_PROJECT=$PROJECT
+GOOGLE_CLOUD_LOCATION=global
+GOOGLE_GENAI_USE_VERTEXAI=true
+EOF
+done
+```
+
+Then the deploys:
+
 ```bash
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
 export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
