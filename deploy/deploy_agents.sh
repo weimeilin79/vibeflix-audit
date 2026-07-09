@@ -72,10 +72,22 @@ for e in c.agent_engines.list():
 PYEOF
 }
 
+# vibeflix-common isn't on PyPI and the repo is private, so each engine build
+# installs a VENDORED copy shipped inside the agent folder (the per-agent
+# requirements.txt points at /app/agents/<name>/_vendor/vibeflix-common).
+vendor_common() {
+  local V="$ROOT/agents/$1/_vendor/vibeflix-common"
+  rm -rf "$ROOT/agents/$1/_vendor"; mkdir -p "$V"
+  cp -R "$ROOT/packages/vibeflix-common/vibeflix_common" "$V/vibeflix_common"
+  cp "$ROOT/packages/vibeflix-common/pyproject.toml" "$V/pyproject.toml"
+  find "$V" -name __pycache__ -type d -prune -exec rm -rf {} +
+}
+
 deploy_one() {  # $1 agent dir name, $2 extra env (newline-separated KEY=VALUE)
   local NAME="$1" EXTRA="${2:-}" DISPLAY ENVF EID
   DISPLAY="vibeflix-${NAME//_/-}"
   ensure_agent_env "$NAME"
+  vendor_common "$NAME"
   ENVF="$(mktemp)"
   printf '%s\n%s\n' "$COMMON_ENV" "$EXTRA" > "$ENVF"
   EID="$(engine_id_for "$DISPLAY")"
@@ -83,6 +95,7 @@ deploy_one() {  # $1 agent dir name, $2 extra env (newline-separated KEY=VALUE)
   "$ADK" deploy agent_engine "$ROOT/agents/$NAME" \
     --project "$PROJECT" --region "$REGION" \
     --display_name "$DISPLAY" \
+    --otel_to_cloud \
     --env_file "$ENVF" \
     --agent_engine_config_file "$CFG" \
     ${EID:+--agent_engine_id "$EID"} \
@@ -109,9 +122,9 @@ LEGAL_A2A_URL=$LEGAL_A2A_URL"
 fi
 
 echo
-echo "[deploy_agents] enabling AGENT IDENTITY (v1beta1 identity_type update)…"
-"$PY" "$HERE/enable_agent_identity.py" \
-  || echo "  ⚠️ identity update failed — re-run deploy/enable_agent_identity.py (preview surface)"
+echo "[deploy_agents] enabling AGENT IDENTITY & A2A ROUTING (v1beta1 updates)…"
+"$PY" "$HERE/enable_agent_identity_and_a2a.py" \
+  || echo "  ⚠️ identity/A2A update failed — re-run deploy/enable_agent_identity_and_a2a.py (preview surface)"
 
 echo
 echo "[deploy_agents] engines:"

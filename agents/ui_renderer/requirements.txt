@@ -11,6 +11,7 @@ google-genai>=1.0.0
 aiohttp>=3.9.0
 google-cloud-firestore>=2.16.0
 google-cloud-pubsub>=2.21.0
-# vibeflix-common is not on PyPI — installed from the repo subdirectory.
-# Private repo? Swap for an Artifact Registry python repo or a token URL.
-vibeflix-common @ git+https://github.com/weimeilin79/vibeflix-audit.git#subdirectory=packages/vibeflix-common
+# vibeflix-common is not on PyPI and the repo is private — the deploy vendors
+# the package INTO this folder (deploy_agents.sh / instruction-dev.md step 3b),
+# and it installs from the image's absolute path:
+/app/agents/ui_renderer/_vendor/vibeflix-common

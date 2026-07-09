@@ -16,8 +16,10 @@ async def _probe_one(url: str, timeout: float = 5.0) -> dict:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
+        from vibeflix_common.cloud_auth import auth_headers
+
         async def _go() -> int:
-            async with streamablehttp_client(url) as (read, write, _):
+            async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     listed = await session.list_tools()

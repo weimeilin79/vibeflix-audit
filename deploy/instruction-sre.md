@@ -84,8 +84,8 @@ terraform -chdir=deploy/terraform/agents apply -var project=$PROJECT -var region
 ```
 
 **3b. Deploy the 5 engines.** `deploy_agents.sh` drives the ADK 2.3 CLI: each
-agent folder (with its own `requirements.txt`, incl. `vibeflix-common` from the
-repo git URL) becomes one engine; A2A serving is automatic; the script passes the
+agent folder (with its own `requirements.txt`; the script VENDORS `vibeflix-common`
+into each folder — the private repo can't be pip-cloned) becomes one engine; A2A serving is automatic; the script passes the
 runtime SA via the engine-config file, ships env via `--env_file`, and re-runs
 UPDATE the same engine (it resolves `--agent_engine_id` by display name instead
 of duplicating). Engines are regional; Gemini's `global` location ships in each
@@ -103,15 +103,15 @@ export LEGAL_A2A_URL=<legal's A2A card URL — printed above>
 
 Deploys take 5–10 min each and continue server-side if the CLI times out.
 
-**3c. Agent identity (preview).** `deploy_agents.sh` finishes by running
-`deploy/enable_agent_identity.py`, which sets the engine config field
-`identity_type = types.IdentityType.AGENT_IDENTITY` (v1beta1 update) on every
-vibeflix engine and writes each agent's `principal://…` to
+**3c. Agent identity & A2A routing (preview).** `deploy_agents.sh` finishes by running
+`deploy/enable_agent_identity_and_a2a.py`, which sets the engine config field
+`identity_type = types.IdentityType.AGENT_IDENTITY` (v1beta1 update), configures `agent_framework = "a2a"`, and embeds the A2A class methods on every
+vibeflix engine. It writes each agent's `principal://…` to
 `deploy/agent_identities.json` — those principals are what step 4's policies and
 per-agent IAM bind to. Re-run it standalone anytime:
 
 ```bash
-PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity.py
+PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
 ```
 
 If the preview misbehaves, the shared `vibeflix-agents` SA from 3a is the

@@ -153,11 +153,18 @@ the agent FOLDER + a generated Dockerfile; the engine serves **A2A automatically
 (no flag). Three things to know about this CLI:
 
 - it installs `agents/<name>/requirements.txt` from INSIDE the folder — each
-  agent has one (it pins `google-adk[a2a]==2.3.0` and pulls `vibeflix-common`
-  from the repo's git URL; private repo → publish the package to an Artifact
-  Registry python repo and swap that line);
+  agent has one (pinning `google-adk[a2a]==2.3.0`). `vibeflix-common` isn't on
+  PyPI and the repo is private, so the requirements point at a **vendored copy**
+  (`_vendor/vibeflix-common`, gitignored) that you place in each folder before
+  deploying — see the loop below;
 - env vars go in a file passed via `--env_file`; the runtime `service_account`
   goes in a JSON passed via `--agent_engine_config_file`;
+- `--otel_to_cloud` wires the engine's OBSERVABILITY (Cloud Trace + the
+  console's Observability panel). Without it the deploy succeeds but the panel
+  shows "Settings not available" — it sets
+  `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` (+ span content capture
+  off by default; set `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=true` in the env
+  file to log full prompts/responses);
 - **without `--agent_engine_id` every run CREATES a new engine** — pass the
   existing ID (from the list command below) to update instead.
 
@@ -177,7 +184,20 @@ EOF
 done
 ```
 
-Then the deploys:
+**3b. Deploy the 5 agents to the Agent Runtime.**
+
+First, vendor `vibeflix-common` into each agent folder (the engine build pip-installs
+it from there — a git URL won't work against the private repo):
+
+```bash
+for A in brand_style vendor_clearance deal_pricing legal ui_renderer; do
+  rm -rf agents/$A/_vendor && mkdir -p agents/$A/_vendor/vibeflix-common
+  cp -R packages/vibeflix-common/vibeflix_common agents/$A/_vendor/vibeflix-common/
+  cp packages/vibeflix-common/pyproject.toml agents/$A/_vendor/vibeflix-common/
+done
+```
+
+Then the manual deploys:
 
 ```bash
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
@@ -197,26 +217,26 @@ EOF
 
 # 1/5 — brand_style (vision + deterministic brand checks)
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_BRAND_STYLE_URL=%s\n' "$MCP_BRAND_STYLE_URL" > /tmp/env_brand_style
-.venv/bin/adk deploy agent_engine agents/brand_style --project $PROJECT --region $REGION \
+.venv/bin/adk deploy agent_engine agents/brand_style --project $PROJECT --region $REGION --otel_to_cloud \
   --display_name vibeflix-brand-style \
   --env_file /tmp/env_brand_style --agent_engine_config_file /tmp/engine_config.json
 
 # 2/5 — deal_pricing (rate-card reconciliation)
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\n' "$MCP_LICENSING_URL" > /tmp/env_deal_pricing
-.venv/bin/adk deploy agent_engine agents/deal_pricing --project $PROJECT --region $REGION \
+.venv/bin/adk deploy agent_engine agents/deal_pricing --project $PROJECT --region $REGION --otel_to_cloud \
   --display_name vibeflix-deal-pricing \
   --env_file /tmp/env_deal_pricing --agent_engine_config_file /tmp/engine_config.json
 
 # 3/5 — ui_renderer (A2UI presenter + form designer; no MCP)
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\n' > /tmp/env_ui_renderer
-.venv/bin/adk deploy agent_engine agents/ui_renderer --project $PROJECT --region $REGION \
+.venv/bin/adk deploy agent_engine agents/ui_renderer --project $PROJECT --region $REGION --otel_to_cloud \
   --display_name vibeflix-ui-renderer \
   --env_file /tmp/env_ui_renderer --agent_engine_config_file /tmp/engine_config.json
 
 # 4/5 — legal (RAG-discovered process; NO doc volume in the cloud → RAG_CORPUS)
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nRAG_CORPUS=%s\nRAG_LOCATION=%s\n' \
   "$MCP_LICENSING_URL" "${RAG_CORPUS:?export RAG_CORPUS first — step 1d}" "$REGION" > /tmp/env_legal
-.venv/bin/adk deploy agent_engine agents/legal --project $PROJECT --region $REGION \
+.venv/bin/adk deploy agent_engine agents/legal --project $PROJECT --region $REGION --otel_to_cloud \
   --display_name vibeflix-legal \
   --env_file /tmp/env_legal --agent_engine_config_file /tmp/engine_config.json
 ```
@@ -235,44 +255,49 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   | jq -r '.reasoningEngines[] | "\(.displayName // "(unnamed)")\t\(.name)"'
 ```
 
-An engine's A2A base is
-`https://$REGION-aiplatform.googleapis.com/v1/<engine resource name>` and its
-agent card hangs off that base (`…/a2a/…/.well-known/agent-card.json` — the deploy
-output prints the exact card URL; `agents-cli run --url <resource name> --mode a2a`
-resolves it for you if in doubt).
+**3c. Expose A2A & Identity on the first 4 agents.**
+Before deploying `vendor_clearance`, you must expose `legal`'s A2A endpoints. Run the post-deploy script to configure the first 4 engines:
 
 ```bash
-# 5/5 — vendor_clearance LAST: it needs legal's A2A card URL for the hand-off
-export LEGAL_A2A_URL=<legal's A2A base from the list above>
+PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
+```
+
+*This sets framework="a2a", unsets the service account, registers A2A methods, and activates identity. Confirm `legal`'s framework is `a2a` before moving on.*
+
+**3d. Deploy vendor_clearance last.**
+Now that `legal`'s A2A endpoints are exposed, capture its A2A base URL:
+`LEGAL_A2A_URL=https://$REGION-aiplatform.googleapis.com/v1beta1/<legal's engine resource name>/a2a`
+
+Deploy `vendor_clearance` using that URL:
+
+```bash
+export LEGAL_A2A_URL=<legal's A2A base from above>
 
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nMCP_MARKET_URL=%s\nLEGAL_A2A_URL=%s\n' \
-  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "${LEGAL_A2A_URL:?export LEGAL_A2A_URL first — legal must be deployed}" > /tmp/env_vendor_clearance
-.venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION \
+  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "${LEGAL_A2A_URL:?export LEGAL_A2A_URL first — legal must be deployed & patched}" > /tmp/env_vendor_clearance
+.venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION --otel_to_cloud \
   --display_name vibeflix-vendor-clearance \
   --env_file /tmp/env_vendor_clearance --agent_engine_config_file /tmp/engine_config.json
 ```
 
-**3c. Agent identity (preview).** Give each engine its own principal — this is
-what step 4's per-agent policies bind to. Identity is an **engine config field**
-(`identity_type: types.IdentityType.AGENT_IDENTITY`, v1beta1 API); since `adk
-deploy agent_engine` doesn't expose it, flip it on with an UPDATE after deploy:
+**3e. Expose A2A & Identity on vendor_clearance.**
+Run the post-deploy script one last time to configure the `vendor_clearance` engine:
 
 ```bash
-PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity.py
+PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py vibeflix-vendor-clearance
 ```
 
-…which runs, per vibeflix engine (equivalent SDK call, per the
-[agent-identity docs](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-identity)):
+Under the hood, the post-deploy script runs the equivalent REST/SDK call for each engine:
 
 ```python
-import vertexai
-from vertexai import types
-
-client = vertexai.Client(project=PROJECT, location=REGION,
-                         http_options=dict(api_version="v1beta1"))
+# Clears service_account, sets identity_type to AGENT_IDENTITY, and sets agent_framework to a2a
 client.agent_engines.update(
-    name="projects/…/locations/…/reasoningEngines/<ID>",
-    config={"identity_type": types.IdentityType.AGENT_IDENTITY},
+    name="projects/.../locations/.../reasoningEngines/<ID>",
+    config={
+        "identity_type": types.IdentityType.AGENT_IDENTITY,
+        "agent_framework": "a2a",
+        "class_methods": updated_methods_including_a2a_extensions,
+    },
 )
 # principal = engine.api_resource.spec.effective_identity
 ```

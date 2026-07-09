@@ -161,3 +161,41 @@ def a2a_httpx_client(timeout: float = 600.0) -> httpx.AsyncClient | None:
     if run_local():
         return None
     return httpx.AsyncClient(auth=GoogleAuth(), timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# A2A endpoint shapes differ between worlds:
+#   local serve_a2a:  card GET  {base}/.well-known/agent-card.json · rpc POST {base}/
+#   Agent Runtime:    card GET  {base}/a2a/v1/card                 · rpc POST <card.url>
+# ---------------------------------------------------------------------------
+
+def is_engine_url(base: str) -> bool:
+    """True when the A2A base points at a Vertex Agent Runtime engine."""
+    host = urlsplit(base).hostname or ""
+    return host.endswith("aiplatform.googleapis.com")
+
+
+def a2a_card_url(base: str) -> str:
+    base = base.rstrip("/")
+    if is_engine_url(base):
+        return f"{base}/a2a/v1/card"
+    return f"{base}/.well-known/agent-card.json"
+
+
+_RPC_URL_CACHE: dict[str, str] = {}
+
+
+async def resolve_a2a_rpc_url(base: str) -> str:
+    """Where to POST raw JSON-RPC (message/send). Local: the service root.
+    Engines: the url advertised by the agent card (fetched once, cached)."""
+    base = base.rstrip("/")
+    if not is_engine_url(base):
+        return f"{base}/"
+    if base in _RPC_URL_CACHE:
+        return _RPC_URL_CACHE[base]
+    async with httpx.AsyncClient(timeout=20, auth=GoogleAuth()) as client:
+        resp = await client.get(a2a_card_url(base))
+        resp.raise_for_status()
+        url = (resp.json().get("url") or "").rstrip("/") or f"{base}/a2a/v1"
+    _RPC_URL_CACHE[base] = url
+    return url

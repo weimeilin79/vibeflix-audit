@@ -36,7 +36,7 @@ from google.adk.events.event import Event
 from vibeflix_common.mcp_clients import mcp_toolset
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
 # when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.cloud_auth import maybe_auth
+from vibeflix_common.cloud_auth import maybe_auth, resolve_a2a_rpc_url
 from vibeflix_common.telemetry import instrument_node, emit_event
 
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "vendor-clearance"
@@ -62,7 +62,7 @@ async def _call_legal(brief: str) -> str:
                                    "messageId": uuid.uuid4().hex,
                                    "parts": [{"kind": "text", "text": brief}]}}}
     async with httpx.AsyncClient(timeout=300, auth=maybe_auth()) as client:
-        resp = await client.post(f"{_LEGAL_URL}/", json=body)
+        resp = await client.post(await resolve_a2a_rpc_url(_LEGAL_URL), json=body)
         resp.raise_for_status()
         result = resp.json().get("result") or {}
     parts = [p.get("text", "") for a in result.get("artifacts") or []

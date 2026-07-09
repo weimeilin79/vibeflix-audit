@@ -43,3 +43,6 @@ Thumbs.db
 *.sln
 *.sw?
 data/
+
+# vibeflix-common copies vendored into agent folders at engine-deploy time
+agents/*/_vendor/

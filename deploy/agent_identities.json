@@ -1,0 +1,18 @@
+{
+  "vibeflix-legal": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/2904433082293551104",
+    "principal": "agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/2904433082293551104"
+  },
+  "vibeflix-ui-renderer": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/5734945448095907840",
+    "principal": "agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/5734945448095907840"
+  },
+  "vibeflix-brand-style": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/3056148094740594688",
+    "principal": "agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/3056148094740594688"
+  },
+  "vibeflix-deal-pricing": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/1123259429668519936",
+    "principal": "agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/1123259429668519936"
+  }
+}

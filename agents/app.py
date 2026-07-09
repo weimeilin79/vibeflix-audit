@@ -39,7 +39,7 @@ from agents.a2ui_surface import (
     build_surface, panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
-from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth
+from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
 from vibeflix_common.memory import (
     APP_NAME,
     build_session_service,
@@ -160,7 +160,7 @@ presenter_runner = (
         name=PRESENTER_APP,
         root_agent=RemoteA2aAgent(
             name="a2ui_presenter",
-            agent_card=f"{_UI_RENDERER_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+            agent_card=a2a_card_url(_UI_RENDERER_URL),
             **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
         ),
     ))
@@ -1128,11 +1128,18 @@ async def mcp_tools_listing():
 # `critical` components gate readiness — the console locks until they're healthy.
 # All agents (including ui_renderer) are critical: a down presenter locks the UI.
 # (The rule-based fallback still covers a *transient* presenter failure mid-request.)
+# `mcp_envs` = which MCP servers each agent depends on. Locally the agent's own
+# /healthz reports its handshakes; on Agent Runtime there is no /healthz, so the
+# app probes these itself (same JSON shape → the frontend is untouched).
 _AGENT_SERVICES = [
-    {"name": "brand_style", "label": "Brand Style", "env": "BRAND_STYLE_A2A_URL", "critical": True},
-    {"name": "vendor_clearance", "label": "Vendor & Licensing", "env": "VENDOR_CLEARANCE_A2A_URL", "critical": True},
-    {"name": "deal_pricing", "label": "Deal Pricing", "env": "DEAL_PRICING_A2A_URL", "critical": True},
-    {"name": "ui_renderer", "label": "UI Renderer", "env": "UI_RENDERER_A2A_URL", "critical": True},
+    {"name": "brand_style", "label": "Brand Style", "env": "BRAND_STYLE_A2A_URL", "critical": True,
+     "mcp_envs": ["MCP_BRAND_STYLE_URL"]},
+    {"name": "vendor_clearance", "label": "Vendor & Licensing", "env": "VENDOR_CLEARANCE_A2A_URL", "critical": True,
+     "mcp_envs": ["MCP_LICENSING_URL", "MCP_MARKET_URL"]},
+    {"name": "deal_pricing", "label": "Deal Pricing", "env": "DEAL_PRICING_A2A_URL", "critical": True,
+     "mcp_envs": ["MCP_LICENSING_URL"]},
+    {"name": "ui_renderer", "label": "UI Renderer", "env": "UI_RENDERER_A2A_URL", "critical": True,
+     "mcp_envs": []},
 ]
 
 
@@ -1148,13 +1155,27 @@ async def _probe_agent(svc: dict) -> dict:
         return comp
     t0 = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=6.0, auth=maybe_auth()) as client:
-            resp = await client.get(f"{base}/healthz")
-            resp.raise_for_status()
-            data = resp.json()
-        comp["reachable"] = True
-        comp["mcp"] = data.get("mcp", [])
-        comp["ok"] = bool(data.get("ok", False))
+        if is_engine_url(base):
+            # Agent Runtime: no /healthz. Liveness = the engine serves its A2A
+            # card; the agent's MCP dependencies are handshaken from HERE (the
+            # app), preserving the exact components[].mcp shape the UI renders.
+            async with httpx.AsyncClient(timeout=15.0, auth=maybe_auth()) as client:
+                resp = await client.get(a2a_card_url(base))
+                resp.raise_for_status()
+            comp["reachable"] = True
+            from vibeflix_common.health import _probe_one
+            urls = [(k, os.environ[k]) for k in svc.get("mcp_envs", []) if os.environ.get(k)]
+            results = await asyncio.gather(*(_probe_one(u) for _, u in urls))
+            comp["mcp"] = [{"name": k, "url": u, **r} for (k, u), r in zip(urls, results)]
+            comp["ok"] = all(m["ok"] for m in comp["mcp"]) if comp["mcp"] else True
+        else:
+            async with httpx.AsyncClient(timeout=6.0, auth=maybe_auth()) as client:
+                resp = await client.get(f"{base}/healthz")
+                resp.raise_for_status()
+                data = resp.json()
+            comp["reachable"] = True
+            comp["mcp"] = data.get("mcp", [])
+            comp["ok"] = bool(data.get("ok", False))
     except Exception as e:
         comp["error"] = f"{type(e).__name__}: {str(e)[:140]}"
     ms = int((time.monotonic() - t0) * 1000)

@@ -41,7 +41,7 @@ from google.adk.events.event import Event
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC
 # (no-op when unset) — lets the Workflow graph show the mesh working in real time.
 from vibeflix_common.telemetry import instrument_node
-from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth
+from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url
 
 # Load the orchestrator's Vertex AI / project configuration from its local .env.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -82,7 +82,7 @@ def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
     return RemoteA2aAgent(
         name=name,
         description=description,
-        agent_card=f"{base.rstrip('/')}{AGENT_CARD_WELL_KNOWN_PATH}",
+        agent_card=a2a_card_url(base),
         **kwargs,
     )
 
@@ -685,7 +685,7 @@ async def _a2a_send(base_url: str, text: str, timeout: float = 420) -> str:
                                    "messageId": uuid.uuid4().hex,
                                    "parts": [{"kind": "text", "text": text}]}}}
     async with httpx.AsyncClient(timeout=timeout, auth=maybe_auth()) as client:
-        resp = await client.post(f"{base_url.rstrip('/')}/", json=body)
+        resp = await client.post(await resolve_a2a_rpc_url(base_url), json=body)
         resp.raise_for_status()
         result = resp.json().get("result") or {}
     parts = [p.get("text", "") for a in result.get("artifacts") or []
