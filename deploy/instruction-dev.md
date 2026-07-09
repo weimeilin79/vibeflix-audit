@@ -407,15 +407,58 @@ metadata:
 EOF
 gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
   --source=deploy/iap-authz-extension.yaml --location=$REGION --project=$PROJECT
-
-# one grant per policies.yaml row — e.g. brand_style → its MCP server only:
-#   member:    principal://…/reasoningEngines/<vibeflix-brand-style id>   (agent_identities.json)
-#   role:      roles/iap.egressor
-#   condition: api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'
-# tool-level scoping uses tool attributes, e.g. read-only-only for the app:
-#   condition: api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true
-# (the codelab wraps these in scripts/grant_agent_mcp_egress.sh — same commands)
 ```
+
+**4c-ii. Bind the extension to the gateway** — an AuthzPolicy (`REQUEST_AUTHZ`
+profile) targeting the gateway, referencing the extension (networksecurity
+v1alpha1; no gcloud surface yet):
+
+```bash
+curl -fsS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  -X POST "https://networksecurity.googleapis.com/v1alpha1/projects/$PROJECT/locations/$REGION/authzPolicies?authz_policy_id=vibeflix-gateway-iap-policy" \
+  -d '{
+    "name": "vibeflix-gateway-iap-policy",
+    "policyProfile": "REQUEST_AUTHZ",
+    "action": "CUSTOM",
+    "target": {
+      "resources": [
+        "projects/'"$PROJECT"'/locations/'"$REGION"'/agentGateways/vibeflix-gateway"
+      ]
+    },
+    "customProvider": {
+      "authzExtension": {
+        "resources": [
+          "projects/'"$PROJECT"'/locations/'"$REGION"'/authzExtensions/vibeflix-gateway-iap-authz"
+        ]
+      }
+    }
+  }'
+```
+
+**4c-iii. Grant each agent egress to its MCP servers** — `roles/iap.egressor`
+on the **registered MCP service's IAM policy**, member = the agent's identity
+principal (`deploy/agent_identities.json`), CEL condition for tool-level
+scoping. One grant per [`deploy/policies.yaml`](policies.yaml) row, e.g.:
+
+```bash
+# brand_style → its own MCP server (all tools):
+gcloud alpha agent-registry services add-iam-policy-binding vibeflix-mcp-brand-style \
+  --project=$PROJECT --location=$REGION \
+  --member="principal://…/reasoningEngines/<vibeflix-brand-style id>" \
+  --role=roles/iap.egressor
+
+# the app → licensing, READ-ONLY tools only (tool-attribute CEL condition):
+gcloud alpha agent-registry services add-iam-policy-binding vibeflix-mcp-licensing \
+  --project=$PROJECT --location=$REGION \
+  --member="serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" \
+  --role=roles/iap.egressor \
+  --condition="expression=api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly'\, false) == true,title=read-only-tools"
+```
+
+(The codelab wraps 4c-iii in its repo's `scripts/grant_agent_mcp_egress.sh`;
+if `services add-iam-policy-binding` isn't in your gcloud release, apply the
+same bindings via the registry's `setIamPolicy` REST method.)
 
 **4d. Flip MCP access control to the gateway** — remove every direct invoker and
 grant ONLY the gateway SA, so all MCP traffic must pass the policy check:

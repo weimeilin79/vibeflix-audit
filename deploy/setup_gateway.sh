@@ -73,6 +73,17 @@ EOF
   gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
     --source="$HERE/iap-authz-extension.yaml" --location="$REGION" --project="$PROJECT" \
     || echo "  (authz extension may already exist — continuing)"
+  # Bind the extension to the gateway (AuthzPolicy, REQUEST_AUTHZ profile).
+  curl -fsS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    -H "Content-Type: application/json" \
+    -X POST "https://networksecurity.googleapis.com/v1alpha1/projects/$PROJECT/locations/$REGION/authzPolicies?authz_policy_id=vibeflix-gateway-iap-policy" \
+    -d '{
+      "name": "vibeflix-gateway-iap-policy",
+      "policyProfile": "REQUEST_AUTHZ",
+      "action": "CUSTOM",
+      "target": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/agentGateways/vibeflix-gateway"]},
+      "customProvider": {"authzExtension": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/authzExtensions/vibeflix-gateway-iap-authz"]}}
+    }' || echo "  (authz policy may already exist — continuing)"
   echo
   echo "  Per-agent tool access = IAP egress grants (roles/iap.egressor) with CEL"
   echo "  conditions. Apply ONE grant per row of deploy/policies.yaml, e.g.:"
