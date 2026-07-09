@@ -183,7 +183,12 @@ Then the deploys:
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
 export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
 export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
-export RAG_CORPUS=<from step 1d>
+# ⚠️ an EMPTY env value fails the deploy with "deployment_spec.env[N].value:
+# Required field is not set" — the :? guards below make a missing export fail fast.
+export RAG_CORPUS=<from step 1d>   # find it again:
+#   curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+#     "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
+#     | jq -r '.ragCorpora[] | "\(.displayName)\t\(.name)"' 
 
 # engine config: the runtime SA (identity comes in 3c)
 cat > /tmp/engine_config.json <<EOF
@@ -210,7 +215,7 @@ printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-m
 
 # 4/5 — legal (RAG-discovered process; NO doc volume in the cloud → RAG_CORPUS)
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nRAG_CORPUS=%s\nRAG_LOCATION=%s\n' \
-  "$MCP_LICENSING_URL" "$RAG_CORPUS" "$REGION" > /tmp/env_legal
+  "$MCP_LICENSING_URL" "${RAG_CORPUS:?export RAG_CORPUS first — step 1d}" "$REGION" > /tmp/env_legal
 .venv/bin/adk deploy agent_engine agents/legal --project $PROJECT --region $REGION \
   --display_name vibeflix-legal \
   --env_file /tmp/env_legal --agent_engine_config_file /tmp/engine_config.json
@@ -241,7 +246,7 @@ resolves it for you if in doubt).
 export LEGAL_A2A_URL=<legal's A2A base from the list above>
 
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nMCP_MARKET_URL=%s\nLEGAL_A2A_URL=%s\n' \
-  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "$LEGAL_A2A_URL" > /tmp/env_vendor_clearance
+  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "${LEGAL_A2A_URL:?export LEGAL_A2A_URL first — legal must be deployed}" > /tmp/env_vendor_clearance
 .venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION \
   --display_name vibeflix-vendor-clearance \
   --env_file /tmp/env_vendor_clearance --agent_engine_config_file /tmp/engine_config.json
