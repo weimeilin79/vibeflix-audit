@@ -438,8 +438,9 @@ curl -fsS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 
 **4c-iii. Grant each caller egress to its MCP servers.** The bindings live on
 the project's **IAP web** IAM resource (`roles/iap.egressor`; the Agent Registry
-API has no IAM surface — all scoping is in the CEL condition: `mcp.server`
-picks the server, `mcp.tool.name` the tool allowlist). Members: agents use
+API has no IAM surface — all scoping is in the CEL condition via
+`mcp.toolName`, the tool allowlist; tool names are unique across the three
+servers, so no server attribute is needed). Members: agents use
 their identity `principal://` from `deploy/agent_identities.json`; the console
 app uses its `serviceAccount:` (Cloud Run has no agent identity).
 
@@ -467,35 +468,34 @@ M() { jq -r ".\"$1\".principal" deploy/agent_identities.json; }   # agent → pr
 
 # 1. brand_style → its MCP server, one tool
 grant "$(M vibeflix-brand-style)" brand-style \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['run_brand_audit']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['run_brand_audit']"
 
 # 2. deal_pricing → licensing, rate card only
 grant "$(M vibeflix-deal-pricing)" deal-pricing \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-licensing' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['get_license_pricing']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_license_pricing']"
 
 # 3. vendor_clearance → licensing (clearance + onboarding writes)
 grant "$(M vibeflix-vendor-clearance)" vendor-clearance-licensing \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-licensing' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['get_vendor', 'find_vendors', 'create_vendor', 'update_vendor', 'list_trademarks', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'check_vendor_eligibility']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'find_vendors', 'create_vendor', 'update_vendor', 'list_trademarks', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'check_vendor_eligibility']"
 
 # 4. vendor_clearance → market
 grant "$(M vibeflix-vendor-clearance)" vendor-clearance-market \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-market' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['scan_ecom_marketplaces', 'check_sku_volume_caps', 'capture_audit_map']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['scan_ecom_marketplaces', 'check_sku_volume_caps', 'capture_audit_map']"
 
 # 5. legal → licensing (the ONLY caller allowed upsert_contract besides the app's admin stamp)
 grant "$(M vibeflix-legal)" legal \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-licensing' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['get_vendor', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'upsert_contract', 'get_contract']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'upsert_contract', 'get_contract']"
 
 # 6. the console app → licensing (pickers, Database tab, contract reads,
 #    volume-annotation upsert, demo reset) — serviceAccount, not principal://
 grant "serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" app \
-  "api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-licensing' && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['list_trademarks', 'get_vendor', 'find_vendors', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract', 'upsert_contract', 'dump_stores', 'reset_vendors']"
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['list_trademarks', 'get_vendor', 'find_vendors', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract', 'upsert_contract', 'dump_stores', 'reset_vendors']"
 ```
 
 (ui_renderer has no MCP dependencies → no grant, which under deny-by-default
-means it can reach nothing. The `mcp.tool.name` attribute key follows the
-codelab's `mcp.tool.*` pattern — `isReadOnly` was the documented example; if the
-gateway logs an unknown-attribute error, adjust the key once in
-`deploy/grant_mcp_egress.sh` and re-run.)
+means it can reach nothing. The attribute keys are codelab-verbatim:
+`mcp.toolName` and `mcp.tool.isReadOnly` — note the inconsistent casing between
+the two is Google's, not a typo.)
 
 **4d. Point MCP invocation at a dedicated invoker SA.** The gateway has no
 backend-egress SA of its own (its `serviceExtensionsServiceAccount` only calls
@@ -529,12 +529,21 @@ except by principals you explicitly grant — per `policies.yaml`'s
 `a2a_policies`, ONLY vendor_clearance:
 
 ```bash
-# A2A egress grant (same IAP mechanism as 4c-iii; the A2A CEL attribute key is
-# not yet documented — verify on first grant, the MCP analogue is mcp.server):
+# A2A egress grant — same mechanism as 4c-iii: a condition YAML scoping the
+# grant to the legal destination. ⚠️ The A2A destination attribute key is NOT
+# in public docs yet (verified MCP keys: mcp.toolName, mcp.tool.isReadOnly).
+# Verify the key from the gateway's IAP request logs on first call, then:
+cat > /tmp/cond_vc_to_legal.yaml <<EOF
+expression: >-
+  api.getAttribute('iap.googleapis.com/<A2A destination attribute>', '') == 'vibeflix-legal'
+title: vendor-clearance-to-legal-only
+EOF
 gcloud iap web add-iam-policy-binding --project=$PROJECT \
   --member="$(jq -r '."vibeflix-vendor-clearance".principal' deploy/agent_identities.json)" \
   --role=roles/iap.egressor \
-  --condition-from-file=<cond scoping to the vibeflix-legal registry entry>
+  --condition-from-file=/tmp/cond_vc_to_legal.yaml
+# Deny-by-default protects legal even before this grant exists — the grant is
+# what ALLOWS vendor_clearance, not what blocks the others.
 ```
 
 The gateway itself has **no public URL** —

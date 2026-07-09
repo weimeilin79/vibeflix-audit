@@ -2,12 +2,13 @@
 #
 # ENFORCEMENT (per the Agent Gateway codelab): each row becomes an IAP EGRESS
 # grant — `roles/iap.egressor` bound to the agent's identity principal
-# (deploy/agent_identities.json) with a CEL condition scoping it, e.g.
-#   server scope:  api.getAttribute('iap.googleapis.com/mcp.server', '') == '<mcp_server>'
-#   read-only:     api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true
-# Tool-level allowlists map to conditions on the tool attributes. Applied via
-# deploy/setup_gateway.sh step 3 (the codelab wraps the same commands in
-# scripts/grant_agent_mcp_egress.sh).
+# (deploy/agent_identities.json) with a CEL condition scoping it. Verified
+# attribute keys (codelab-verbatim; casing is Google's):
+#   tool allowlist:  api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['t1', 't2']
+#   read-only:       api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true
+# There is NO documented mcp.server attribute — scoping is by tool name, which
+# is equivalent here (tool names are unique across the three vibeflix servers).
+# Applied via deploy/grant_mcp_egress.sh (driven by setup_gateway.sh step 3).
 
 policies:
   - caller: vibeflix-brand-style
@@ -65,8 +66,9 @@ policies:
 # private hand-off: ONLY vendor_clearance may invoke legal.
 # Requires the target agent registered in Agent Registry (agents register like
 # MCP servers, via --agent-spec-type on `agent-registry services create`).
-# NOTE: the A2A CEL attribute key isn't documented yet (MCP has mcp.server/
-# mcp.tool.*) — verify the attribute name on first live grant.
+# NOTE: the A2A destination attribute key isn't documented yet (verified MCP
+# keys: mcp.toolName, mcp.tool.isReadOnly) — discover it from the gateway's IAP
+# request logs on the first live call, then grant.
 a2a_policies:
   - caller: vibeflix-vendor-clearance
     target_agent: vibeflix-legal

@@ -36,7 +36,14 @@ for row in policies:
     caller, server = row["caller"], row["mcp_server"]
     tools = row.get("allow_tools") or []
     if caller == "vibeflix-app":
-        member = f"serviceAccount:vibeflix-app@{project}.iam.gserviceaccount.com"
+        # created in step 5a — until then this row is skipped, re-run after.
+        import subprocess
+        sa = f"vibeflix-app@{project}.iam.gserviceaccount.com"
+        if subprocess.run(["gcloud", "iam", "service-accounts", "describe", sa],
+                          capture_output=True).returncode != 0:
+            print(f"SKIP vibeflix-app: SA not created yet (step 5a) — re-run this script after", file=sys.stderr)
+            continue
+        member = f"serviceAccount:{sa}"
     else:
         entry = idents.get(caller)
         if not entry:
@@ -46,15 +53,13 @@ for row in policies:
     print(f"{caller}|{member}|{server}|{','.join(tools)}")
 PYEOF
   COND="$(mktemp -d)/cond.yaml"
-  # server scope + tool allowlist in one expression. NOTE: the tool-name
-  # attribute key follows the codelab's mcp.tool.* pattern (isReadOnly was the
-  # documented one) — if the gateway logs an unknown-attribute error, check the
-  # live attribute list and adjust here once.
+  # Codelab-verbatim attribute: mcp.toolName (camelCase). There is NO documented
+  # mcp.server attribute — scoping is by tool name only, which is equivalent here
+  # (tool names are unique across the three vibeflix MCP servers).
   TOOL_LIST="$(echo "$TOOLS" | sed "s/,/', '/g")"
   cat > "$COND" <<EOF
 expression: >-
-  api.getAttribute('iap.googleapis.com/mcp.server', '') == '$SERVER'
-  && api.getAttribute('iap.googleapis.com/mcp.tool.name', '') in ['$TOOL_LIST']
+  api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['$TOOL_LIST']
 title: ${CALLER}-${SERVER}
 EOF
   echo "── $CALLER → $SERVER [$TOOLS]"
