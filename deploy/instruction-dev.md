@@ -346,80 +346,73 @@ done
 
 ## Step 4 — Agent Gateway + policies
 
-⚠️ **Preview surfaces.** Agent Registry / Agent Gateway are Gemini Enterprise
-Agent Platform preview features; the exact CLI spelling depends on your gcloud
-release. Each sub-step below gives the gcloud form AND the REST form — if the
-gcloud surface differs (`gcloud alpha gemini-enterprise --help` is the source of
-truth), the REST call is the stable fallback. `$TOKEN` below is
-`$(gcloud auth print-access-token)`; the API host is the Agent Platform endpoint
-shown in your console (`geminienterprise.googleapis.com` unless your onboarding
-says otherwise); `$PN` is the project number
-(`gcloud projects describe $PROJECT --format 'value(projectNumber)'`).
+Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/cloudnet-agent-gateway)
+(⚠️ preview — verify spellings against your gcloud release).
 
-**4a. Register the 3 MCP servers in the Agent Registry:**
+**4a. Register the 3 MCP servers in the Agent Registry.** Each registration
+carries a **tool spec** (generated from the live server so it never drifts)
+plus the server's URL as a JSONRPC interface:
 
 ```bash
+mkdir -p deploy/toolspecs
 for S in licensing market brand-style; do
   URL=$(gcloud run services describe vibeflix-mcp-$S --region $REGION --format 'value(status.url)')/mcp
+  .venv/bin/python deploy/make_toolspec.py "$URL" > deploy/toolspecs/$S.json
   gcloud alpha agent-registry services create vibeflix-mcp-$S \
-    --project $PROJECT --location $REGION \
-    --mcp-server-spec-type=no-spec \
-    --interfaces=protocolBinding=jsonrpc,url="$URL" \
-    --description "Vibeflix $S MCP server (Cloud Run, IAM-gated)"
+    --project=$PROJECT --location=$REGION \
+    --display-name="Vibeflix MCP $S" \
+    --mcp-server-spec-type=tool-spec \
+    --mcp-server-spec-content=deploy/toolspecs/$S.json \
+    --interfaces=url=$URL,protocolBinding=JSONRPC
 done
+gcloud alpha agent-registry services list --project=$PROJECT --location=$REGION \
+  --format="value(displayName,name)"
 ```
 
-**4b. Register the 5 agents in the Agent Registry:**
+**4b. Create the gateway** — a YAML import on the `network-services` surface,
+bound to the project's registry (our MCP backends are public run.app URLs, so
+the codelab's `networkConfig`/DNS-peering block for private-VPC backends is
+omitted):
 
 ```bash
-for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
-  E_NAME="vibeflix-$A"
-  E_RESOURCE=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-    "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
-    | jq -r --arg name "$E_NAME" '.reasoningEngines[] | select(.displayName == $name) | .name')
-  URL="https://$REGION-aiplatform.googleapis.com/v1beta1/$E_RESOURCE/a2a"
-
-  gcloud alpha agent-registry services create vibeflix-$A \
-    --project $PROJECT --location $REGION \
-    --agent-spec-type=no-spec \
-    --interfaces=protocolBinding=jsonrpc,url="$URL" \
-    --description "Vibeflix $A agent (A2A, Agent Engine)"
-done
-```
-
-**4c. Create the Agent Gateway and configure policies:**
-
-```bash
-# Create the gateway vibeflix-gateway
-echo "protocols:
-  - MCP
+cat > deploy/agent-gateway.yaml <<EOF
+name: vibeflix-gateway
+protocols: [MCP]
 googleManaged:
   governedAccessPath: AGENT_TO_ANYWHERE
 registries:
-  - \"//agentregistry.googleapis.com/projects/$PROJECT/locations/$REGION\"" | \
+  - "//agentregistry.googleapis.com/projects/$PROJECT/locations/$REGION"
+EOF
 gcloud alpha network-services agent-gateways import vibeflix-gateway \
-  --project $PROJECT --location $REGION --source=-
+  --source=deploy/agent-gateway.yaml --location=$REGION --project=$PROJECT
+gcloud alpha network-services agent-gateways describe vibeflix-gateway \
+  --location=$REGION --project=$PROJECT
+# → note the GATEWAY ENDPOINT and its service agent SA from the output
+```
 
-# → note two things from the output or by running describe:
-#    gcloud alpha network-services agent-gateways describe vibeflix-gateway --location $REGION
-#    GATEWAY_URL (the governed MCP endpoint the agents will use)
-#    GATEWAY_SA  (its serviceExtensionsServiceAccount, e.g. service-$PN@gcp-sa-dep.iam.gserviceaccount.com)
+**4c. Policies — IAP authz extension + per-agent egress grants.** Access
+control is IAP: attach a `REQUEST_AUTHZ` extension to the gateway, then grant
+each agent identity `roles/iap.egressor` scoped by CEL conditions —
+[`deploy/policies.yaml`](policies.yaml) is the row-by-row mapping, identities
+come from `deploy/agent_identities.json`:
 
-# Gateway Policies — configure one policy rule per row in deploy/policies.yaml
-# (deny-by-default: caller agents only have access to allowed tools on target MCP servers).
-# Apply these policies via the Gemini Enterprise console under Gateways -> Policies.
-# Example mapping:
-#   vibeflix-brand-style      → mcp-brand-style: run_brand_audit
-#   vibeflix-deal-pricing     → mcp-licensing: get_license_pricing
-#   vibeflix-vendor-clearance → mcp-licensing: get_vendor,find_vendors,create_vendor,
-#                               update_vendor,list_trademarks,verify_trademark_record,
-#                               scan_global_exclusivity_clauses,check_vendor_eligibility
-#   vibeflix-vendor-clearance → mcp-market: scan_ecom_marketplaces,check_sku_volume_caps,capture_audit_map
-#   vibeflix-legal            → mcp-licensing: get_vendor,verify_trademark_record,
-#                               scan_global_exclusivity_clauses,upsert_contract,get_contract
-#   vibeflix-app              → mcp-licensing: list_trademarks,get_vendor,find_vendors,
-#                               verify_trademark_record,scan_global_exclusivity_clauses,
-#                               get_contract,upsert_contract,dump_stores,reset_vendors
+```bash
+cat > deploy/iap-authz-extension.yaml <<EOF
+name: vibeflix-gateway-iap-authz
+service: iap.googleapis.com
+failOpen: false
+timeout: 1s
+EOF
+gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
+  --source=deploy/iap-authz-extension.yaml --location=$REGION --project=$PROJECT
+
+# one grant per policies.yaml row — e.g. brand_style → its MCP server only:
+#   member:    principal://…/reasoningEngines/<vibeflix-brand-style id>   (agent_identities.json)
+#   role:      roles/iap.egressor
+#   condition: api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'
+# tool-level scoping uses tool attributes, e.g. read-only-only for the app:
+#   condition: api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true
+# (the codelab wraps these in scripts/grant_agent_mcp_egress.sh — same commands)
 ```
 
 **4d. Flip MCP access control to the gateway** — remove every direct invoker and

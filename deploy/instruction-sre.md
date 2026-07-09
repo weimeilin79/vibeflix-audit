@@ -127,16 +127,22 @@ Verify each engine: `agents-cli run --url https://$REGION-aiplatform.googleapis.
 ./deploy/setup_gateway.sh
 ```
 
-⚠️ **Preview surfaces** — the script prints each sub-step's intent + current
-command shape; adjust to your gcloud release if a surface moved. Sub-steps:
+Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/cloudnet-agent-gateway)
+(⚠️ still preview — spellings can drift). Run sub-steps individually with
+`./deploy/setup_gateway.sh registry|gateway|policies|rewire`. Sub-steps:
 
-1. **Register** the 3 MCP servers (run.app `/mcp` URLs) and the 5 agents (A2A
-   card URLs) in the **Agent Registry**.
-2. **Create the gateway** (`vibeflix-gateway`) attached to the 3 MCP entries;
-   note its endpoint + service agent SA.
-3. **Apply [`deploy/policies.yaml`](policies.yaml)** — deny-by-default per-agent
-   tool allowlists (brand_style → `run_brand_audit` only; legal is the sole
-   `upsert_contract` writer; the app gets the read-only set + demo reset).
+1. **Registry** — `gcloud alpha agent-registry services create` per MCP server,
+   with a **tool spec** (auto-generated from the live server by
+   `deploy/make_toolspec.py` → `deploy/toolspecs/*.json`) and the run.app `/mcp`
+   URL as the JSONRPC interface.
+2. **Gateway** — `gcloud alpha network-services agent-gateways import` from the
+   generated `deploy/agent-gateway.yaml` (protocols `[MCP]`, governed access
+   path `AGENT_TO_ANYWHERE`, bound to the project registry). Note the endpoint
+   + service agent SA from the describe output.
+3. **Policies** — an IAP authz extension on the gateway + per-agent **IAP
+   egress grants** (`roles/iap.egressor` on each identity from
+   `deploy/agent_identities.json`, CEL conditions for server/tool scoping) —
+   the mapping lives in [`deploy/policies.yaml`](policies.yaml).
 4. **Rewire MCP auth to the gateway** — gateway SA becomes the *only* invoker:
 
 ```bash
