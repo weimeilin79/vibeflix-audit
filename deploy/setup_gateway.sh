@@ -85,17 +85,14 @@ EOF
       "customProvider": {"authzExtension": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/authzExtensions/vibeflix-gateway-iap-authz"]}}
     }' || echo "  (authz policy may already exist — continuing)"
   echo
-  echo "  Per-agent tool access = IAP egress grants (roles/iap.egressor) with CEL"
-  echo "  conditions. Apply ONE grant per row of deploy/policies.yaml, e.g.:"
-  echo
-  echo "    # per policies.yaml row (CEL has commas → --condition-from-file):"
-  echo "    gcloud iap web add-iam-policy-binding --project=$PROJECT \\"
-  echo "      --member 'principal://…'   # deploy/agent_identities.json"
-  echo "      --role roles/iap.egressor --condition-from-file=<cond.yaml>"
-  echo "    with cond.yaml expression like:"
-  echo "      api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'"
-  echo "      api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true"
-  echo "  (see instruction-dev.md 4c-iii for full worked examples)"
+  # Per-caller tool grants: ALL rows of deploy/policies.yaml as roles/iap.egressor
+  # bindings with CEL server+tool conditions (members from agent_identities.json).
+  if [ -f "$HERE/agent_identities.json" ]; then
+    "$HERE/grant_mcp_egress.sh"
+  else
+    echo "  ⚠️ deploy/agent_identities.json missing — deploy the agents (step 3)"
+    echo "     first, then run: ./deploy/grant_mcp_egress.sh"
+  fi
 fi
 
 # ── 4/4 REWIRE: the gateway SA becomes the ONLY direct invoker on the MCPs ────

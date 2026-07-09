@@ -139,10 +139,18 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
    generated `deploy/agent-gateway.yaml` (protocols `[MCP]`, governed access
    path `AGENT_TO_ANYWHERE`, bound to the project registry). Note the endpoint
    + service agent SA from the describe output.
-3. **Policies** — an IAP authz extension on the gateway + per-agent **IAP
-   egress grants** (`roles/iap.egressor` on each identity from
-   `deploy/agent_identities.json`, CEL conditions for server/tool scoping) —
-   the mapping lives in [`deploy/policies.yaml`](policies.yaml).
+3. **Policies** — an IAP authz extension imported (`iapPolicyVersion: "V1"`),
+   bound to the gateway via an `AuthzPolicy` (REQUEST_AUTHZ, REST), then ALL
+   per-caller tool grants applied from [`deploy/policies.yaml`](policies.yaml)
+   in one shot:
+
+   ```bash
+   ./deploy/grant_mcp_egress.sh --dry-run   # preview all six grants
+   ./deploy/grant_mcp_egress.sh             # roles/iap.egressor + CEL per row
+   ```
+
+   Members come from `deploy/agent_identities.json` (agents → `principal://…`;
+   the console app → its `serviceAccount:`).
 4. **Rewire MCP auth to the gateway** — gateway SA becomes the *only* invoker:
 
 ```bash
