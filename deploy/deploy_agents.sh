@@ -67,7 +67,7 @@ engine_id_for() {  # display name → existing engine resource ID ('' if none)
 import os, sys, vertexai
 c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
 for e in c.agent_engines.list():
-    if e.api_resource.display_name == sys.argv[1]:
+    if (e.api_resource.display_name or "") == sys.argv[1]:
         print(e.api_resource.name.rsplit("/", 1)[-1]); break
 PYEOF
 }
@@ -120,7 +120,7 @@ import os, vertexai
 c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
 for e in c.agent_engines.list():
     r = e.api_resource
-    if r.display_name.startswith("vibeflix-"):
+    if (r.display_name or "").startswith("vibeflix-"):
         print(f"  {r.display_name:28s} {r.name}")
 PYEOF
 echo "A2A base per engine: https://$REGION-aiplatform.googleapis.com/v1/<resource name>"

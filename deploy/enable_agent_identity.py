@@ -37,7 +37,7 @@ client = vertexai.Client(project=PROJECT, location=REGION,
 identities: dict[str, dict] = {}
 for engine in client.agent_engines.list():
     res = engine.api_resource
-    if not res.display_name.startswith("vibeflix-"):
+    if not (res.display_name or "").startswith("vibeflix-"):
         continue
     if ONLY and res.display_name != ONLY:
         continue

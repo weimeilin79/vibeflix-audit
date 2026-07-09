@@ -229,7 +229,7 @@ import os, vertexai
 client = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
 for e in client.agent_engines.list():
     r = e.api_resource
-    print(f"{r.display_name:28s} {r.name}")
+    print(f"{r.display_name or '(unnamed)':28s} {r.name}")
 PY
 ```
 
@@ -443,7 +443,7 @@ import os, vertexai
 c = vertexai.Client(project=os.environ["PROJECT"], location=os.environ["REGION"])
 for e in c.agent_engines.list():
     r = e.api_resource
-    print(r.display_name, r.name)
+    print(r.display_name or "(unnamed)", r.name)
 PY
 )
 A2A_BASE="https://$REGION-aiplatform.googleapis.com/v1"
