@@ -516,7 +516,28 @@ done
 #   gcloud run services remove-iam-policy-binding … --role roles/run.invoker
 ```
 
-**4e. Attach the agents to the gateway.** The gateway has **no public URL** —
+**4e. Attach the agents to the gateway — this governs A2A too.** Per the
+[Agent Gateway overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/govern/gateways/agent-gateway-overview),
+the gateway proxies **"all HTTP-based traffic, including MCP and A2A"** — so
+attachment isn't only about tools: it's the enforcement point for
+**agent-to-agent calls**. Concretely for this mesh: register the agents
+themselves in the Agent Registry (agents register like MCP servers —
+`agent-registry services create … --agent-spec-type/--agent-spec-content` with
+the A2A card), and then, since **unregistered destinations are blocked and
+registered ones are deny-by-default**, `vibeflix-legal` becomes uncallable
+except by principals you explicitly grant — per `policies.yaml`'s
+`a2a_policies`, ONLY vendor_clearance:
+
+```bash
+# A2A egress grant (same IAP mechanism as 4c-iii; the A2A CEL attribute key is
+# not yet documented — verify on first grant, the MCP analogue is mcp.server):
+gcloud iap web add-iam-policy-binding --project=$PROJECT \
+  --member="$(jq -r '."vibeflix-vendor-clearance".principal' deploy/agent_identities.json)" \
+  --role=roles/iap.egressor \
+  --condition-from-file=<cond scoping to the vibeflix-legal registry entry>
+```
+
+The gateway itself has **no public URL** —
 its surface is an mTLS **Private Service Connect** attachment, consumed by
 Agent Runtime on the agent's behalf. So agents are not "re-pointed at a gateway
 URL": they are **attached by reference at deploy time**, and then discover MCP

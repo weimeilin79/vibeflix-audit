@@ -57,3 +57,16 @@ policies:
       - upsert_contract
       - dump_stores
       - reset_vendors
+
+# ---------------------------------------------------------------------------
+# A2A (agent-to-agent) egress — the gateway governs these too ("all HTTP-based
+# traffic, including MCP and A2A"). Deny-by-default: an agent not granted
+# egress to another agent CANNOT call it. This codifies the mesh's one
+# private hand-off: ONLY vendor_clearance may invoke legal.
+# Requires the target agent registered in Agent Registry (agents register like
+# MCP servers, via --agent-spec-type on `agent-registry services create`).
+# NOTE: the A2A CEL attribute key isn't documented yet (MCP has mcp.server/
+# mcp.tool.*) — verify the attribute name on first live grant.
+a2a_policies:
+  - caller: vibeflix-vendor-clearance
+    target_agent: vibeflix-legal

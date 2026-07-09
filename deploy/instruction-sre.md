@@ -131,7 +131,11 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
 (⚠️ still preview — spellings can drift). Run sub-steps individually with
 `./deploy/setup_gateway.sh registry|gateway|policies|rewire`. Sub-steps:
 
-1. **Registry** — `gcloud alpha agent-registry services create` per MCP server,
+1. **Registry** — `gcloud alpha agent-registry services create` per MCP server
+   AND per agent (agents use `--agent-spec-type` with their A2A card) — the
+   gateway governs **A2A between agents too** (deny-by-default: only
+   vendor_clearance gets egress to legal, per `policies.yaml` `a2a_policies`).
+   Per MCP server,
    with a **tool spec** (auto-generated from the live server by
    `deploy/make_toolspec.py` → `deploy/toolspecs/*.json`) and the run.app `/mcp`
    URL as the JSONRPC interface.
