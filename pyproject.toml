@@ -1,0 +1,10 @@
+[project]
+name = "vibeflix-audit"
+version = "0.1.0"
+description = "Vibeflix agent audit workspace"
+
+[tool.agents-cli]
+name = "vibeflix-audit"
+description = "Vibeflix agent audit workspace"
+base_template = "adk"
+agent_directory = "agents"

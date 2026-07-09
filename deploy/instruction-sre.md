@@ -117,7 +117,7 @@ PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
 If the preview misbehaves, the shared `vibeflix-agents` SA from 3a is the
 fallback (policies then bind per registered-agent entry instead — coarser).
 
-Verify each engine: `agents-cli run --url <engine url> --mode a2a "ping"`.
+Verify each engine: `agents-cli run --url https://$REGION-aiplatform.googleapis.com/v1beta1/<engine resource name> --mode adk "ping"`.
 
 ---
 

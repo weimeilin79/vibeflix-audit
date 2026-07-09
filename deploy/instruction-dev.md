@@ -265,14 +265,22 @@ PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
 *This sets framework="a2a", unsets the service account, registers A2A methods, and activates identity. Confirm `legal`'s framework is `a2a` before moving on.*
 
 **3d. Deploy vendor_clearance last.**
-Now that `legal`'s A2A endpoints are exposed, capture its A2A base URL:
-`LEGAL_A2A_URL=https://$REGION-aiplatform.googleapis.com/v1beta1/<legal's engine resource name>/a2a`
+Now that `legal`'s A2A endpoints are exposed, fetch and export its A2A base URL:
+
+```bash
+export LEGAL_A2A_URL=$(.venv/bin/python -c "
+import vertexai
+c = vertexai.Client(project='$PROJECT', location='$REGION')
+for e in c.agent_engines.list():
+    if e.api_resource.display_name == 'vibeflix-legal':
+        print(f'https://$REGION-aiplatform.googleapis.com/v1beta1/{e.api_resource.name}')
+")
+echo "Set LEGAL_A2A_URL to: $LEGAL_A2A_URL"
+```
 
 Deploy `vendor_clearance` using that URL:
 
 ```bash
-export LEGAL_A2A_URL=<legal's A2A base from above>
-
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nMCP_MARKET_URL=%s\nLEGAL_A2A_URL=%s\n' \
   "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "${LEGAL_A2A_URL:?export LEGAL_A2A_URL first — legal must be deployed & patched}" > /tmp/env_vendor_clearance
 .venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION --otel_to_cloud \
@@ -323,14 +331,14 @@ gcloud pubsub topics add-iam-policy-binding vibeflix-mesh-events \
 Fallback if the preview misbehaves: keep the shared `vibeflix-agents` SA from 3a
 and bind step-4 policies per registered-agent entry (coarser but works today).
 
-**3d. Verify each engine** answers over A2A:
+**3f. Verify each engine** answers over the Vertex AI stream endpoint (use `--mode adk` because `--mode a2a` fails to resolve the card due to client/container path mismatches):
 
 ```bash
 for E in $(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
   | jq -r '.reasoningEngines[] | select(.displayName // "" | startswith("vibeflix-")) | .name'); do
   echo "── $E"
-  agents-cli run --url "$E" --mode a2a "ping — reply with your agent name"
+  agents-cli run --url "https://$REGION-aiplatform.googleapis.com/v1beta1/$E" --mode adk "ping"
 done
 ```
 
@@ -353,48 +361,55 @@ says otherwise); `$PN` is the project number
 ```bash
 for S in licensing market brand-style; do
   URL=$(gcloud run services describe vibeflix-mcp-$S --region $REGION --format 'value(status.url)')/mcp
-  # gcloud form:
-  gcloud alpha gemini-enterprise agent-registry mcp-servers register vibeflix-mcp-$S \
-    --project $PROJECT --location $REGION --uri "$URL" \
-    --description "Vibeflix $S MCP server (Cloud Run, IAM-gated)" \
-  || # REST fallback:
-  curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    "https://geminienterprise.googleapis.com/v1alpha/projects/$PN/locations/$REGION/mcpServers?mcpServerId=vibeflix-mcp-$S" \
-    -d "{\"displayName\":\"vibeflix-mcp-$S\",\"uri\":\"$URL\"}"
+  gcloud alpha agent-registry services create vibeflix-mcp-$S \
+    --project $PROJECT --location $REGION \
+    --mcp-server-spec-type=no-spec \
+    --interfaces=protocolBinding=jsonrpc,url="$URL" \
+    --description "Vibeflix $S MCP server (Cloud Run, IAM-gated)"
 done
 ```
 
-**4b. Register the 5 agents (A2A cards from step 3):**
+**4b. Register the 5 agents in the Agent Registry:**
 
 ```bash
 for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
-  CARD=<vibeflix-$A engine's agent-card URL>
-  gcloud alpha gemini-enterprise agent-registry agents register vibeflix-$A \
-    --project $PROJECT --location $REGION --agent-card-url "$CARD" \
-  || curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    "https://geminienterprise.googleapis.com/v1alpha/projects/$PN/locations/$REGION/agents?agentId=vibeflix-$A" \
-    -d "{\"displayName\":\"vibeflix-$A\",\"a2aAgentCard\":{\"uri\":\"$CARD\"}}"
+  E_NAME="vibeflix-$A"
+  E_RESOURCE=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
+    | jq -r --arg name "$E_NAME" '.reasoningEngines[] | select(.displayName == $name) | .name')
+  URL="https://$REGION-aiplatform.googleapis.com/v1beta1/$E_RESOURCE/a2a"
+
+  gcloud alpha agent-registry services create vibeflix-$A \
+    --project $PROJECT --location $REGION \
+    --agent-spec-type=no-spec \
+    --interfaces=protocolBinding=jsonrpc,url="$URL" \
+    --description "Vibeflix $A agent (A2A, Agent Engine)"
 done
 ```
 
-**4c. Create the gateway over the 3 MCP entries, then apply the policies:**
+**4c. Create the Agent Gateway and configure policies:**
 
 ```bash
-gcloud alpha gemini-enterprise gateways create vibeflix-gateway \
-  --project $PROJECT --location $REGION \
-  --mcp-servers vibeflix-mcp-licensing,vibeflix-mcp-market,vibeflix-mcp-brand-style
-# → note two things from the output / console:
-#    GATEWAY_URL (the governed MCP endpoint the agents will use)
-#    GATEWAY_SA  (its service agent, e.g. service-$PN@gcp-sa-<gateway>.iam.gserviceaccount.com)
+# Create the gateway vibeflix-gateway
+echo "protocols:
+  - MCP
+googleManaged:
+  governedAccessPath: AGENT_TO_ANYWHERE
+registries:
+  - \"//agentregistry.googleapis.com/projects/$PROJECT/locations/$REGION\"" | \
+gcloud alpha network-services agent-gateways import vibeflix-gateway \
+  --project $PROJECT --location $REGION --source=-
 
-# Policies — one binding per row of deploy/policies.yaml (deny-by-default:
-# an agent with no binding for a tool gets REJECTED at the gateway). Example,
-# brand_style may call run_brand_audit and nothing else:
-gcloud alpha gemini-enterprise gateways policies create allow-brand-style \
-  --project $PROJECT --location $REGION --gateway vibeflix-gateway \
-  --caller "principal://…/agents/vibeflix-brand-style" \
-  --mcp-server vibeflix-mcp-brand-style --allow-tools run_brand_audit
-# Repeat for every entry in deploy/policies.yaml:
+# → note two things from the output or by running describe:
+#    gcloud alpha network-services agent-gateways describe vibeflix-gateway --location $REGION
+#    GATEWAY_URL (the governed MCP endpoint the agents will use)
+#    GATEWAY_SA  (its serviceExtensionsServiceAccount, e.g. service-$PN@gcp-sa-dep.iam.gserviceaccount.com)
+
+# Gateway Policies — configure one policy rule per row in deploy/policies.yaml
+# (deny-by-default: caller agents only have access to allowed tools on target MCP servers).
+# Apply these policies via the Gemini Enterprise console under Gateways -> Policies.
+# Example mapping:
+#   vibeflix-brand-style      → mcp-brand-style: run_brand_audit
 #   vibeflix-deal-pricing     → mcp-licensing: get_license_pricing
 #   vibeflix-vendor-clearance → mcp-licensing: get_vendor,find_vendors,create_vendor,
 #                               update_vendor,list_trademarks,verify_trademark_record,
