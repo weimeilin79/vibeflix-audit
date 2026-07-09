@@ -97,9 +97,12 @@ fi
 
 # ── 4/4 REWIRE: the gateway SA becomes the ONLY direct invoker on the MCPs ────
 if [ "$STEP" = all ] || [ "$STEP" = rewire ]; then
-  echo "  terraform -chdir=$HERE/terraform/mcp apply \\"
+  gcloud iam service-accounts describe "vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 \
+    || gcloud iam service-accounts create vibeflix-mcp-invoker --display-name "Vibeflix MCP invoker (gateway egress)"
+  echo "  then: terraform -chdir=$HERE/terraform/mcp apply \\"
   echo "    -var project=$PROJECT -var region=$REGION -var deployer=user:\$(gcloud config get-value account) \\"
-  echo "    -var 'invoker_members=[\"serviceAccount:<GATEWAY_SA>\",\"serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com\"]'"
-  echo "  (the app keeps DIRECT access — the gateway's mTLS/PSC surface is for agents)"
+  echo "    -var 'invoker_members=[\"serviceAccount:vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com\",\"serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com\"]'"
+  echo "  (pass vibeflix-mcp-invoker as --mcp-invoker-sa when attaching agents to the gateway;"
+  echo "   the app keeps DIRECT access — the mTLS/PSC surface is agents-only)"
   echo "  then redeploy the agents with MCP_*_URL = the gateway endpoint."
 fi

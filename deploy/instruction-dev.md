@@ -451,11 +451,14 @@ Fastest route — apply every [`deploy/policies.yaml`](policies.yaml) row at onc
 ./deploy/grant_mcp_egress.sh
 ```
 
-Manual route — all six grants spelled out. Each follows the same pattern:
+Manual route — all six grants spelled out (zsh users: run
+`setopt interactive_comments` first, or the `#` comment lines execute as
+commands when pasted). Each follows the same pattern:
 write the condition file, extract the member, bind:
 
 ```bash
-grant() {  # $1 member  $2 title  $3 CEL expression
+# grant <member> <title> <CEL expression>
+grant() {
   printf 'expression: >-\n  %s\ntitle: %s\n' "$3" "$2" > /tmp/cond.yaml
   gcloud iap web add-iam-policy-binding --project=$PROJECT \
     --member="$1" --role=roles/iap.egressor --condition-from-file=/tmp/cond.yaml
@@ -494,33 +497,45 @@ codelab's `mcp.tool.*` pattern — `isReadOnly` was the documented example; if t
 gateway logs an unknown-attribute error, adjust the key once in
 `deploy/grant_mcp_egress.sh` and re-run.)
 
-**4d. Flip MCP access control to the gateway** — remove every direct invoker and
-grant ONLY the gateway SA, so all MCP traffic must pass the policy check:
+**4d. Point MCP invocation at a dedicated invoker SA.** The gateway has no
+backend-egress SA of its own (its `serviceExtensionsServiceAccount` only calls
+the IAP hook) — per the codelab, backend calls ride a **user-supplied MCP
+invoker SA**, passed when agents attach to the gateway (`--mcp-invoker-sa`).
+Create it and make it (plus the console app) the only invokers:
 
 ```bash
+gcloud iam service-accounts create vibeflix-mcp-invoker --display-name "Vibeflix MCP invoker (gateway egress)"
+sleep 30
 for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
-  gcloud run services remove-iam-policy-binding $S --region $REGION \
-    --member serviceAccount:vibeflix-agents@$PROJECT.iam.gserviceaccount.com --role roles/run.invoker
   gcloud run services add-iam-policy-binding $S --region $REGION \
-    --member serviceAccount:<GATEWAY_SA> --role roles/run.invoker
+    --member serviceAccount:vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com --role roles/run.invoker
 done
+# (the console app ALSO keeps direct access — that grant is in step 5a, where
+#  its service account is created)
+# remove any leftover direct grants (yours, the agents') once the gateway path works:
+#   gcloud run services remove-iam-policy-binding … --role roles/run.invoker
 ```
 
-**4e. Re-point the agents at the gateway** — re-run the step-3b deploy commands
-with the MCP env vars swapped to the gateway endpoint (updating an existing
-display-name redeploys the same engine):
+**4e. Attach the agents to the gateway.** The gateway has **no public URL** —
+its surface is an mTLS **Private Service Connect** attachment, consumed by
+Agent Runtime on the agent's behalf. So agents are not "re-pointed at a gateway
+URL": they are **attached by reference at deploy time**, and then discover MCP
+servers from the Agent Registry through the gateway (no `MCP_*_URL` env needed
+at all). Per the codelab's agent deploy:
 
 ```bash
-export MCP_LICENSING_URL=$GATEWAY_URL/mcp-servers/vibeflix-mcp-licensing/mcp
-export MCP_MARKET_URL=$GATEWAY_URL/mcp-servers/vibeflix-mcp-market/mcp
-export MCP_BRAND_STYLE_URL=$GATEWAY_URL/mcp-servers/vibeflix-mcp-brand-style/mcp
-# (exact per-server path per the gateway's console page)
-# then re-run each `adk deploy agent_engine …` command from 3b unchanged.
+#   --agent-gateway=projects/$PROJECT/locations/$REGION/agentGateways/vibeflix-gateway
+#   --mcp-invoker-sa=vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com
+#   (plus agent identity enabled — done in 3c)
 ```
 
-Auth flow from here:
-*agent (own identity token) → gateway (policy check) → gateway OIDC → Cloud Run MCP.*
-Agents hold no per-MCP credentials.
+The plain `adk deploy agent_engine` CLI has no gateway flag yet — gateway
+attachment goes through the engine's config (the same surface the codelab's
+`deploy_agent.py` drives). Until your agents are attached, they keep working
+via their direct `MCP_*_URL` env (grant `vibeflix-agents` `run.invoker` on the
+three services if you removed it). Once attached, the flow becomes:
+*agent (its own identity, mTLS) → gateway (IAP policy check per 4c) →
+vibeflix-mcp-invoker OIDC → Cloud Run MCP* — agents hold no per-MCP credentials.
 
 Optional: publish each agent to Gemini Enterprise:
 
@@ -548,6 +563,9 @@ gcloud pubsub topics add-iam-policy-binding vibeflix-mesh-events \
   --member serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com --role roles/pubsub.publisher
 gcloud pubsub subscriptions add-iam-policy-binding vibeflix-mesh-events-app-cloud \
   --member serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com --role roles/pubsub.subscriber
+# direct MCP access (the app cannot ride the gateway's mTLS/PSC surface):
+gcloud run services add-iam-policy-binding vibeflix-mcp-licensing --region $REGION \
+  --member serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com --role roles/run.invoker
 
 # 5b. collect the wiring: each agent's A2A base URL from its engine resource name
 #     (no gcloud surface for Agent Runtime — REST + jq)
@@ -559,7 +577,8 @@ BRAND_URL=$A2A_BASE/$(eng vibeflix-brand-style)
 VENDOR_URL=$A2A_BASE/$(eng vibeflix-vendor-clearance)
 PRICING_URL=$A2A_BASE/$(eng vibeflix-deal-pricing)
 UI_URL=$A2A_BASE/$(eng vibeflix-ui-renderer)
-# MCP_*_URL: the gateway per-server endpoints from step 4e (still exported).
+# MCP_*_URL: the DIRECT run.app /mcp URLs (step 2) — the app cannot ride the
+# gateway's mTLS/PSC surface; its access is IAM + the read-only IAP grant.
 
 # 5c. build + deploy
 gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app"
