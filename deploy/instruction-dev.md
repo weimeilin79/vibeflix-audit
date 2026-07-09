@@ -441,24 +441,36 @@ on the **registered MCP service's IAM policy**, member = the agent's identity
 principal (`deploy/agent_identities.json`), CEL condition for tool-level
 scoping. One grant per [`deploy/policies.yaml`](policies.yaml) row, e.g.:
 
+The bindings live on the project's **IAP web** IAM resource (`roles/iap.egressor`
+= `iap.webServiceVersions.egressViaIAP`; the Agent Registry API has no IAM
+surface — scoping is done entirely by the CEL condition). CEL expressions
+contain commas, so use `--condition-from-file`:
+
 ```bash
 # brand_style → its own MCP server (all tools):
-gcloud alpha agent-registry services add-iam-policy-binding vibeflix-mcp-brand-style \
-  --project=$PROJECT --location=$REGION \
+cat > /tmp/cond_brand_style.yaml <<EOF
+expression: api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'
+title: brand-style-server-only
+EOF
+gcloud iap web add-iam-policy-binding --project=$PROJECT \
   --member="principal://…/reasoningEngines/<vibeflix-brand-style id>" \
-  --role=roles/iap.egressor
+  --role=roles/iap.egressor \
+  --condition-from-file=/tmp/cond_brand_style.yaml
 
-# the app → licensing, READ-ONLY tools only (tool-attribute CEL condition):
-gcloud alpha agent-registry services add-iam-policy-binding vibeflix-mcp-licensing \
-  --project=$PROJECT --location=$REGION \
+# the app → READ-ONLY tools only (tool-attribute condition):
+cat > /tmp/cond_app_ro.yaml <<EOF
+expression: api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true
+title: read-only-tools
+EOF
+gcloud iap web add-iam-policy-binding --project=$PROJECT \
   --member="serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" \
   --role=roles/iap.egressor \
-  --condition="expression=api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly'\, false) == true,title=read-only-tools"
+  --condition-from-file=/tmp/cond_app_ro.yaml
 ```
 
-(The codelab wraps 4c-iii in its repo's `scripts/grant_agent_mcp_egress.sh`;
-if `services add-iam-policy-binding` isn't in your gcloud release, apply the
-same bindings via the registry's `setIamPolicy` REST method.)
+(The codelab wraps these in its repo's `scripts/grant_agent_mcp_egress.sh` —
+same role, same conditions. Combine server + tool scoping in one expression
+with `&&` for per-agent-per-tool rows in `policies.yaml`.)
 
 **4d. Flip MCP access control to the gateway** — remove every direct invoker and
 grant ONLY the gateway SA, so all MCP traffic must pass the policy check:

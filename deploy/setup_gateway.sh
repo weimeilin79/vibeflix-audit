@@ -88,15 +88,14 @@ EOF
   echo "  Per-agent tool access = IAP egress grants (roles/iap.egressor) with CEL"
   echo "  conditions. Apply ONE grant per row of deploy/policies.yaml, e.g.:"
   echo
-  echo "    # brand_style may reach ONLY the brand-style MCP server:"
-  echo "    gcloud iap … add-iam-policy-binding (roles/iap.egressor) \\"
-  echo "      --member 'principal://…vibeflix-brand-style…'  # deploy/agent_identities.json"
-  echo "      --condition-expression \"api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'\""
-  echo
-  echo "    # tool-level (e.g. app read-only) via tool attributes:"
-  echo "    --condition-expression \"api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true\""
-  echo
-  echo "  (the codelab wraps these in scripts/grant_agent_mcp_egress.sh — same idea)"
+  echo "    # per policies.yaml row (CEL has commas → --condition-from-file):"
+  echo "    gcloud iap web add-iam-policy-binding --project=$PROJECT \\"
+  echo "      --member 'principal://…'   # deploy/agent_identities.json"
+  echo "      --role roles/iap.egressor --condition-from-file=<cond.yaml>"
+  echo "    with cond.yaml expression like:"
+  echo "      api.getAttribute('iap.googleapis.com/mcp.server', '') == 'vibeflix-mcp-brand-style'"
+  echo "      api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true"
+  echo "  (see instruction-dev.md 4c-iii for full worked examples)"
 fi
 
 # ── 4/4 REWIRE: the gateway SA becomes the ONLY direct invoker on the MCPs ────
