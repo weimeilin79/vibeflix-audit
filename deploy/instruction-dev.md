@@ -402,6 +402,8 @@ name: vibeflix-gateway-iap-authz
 service: iap.googleapis.com
 failOpen: false
 timeout: 1s
+metadata:
+  iapPolicyVersion: "V1"
 EOF
 gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
   --source=deploy/iap-authz-extension.yaml --location=$REGION --project=$PROJECT

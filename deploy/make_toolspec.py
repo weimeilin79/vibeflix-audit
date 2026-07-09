@@ -9,13 +9,18 @@ Usage:  python deploy/make_toolspec.py <mcp_url> > toolspec.json
 
 import asyncio
 import json
+import os
 import sys
 
 sys.path.insert(0, ".")
-from vibeflix_common.cloud_auth import auth_headers  # noqa: E402
 
 
 async def main(url: str):
+    if url.startswith("https://"):
+        # Talking to a CLOUD MCP from wherever this runs — force token minting
+        # (laptop auto-detect would otherwise skip auth → 403).
+        os.environ["RUN_LOCAL"] = "false"
+    from vibeflix_common.cloud_auth import auth_headers
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 

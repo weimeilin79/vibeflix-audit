@@ -148,7 +148,10 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
 ```bash
 terraform -chdir=deploy/terraform/mcp apply \
   -var project=$PROJECT -var region=$REGION -var deployer=user:$(gcloud config get-value account) \
-  -var 'invoker_members=["serviceAccount:<GATEWAY_SA>"]'
+  -var 'invoker_members=["serviceAccount:<GATEWAY_SA>","serviceAccount:vibeflix-app@'$PROJECT'.iam.gserviceaccount.com"]'
+# NOTE: the app keeps DIRECT access — the gateway is consumed over mTLS/PSC by
+# Agent Runtime agents (attached by reference), not by public-HTTPS callers like
+# the Cloud Run console. Only the AGENTS' direct grants are removed.
 ```
 
 Then redeploy the agents with `MCP_*_URL` = the **gateway** endpoints

@@ -27,13 +27,13 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
   for S in licensing market brand-style; do
     URL=$(gcloud run services describe "vibeflix-mcp-$S" --region "$REGION" --format 'value(status.url)')/mcp
     SPEC="$HERE/toolspecs/$S.json"
-    [ -f "$SPEC" ] || { echo "  generating tool spec $SPEC…";
+    [ -s "$SPEC" ] || { echo "  generating tool spec $SPEC…";
       "$HERE/../.venv/bin/python" "$HERE/make_toolspec.py" "$URL" > "$SPEC"; }
     gcloud alpha agent-registry services create "vibeflix-mcp-$S" \
       --project "$PROJECT" --location "$REGION" \
       --display-name "Vibeflix MCP $S" \
       --mcp-server-spec-type=tool-spec \
-      --mcp-server-spec-content="$SPEC" \
+      --mcp-server-spec-content="$(cat "$SPEC")" \
       --interfaces="url=$URL,protocolBinding=JSONRPC" \
       || echo "  (vibeflix-mcp-$S may already be registered — continuing)"
   done
@@ -67,6 +67,8 @@ name: vibeflix-gateway-iap-authz
 service: iap.googleapis.com
 failOpen: false
 timeout: 1s
+metadata:
+  iapPolicyVersion: "V1"
 EOF
   gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
     --source="$HERE/iap-authz-extension.yaml" --location="$REGION" --project="$PROJECT" \
@@ -90,6 +92,7 @@ fi
 if [ "$STEP" = all ] || [ "$STEP" = rewire ]; then
   echo "  terraform -chdir=$HERE/terraform/mcp apply \\"
   echo "    -var project=$PROJECT -var region=$REGION -var deployer=user:\$(gcloud config get-value account) \\"
-  echo "    -var 'invoker_members=[\"serviceAccount:<GATEWAY_SA>\"]'"
+  echo "    -var 'invoker_members=[\"serviceAccount:<GATEWAY_SA>\",\"serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com\"]'"
+  echo "  (the app keeps DIRECT access — the gateway's mTLS/PSC surface is for agents)"
   echo "  then redeploy the agents with MCP_*_URL = the gateway endpoint."
 fi

@@ -46,3 +46,9 @@ data/
 
 # vibeflix-common copies vendored into agent folders at engine-deploy time
 agents/*/_vendor/
+
+# Agent Registry tool specs — generated from the LIVE MCP servers by
+# deploy/make_toolspec.py (setup_gateway.sh regenerates them on demand)
+deploy/toolspecs/
+deploy/agent-gateway.yaml
+deploy/iap-authz-extension.yaml
