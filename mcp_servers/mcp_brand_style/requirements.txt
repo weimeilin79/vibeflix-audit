@@ -5,3 +5,8 @@ pyspellchecker>=0.8.0
 google-cloud-firestore>=2.0.0
 # Live mesh telemetry (vibeflix_common.telemetry -> Workflow-graph tool LEDs).
 google-cloud-pubsub>=2.21.0
+# OTel tracing (cloud-only; vibeflix_common.otel) — Cloud Trace exporter + Starlette spans.
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-gcp-trace>=1.6.0
+opentelemetry-propagator-gcp>=1.6.0
+opentelemetry-instrumentation-starlette>=0.46b0

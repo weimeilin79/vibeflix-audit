@@ -59,8 +59,8 @@ The approved target state for the pokedemo-test deployment. Everything is
 |---|---|---|
 | 6 × agent principals (`principal://…/reasoningEngines/<id>`) | Agent Identity (enabled per engine, v1beta1 `identity_type`) | baseline via `principalSet://…/projects/<PN>`: `roles/aiplatform.expressUser`, `roles/serviceusage.serviceUsageConsumer`, `roles/browser`; topic-scoped `roles/pubsub.publisher` on `vibeflix-mesh-events`; per-agent `roles/iap.egressor` bindings (tool CEL per matrix above; endpoint-scoped for the A2A rows) |
 | `vibeflix-mcp-invoker` SA | plain SA (gateway backend egress; passed at engine attach) | `roles/run.invoker` on the 3 MCP Cloud Run services — **the only invoker** |
-| `vibeflix-mcp-licensing` SA | MCP runtime (licensing service) | `roles/datastore.user` (vendors CRUD), topic-scoped `pubsub.publisher` |
-| `vibeflix-mcp-readonly` SA | MCP runtime (market + brand-style) | `roles/datastore.viewer`, topic-scoped `pubsub.publisher` |
+| `vibeflix-mcp-licensing` SA | MCP runtime (licensing service) | `roles/datastore.user` (vendors CRUD), topic-scoped `pubsub.publisher`, `roles/cloudtrace.agent` (OTel spans) |
+| `vibeflix-mcp-readonly` SA | MCP runtime (market + brand-style) | `roles/datastore.viewer`, topic-scoped `pubsub.publisher`, `roles/cloudtrace.agent` (OTel spans) |
 | `vibeflix-app` SA | console app (Cloud Run) | `roles/aiplatform.user` (reach the gateway-governed engines), `roles/datastore.user` (audit history), `roles/storage.objectAdmin` on the upload bucket, `roles/pubsub.publisher` (topic) + `subscriber` on `vibeflix-mesh-events-app-cloud`, `roles/run.invoker` on mcp-licensing (direct read-set) |
 | your user | operator | temporary `run.invoker` for step-2 verification — **remove after 4e works** |
 

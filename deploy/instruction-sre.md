@@ -210,6 +210,33 @@ graph LEDs light from the `-app-cloud` subscription, contract lands in history.
 
 ---
 
+
+## Step 6 — Application Topology (agents + MCP in Cloud Monitoring)
+
+The Monitoring [Application Topology](https://docs.cloud.google.com/monitoring/docs/application-topology)
+view has native **Agent** and **MCP server** nodes; edges come from OTel traces.
+
+```bash
+gcloud services enable observability.googleapis.com apphub.googleapis.com \
+  cloudtrace.googleapis.com telemetry.googleapis.com --project=$PROJECT
+gcloud apphub applications create vibeflix-mesh \\
+  --location=$REGION --scope-type=REGIONAL \\
+  --display-name="Vibeflix mesh" --project=$PROJECT
+# then register the Cloud Run services (app + 3 MCPs) into it:
+#   gcloud apphub applications services list/create — or console: App Hub →
+#   vibeflix-mesh → Services → register discovered services.
+```
+
+- Engines already emit traces (`--otel_to_cloud` in step 3) → they appear as Agent nodes.
+- MCP servers appear via trace DISCOVERY (agent tool-call spans) — per the doc's
+  limitations, MCP connections show only when App Hub status is `discovered`.
+- Viewers need `roles/apphub.viewer` + the App Topology Viewer role.
+
+✅ **Verify:** Monitoring → Application Topology shows agent nodes with edges to
+MCP-server nodes after a few audits' worth of traffic.
+
+---
+
 ## Teardown (reverse order)
 
 ```bash

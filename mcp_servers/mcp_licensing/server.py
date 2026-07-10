@@ -395,4 +395,8 @@ if __name__ == "__main__":
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False
         )
+        # Cloud-only OTel tracing (Cloud Trace + Application Topology node);
+        # no-op locally and without the otel packages.
+        from vibeflix_common.otel import setup_otel
+        setup_otel(os.environ.get("K_SERVICE", "mcp_licensing"))
         mcp.run(transport=transport)
