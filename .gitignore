@@ -52,3 +52,4 @@ agents/*/_vendor/
 deploy/toolspecs/
 deploy/agent-gateway.yaml
 deploy/iap-authz-extension.yaml
+vibeflix_common/

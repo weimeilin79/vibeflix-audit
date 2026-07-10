@@ -120,7 +120,9 @@ def requirements(name: str) -> list[str]:
         if not line or line.startswith("#") or line.startswith("/app/"):
             continue
         lines.append(line)
-    lines.append("packages/vibeflix-common")
+    # SDK-required (deploy warns if absent) + our pinned working pair:
+    lines += ["a2a-sdk==0.3.26", "cloudpickle==3.1.2",
+              "google-cloud-aiplatform[agent_engines]>=1.130.0"]
     return lines
 
 
@@ -139,7 +141,25 @@ def _check_sdk_compat():
         )
 
 
+def _vendored_common() -> str:
+    """extra_packages resolves RELATIVE root-level dirs (the scaffold's proven
+    pattern: extra_packages=["app"]). Copy vibeflix_common to the repo root for
+    the duration of the deploy; cleaned up in main()'s finally."""
+    import shutil
+    dst = ROOT / "vibeflix_common"
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(ROOT / "packages" / "vibeflix-common" / "vibeflix_common", dst,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    return "vibeflix_common"
+
+
+def _cleanup_vendored():
+    import shutil
+    shutil.rmtree(ROOT / "vibeflix_common", ignore_errors=True)
+
+
 def main():
+    os.chdir(ROOT)   # extra_packages/"agents" are root-relative
     import vertexai
     from vertexai import types
 
@@ -164,12 +184,13 @@ def main():
         config = {
             "display_name": display,
             "description": spec["desc"],
-            "service_account": f"vibeflix-agents@{PROJECT}.iam.gserviceaccount.com",
+            # NOTE: service_account may NOT be set with AGENT_IDENTITY —
+            # the agent identity IS the workload identity (verified: 400 otherwise).
             "identity_type": types.IdentityType.AGENT_IDENTITY,
             "staging_bucket": STAGING,
             "env_vars": env,
             "requirements": requirements(name),
-            "extra_packages": ["agents", "packages/vibeflix-common"],
+            "extra_packages": ["agents", _vendored_common()],
         }
         if display in existing:
             print(f"── updating {display} ({existing[display]})…")
@@ -185,4 +206,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _cleanup_vendored()
