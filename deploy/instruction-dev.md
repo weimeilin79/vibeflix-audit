@@ -349,6 +349,9 @@ recommended baseline to ALL agents in the project in one go, then per-agent
 grants where needed:
 
 ```bash
+# NOTE: this principalSet matches EVERY Agent Runtime identity in the project —
+# including engines deployed LATER (vendor_clearance in 3d, the orchestrator in
+# 3f). Grant once here; no re-run needed as engines are added.
 ORG=$(gcloud organizations list --format 'value(ID)' | head -1)
 AGENTS_SET="principalSet://agents.global.org-$ORG.system.id.goog/attribute.platformContainer/aiplatform/projects/$PN"
 for ROLE in roles/aiplatform.expressUser roles/serviceusage.serviceUsageConsumer roles/browser; do
