@@ -43,6 +43,18 @@ policies:
       - upsert_contract      # legal is the ONLY contract writer
       - get_contract
 
+  # The orchestrator engine: its note_responder answers registry questions —
+  # READ-ONLY licensing tools, nothing else (per topology.md).
+  - caller: vibeflix-orchestrator
+    mcp_server: vibeflix-mcp-licensing
+    allow_tools:
+      - get_vendor
+      - find_vendors
+      - list_trademarks
+      - verify_trademark_record
+      - scan_global_exclusivity_clauses
+      - get_contract
+
   # The console app: pickers, note_responder, Database tab, contract reads +
   # the volume annotation. Read-only except upsert_contract (administrative
   # production_volume stamp) and reset_vendors (the demo Reset button).

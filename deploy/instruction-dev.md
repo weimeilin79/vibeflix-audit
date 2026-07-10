@@ -198,7 +198,7 @@ agent reads them at import for its Gemini config (notably
 file — the CLI intercepts it):
 
 ```bash
-for A in brand_style vendor_clearance deal_pricing legal ui_renderer; do
+for A in brand_style vendor_clearance deal_pricing legal ui_renderer orchestrator; do
   cat > agents/$A/.env <<EOF
 GOOGLE_CLOUD_PROJECT=$PROJECT
 GOOGLE_CLOUD_LOCATION=global
@@ -213,7 +213,7 @@ First, vendor `vibeflix-common` into each agent folder (the engine build pip-ins
 it from there — a git URL won't work against the private repo):
 
 ```bash
-for A in brand_style vendor_clearance deal_pricing legal ui_renderer; do
+for A in brand_style vendor_clearance deal_pricing legal ui_renderer orchestrator; do
   rm -rf agents/$A/_vendor && mkdir -p agents/$A/_vendor/vibeflix-common
   cp -R packages/vibeflix-common/vibeflix_common agents/$A/_vendor/vibeflix-common/
   cp packages/vibeflix-common/pyproject.toml agents/$A/_vendor/vibeflix-common/
@@ -278,6 +278,29 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
   | jq -r '.reasoningEngines[] | "\(.displayName // "(unnamed)")\t\(.name)"'
 ```
+
+**3b-vi. Deploy the ORCHESTRATOR engine — LAST** (it is engine #1 in
+topology.md but deploys after the domain engines, whose A2A URLs it needs):
+
+```bash
+BASE=https://$REGION-aiplatform.googleapis.com/v1beta1
+# fill from the engine list above:
+export BRAND_STYLE_A2A_URL=$BASE/<brand-style engine resource>
+export VENDOR_CLEARANCE_A2A_URL=$BASE/<vendor-clearance engine resource>
+export DEAL_PRICING_A2A_URL=$BASE/<deal-pricing engine resource>
+
+printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nBRAND_STYLE_A2A_URL=%s\nVENDOR_CLEARANCE_A2A_URL=%s\nDEAL_PRICING_A2A_URL=%s\n' \
+  "$MCP_LICENSING_URL" "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL" > /tmp/env_orchestrator
+.venv/bin/adk deploy agent_engine agents/orchestrator --project $PROJECT --region $REGION --otel_to_cloud \
+  --display_name vibeflix-orchestrator \
+  --env_file /tmp/env_orchestrator --agent_engine_config_file /tmp/engine_config.json
+```
+
+⚠️ Known gap: the orchestrator's calls to the domain engines use A2A, and
+CLI-deployed engines don't serve the platform's `/a2a/v1/*` surface yet — its
+fan-out will fail at runtime until the agents are redeployed via the A2A
+template (`deploy/deploy_agents_a2a.py`). Deploying it now still lets every
+registry/identity/gateway/policy step proceed with all 6 engines.
 
 **3c. Expose A2A & Identity on the first 4 agents.**
 Before deploying `vendor_clearance`, you must expose `legal`'s A2A endpoints. Run the post-deploy script to configure the first 4 engines:

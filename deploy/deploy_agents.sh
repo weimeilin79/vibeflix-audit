@@ -121,6 +121,20 @@ LEGAL_A2A_URL=$LEGAL_A2A_URL"
   fi
 fi
 
+if run_for orchestrator; then
+  # LAST: the orchestrator engine needs the deployed domain engines' A2A URLs.
+  if [ -n "${BRAND_STYLE_A2A_URL:-}" ] && [ -n "${VENDOR_CLEARANCE_A2A_URL:-}" ] && [ -n "${DEAL_PRICING_A2A_URL:-}" ]; then
+    deploy_one orchestrator "MCP_LICENSING_URL=$MCP_LICENSING_URL
+BRAND_STYLE_A2A_URL=$BRAND_STYLE_A2A_URL
+VENDOR_CLEARANCE_A2A_URL=$VENDOR_CLEARANCE_A2A_URL
+DEAL_PRICING_A2A_URL=$DEAL_PRICING_A2A_URL"
+  else
+    echo "── skipping orchestrator: export BRAND_STYLE_A2A_URL / VENDOR_CLEARANCE_A2A_URL /"
+    echo "   DEAL_PRICING_A2A_URL (each = https://REGION-aiplatform.googleapis.com/v1beta1/<engine resource>)"
+    echo "   then: ./deploy/deploy_agents.sh orchestrator"
+  fi
+fi
+
 echo
 echo "[deploy_agents] enabling AGENT IDENTITY & A2A ROUTING (v1beta1 updates)…"
 "$PY" "$HERE/enable_agent_identity_and_a2a.py" \
