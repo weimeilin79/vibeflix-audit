@@ -505,18 +505,20 @@ Google's own endpoints. An attached agent loses Gemini/telemetry/sessions unless
 the platform endpoints are registered + granted first:
 
 ```bash
-for EP in "aiplatform https://$REGION-aiplatform.googleapis.com" \
-          "aiplatform-mtls https://$REGION-aiplatform.mtls.googleapis.com" \
-          "telemetry https://telemetry.googleapis.com" \
-          "logging https://logging.googleapis.com" \
-          "pubsub https://pubsub.googleapis.com"; do
-  set -- $EP
-  gcloud alpha agent-registry services create "gcp-$1" \
-    --project=$PROJECT --location=$REGION --display-name="GCP $1" \
+# (while-read, not `set -- $VAR` — zsh doesn't word-split variables)
+while read -r NAME URL; do
+  gcloud alpha agent-registry services create "gcp-$NAME" \
+    --project=$PROJECT --location=$REGION --display-name="GCP $NAME" \
     --endpoint-spec-type=no-spec \
-    --interfaces='[{url="'$2'",protocolBinding="JSONRPC"}]' \
-    || echo "  (gcp-$1 may already exist)"
-done
+    --interfaces='[{url="'$URL'",protocolBinding="JSONRPC"}]' \
+    || echo "  (gcp-$NAME may already exist)"
+done <<EOF
+aiplatform https://$REGION-aiplatform.googleapis.com
+aiplatform-mtls https://$REGION-aiplatform.mtls.googleapis.com
+telemetry https://telemetry.googleapis.com
+logging https://logging.googleapis.com
+pubsub https://pubsub.googleapis.com
+EOF
 # egress to them for EVERY agent (principalSet from 3a, unconditional):
 gcloud iap web add-iam-policy-binding --project=$PROJECT \
   --member="$AGENTS_SET" --role=roles/iap.egressor
