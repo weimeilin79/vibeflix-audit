@@ -19,8 +19,10 @@ Usage (config from deploy/.env; MCP_*_URL + RAG_CORPUS must be exported/present)
     python deploy/deploy_agents_a2a.py brand_style   # one
 
 NOTE: first-run territory (v1beta1 + preview surfaces) — expect to iterate.
-Engines deployed by the old CLI path under the same display names are NOT
-updated in place; this creates fresh engines. Delete the old ones afterwards.
+Create-or-update by display name (vibeflix-<name>); deploy ONE agent at a
+time in dependency order: brand_style, deal_pricing, ui_renderer, legal,
+then vendor_clearance (needs LEGAL_A2A_URL), then orchestrator (needs the 3
+domain engines' A2A URLs).
 """
 
 import os
@@ -62,6 +64,10 @@ AGENTS = {
               "desc": "Legal clearance — RAG-discovers the process, executes contracts."},
     "vendor_clearance": {"env": ["MCP_LICENSING_URL", "MCP_MARKET_URL", "LEGAL_A2A_URL"],
                          "desc": "Vendor & licensing clearance — exclusivity, trademarks, vendors."},
+    # LAST: needs the three domain engines' A2A URLs.
+    "orchestrator": {"env": ["MCP_LICENSING_URL", "BRAND_STYLE_A2A_URL",
+                             "VENDOR_CLEARANCE_A2A_URL", "DEAL_PRICING_A2A_URL"],
+                     "desc": "Sourcing orchestrator — dispatches the compliance workflows and finalizes contracts."},
 }
 
 
@@ -134,7 +140,7 @@ def main():
         if missing:
             print(f"── skipping {name}: export {', '.join(missing)} first")
             continue
-        display = f"vibeflix-{name.replace('_', '-')}-a2a"
+        display = f"vibeflix-{name.replace('_', '-')}"
         env = {**COMMON_ENV, **{k: _ENV[k] for k in spec["env"]}}
         app = A2aAgent(agent_card=agent_card(name, spec["desc"]),
                        agent_executor_builder=make_executor_builder(name))

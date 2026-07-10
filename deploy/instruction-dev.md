@@ -171,247 +171,76 @@ for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
 done
 ```
 
-**3b. Deploy each agent as its own reasoning engine.** The ADK 2.3 CLI packages
-the agent FOLDER + a generated Dockerfile; the engine serves **A2A automatically**
-(no flag). Three things to know about this CLI:
-
-- it installs `agents/<name>/requirements.txt` from INSIDE the folder — each
-  agent has one (pinning `google-adk[a2a]==2.3.0`). `vibeflix-common` isn't on
-  PyPI and the repo is private, so the requirements point at a **vendored copy**
-  (`_vendor/vibeflix-common`, gitignored) that you place in each folder before
-  deploying — see the loop below;
-- env vars go in a file passed via `--env_file`; the runtime `service_account`
-  goes in a JSON passed via `--agent_engine_config_file`;
-- `--otel_to_cloud` wires the engine's OBSERVABILITY (Cloud Trace + the
-  console's Observability panel). Without it the deploy succeeds but the panel
-  shows "Settings not available" — it sets
-  `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` (+ span content capture
-  off by default; set `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=true` in the env
-  file to log full prompts/responses);
-- **without `--agent_engine_id` every run CREATES a new engine** — pass the
-  existing ID (from the list command below) to update instead.
-
-First, create each agent's `.env`. These files are **gitignored** (a fresh clone
-won't have them) but they SHIP with the engine source — inside the container the
-agent reads them at import for its Gemini config (notably
-`GOOGLE_CLOUD_LOCATION=global`, which must NOT go through the deploy CLI's env
-file — the CLI intercepts it):
+**3b. Deploy each agent via the A2A TEMPLATE — one at a time, in dependency
+order.** `deploy/deploy_agents_a2a.py` wraps each `root_agent` in the SDK's
+`A2aAgent` template, so the engine's container genuinely serves platform A2A
+(`/a2a/v1/card`, `message/send`) — the `adk deploy agent_engine` CLI cannot
+(its container only implements the streamQuery contract; see the README
+comparison). Identity + service account + OTel are set AT CREATE — no
+post-deploy configure pass needed. Re-running a name UPDATES the same engine.
 
 ```bash
-for A in brand_style vendor_clearance deal_pricing legal ui_renderer orchestrator; do
-  cat > agents/$A/.env <<EOF
-GOOGLE_CLOUD_PROJECT=$PROJECT
-GOOGLE_CLOUD_LOCATION=global
-GOOGLE_GENAI_USE_VERTEXAI=true
-EOF
-done
-```
-
-**3b. Deploy the 5 agents to the Agent Runtime.**
-
-First, vendor `vibeflix-common` into each agent folder (the engine build pip-installs
-it from there — a git URL won't work against the private repo):
-
-```bash
-for A in brand_style vendor_clearance deal_pricing legal ui_renderer orchestrator; do
-  rm -rf agents/$A/_vendor && mkdir -p agents/$A/_vendor/vibeflix-common
-  cp -R packages/vibeflix-common/vibeflix_common agents/$A/_vendor/vibeflix-common/
-  cp packages/vibeflix-common/pyproject.toml agents/$A/_vendor/vibeflix-common/
-done
-```
-
-Then the manual deploys:
-
-```bash
+set -a; source deploy/.env; set +a          # PROJECT, REGION, RAG_CORPUS
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
 export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
 export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
-# ⚠️ an EMPTY env value fails the deploy with "deployment_spec.env[N].value:
-# Required field is not set" — the :? guards below make a missing export fail fast.
-# resolves the legal RAG corpus (from step 1d) automatically:
-export RAG_CORPUS=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
-  | jq -r '[.ragCorpora[] | select(.displayName=="vibeflix-legal-kb")][0].name')
-echo "RAG_CORPUS=$RAG_CORPUS"   # must print projects/…/ragCorpora/…, not null
 
-# engine config: the runtime SA (identity comes in 3c)
-cat > /tmp/engine_config.json <<EOF
-{"service_account": "vibeflix-agents@$PROJECT.iam.gserviceaccount.com"}
-EOF
-
-# 1/5 — brand_style (vision + deterministic brand checks)
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_BRAND_STYLE_URL=%s\n' "$MCP_BRAND_STYLE_URL" > /tmp/env_brand_style
-.venv/bin/adk deploy agent_engine agents/brand_style --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-brand-style \
-  --env_file /tmp/env_brand_style --agent_engine_config_file /tmp/engine_config.json
-
-# 2/5 — deal_pricing (rate-card reconciliation)
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\n' "$MCP_LICENSING_URL" > /tmp/env_deal_pricing
-.venv/bin/adk deploy agent_engine agents/deal_pricing --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-deal-pricing \
-  --env_file /tmp/env_deal_pricing --agent_engine_config_file /tmp/engine_config.json
-
-# 3/5 — ui_renderer (A2UI presenter + form designer; no MCP)
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\n' > /tmp/env_ui_renderer
-.venv/bin/adk deploy agent_engine agents/ui_renderer --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-ui-renderer \
-  --env_file /tmp/env_ui_renderer --agent_engine_config_file /tmp/engine_config.json
-
-# 4/5 — legal (RAG-discovered process; NO doc volume in the cloud → RAG_CORPUS)
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nRAG_CORPUS=%s\nRAG_LOCATION=%s\n' \
-  "$MCP_LICENSING_URL" "${RAG_CORPUS:?export RAG_CORPUS first — step 1d}" "$REGION" > /tmp/env_legal
-.venv/bin/adk deploy agent_engine agents/legal --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-legal \
-  --env_file /tmp/env_legal --agent_engine_config_file /tmp/engine_config.json
+# 1/6 — brand_style
+.venv/bin/python deploy/deploy_agents_a2a.py brand_style
+# 2/6 — deal_pricing
+.venv/bin/python deploy/deploy_agents_a2a.py deal_pricing
+# 3/6 — ui_renderer
+.venv/bin/python deploy/deploy_agents_a2a.py ui_renderer
+# 4/6 — legal
+.venv/bin/python deploy/deploy_agents_a2a.py legal
 ```
 
-(`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` are deliberately absent from the
-env files — the CLI intercepts them; Gemini's `global` location ships in each
-agent folder's own `.env`.)
-
-Each deploy takes 5–10 min (continues server-side if the CLI times out). List
-the engines and capture their ids:
+✅ **Verify after EACH deploy** — the script prints the engine's card URL; fetch
+it (this is the exact surface the old CLI path could never serve — 200 = the
+gap is closed for that agent):
 
 ```bash
-# no gcloud surface exists for Agent Runtime — use its REST API directly:
-curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
-  | jq -r '.reasoningEngines[] | "\(.displayName // "(unnamed)")\t\(.name)"'
+curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" "<card url printed above>" | jq .name
 ```
 
-**3c. Expose A2A & Identity on ALL agents deployed so far.**
-The script configures EVERY `vibeflix-*` engine it finds (all 4 at this point)
-to speak A2A — framework `a2a`, A2A methods registered, agent identity on. All
-of them need it (the orchestrator later calls brand_style and deal_pricing over
-A2A too); `legal` is simply the one that BLOCKS the next step, since
-`vendor_clearance`'s deploy needs its A2A URL:
+**3c. Deploy vendor_clearance** (needs legal's A2A base):
 
 ```bash
-PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
-```
-
-*This sets framework="a2a", unsets the service account, registers A2A methods,
-and activates identity — on every engine listed. Confirm ALL FOUR show framework
-`a2a` before moving on (re-running is safe: already-configured engines are
-skipped). The same script runs again at 3e and after 3f to pick up
-`vendor_clearance` and the orchestrator as they're deployed.*
-
-**3d. Deploy vendor_clearance last.**
-Now that `legal`'s A2A endpoints are exposed, fetch and export its A2A base URL:
-
-```bash
-export LEGAL_A2A_URL=$(.venv/bin/python -c "
-import vertexai
-c = vertexai.Client(project='$PROJECT', location='$REGION')
-for e in c.agent_engines.list():
-    if e.api_resource.display_name == 'vibeflix-legal':
-        print(f'https://$REGION-aiplatform.googleapis.com/v1beta1/{e.api_resource.name}')
-")
-echo "Set LEGAL_A2A_URL to: $LEGAL_A2A_URL"
-```
-
-Deploy `vendor_clearance` using that URL:
-
-```bash
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nMCP_MARKET_URL=%s\nLEGAL_A2A_URL=%s\n' \
-  "$MCP_LICENSING_URL" "$MCP_MARKET_URL" "${LEGAL_A2A_URL:?export LEGAL_A2A_URL first — legal must be deployed & patched}" > /tmp/env_vendor_clearance
-.venv/bin/adk deploy agent_engine agents/vendor_clearance --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-vendor-clearance \
-  --env_file /tmp/env_vendor_clearance --agent_engine_config_file /tmp/engine_config.json
-```
-
-**3e. Expose A2A & Identity on vendor_clearance.**
-Run the post-deploy script one last time to configure the `vendor_clearance` engine:
-
-```bash
-PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py vibeflix-vendor-clearance
-```
-
-Under the hood, the post-deploy script runs the equivalent REST/SDK call for each engine:
-
-```python
-# Clears service_account, sets identity_type to AGENT_IDENTITY, and sets agent_framework to a2a
-client.agent_engines.update(
-    name="projects/.../locations/.../reasoningEngines/<ID>",
-    config={
-        "identity_type": types.IdentityType.AGENT_IDENTITY,
-        "agent_framework": "a2a",
-        "class_methods": updated_methods_including_a2a_extensions,
-    },
-)
-# principal = engine.api_resource.spec.effective_identity
-```
-
-Each agent's principal looks like
-`principal://agents.global.org-<ORG_ID>.system.id.goog/resources/aiplatform/projects/<PN>/locations/<REGION>/reasoningEngines/<ID>`
-(the script writes them all to `deploy/agent_identities.json`). Grant the
-recommended baseline to ALL agents in the project in one go, then per-agent
-grants where needed:
-
-```bash
-# NOTE: this principalSet matches EVERY Agent Runtime identity in the project —
-# including engines deployed LATER (vendor_clearance in 3d, the orchestrator in
-# 3f). Grant once here; no re-run needed as engines are added.
-# ⚠️ Self-contained on purpose — every var is (re)set here because a fresh
-# terminal with an empty ORG/PN builds a principalSet that IAM accepts but that
-# matches NOTHING (and an empty $PROJECT fails the grants outright).
-export PROJECT=${PROJECT:-pokedemo-test}
-ORG=$(gcloud organizations list --format 'value(ID)' | head -1)
-PN=$(gcloud projects describe $PROJECT --format 'value(projectNumber)')   # project NUMBER, not id
-AGENTS_SET="principalSet://agents.global.org-$ORG.system.id.goog/attribute.platformContainer/aiplatform/projects/$PN"
-echo "$AGENTS_SET"   # sanity: BOTH numbers filled, e.g. …org-2984….goog/…/projects/7898…
-for ROLE in roles/aiplatform.expressUser roles/serviceusage.serviceUsageConsumer roles/browser; do
-  gcloud projects add-iam-policy-binding $PROJECT --condition=None \
-    --member "$AGENTS_SET" --role $ROLE
-done
-# telemetry publish for all agents:
-gcloud pubsub topics add-iam-policy-binding vibeflix-mesh-events --project $PROJECT \
-  --member "$AGENTS_SET" --role roles/pubsub.publisher
-
-# paranoia: 0 = no malformed (matches-nothing) principalSet got written
-gcloud projects get-iam-policy $PROJECT --format=json | grep -c 'org-\.system' || true
-```
-
-Fallback if the preview misbehaves: keep the shared `vibeflix-agents` SA from 3a
-and bind step-4 policies per registered-agent entry (coarser but works today).
-
-**3f. Deploy the ORCHESTRATOR engine — LAST of the six** (it is engine #1 in
-topology.md but deploys after the domain engines, whose A2A URLs it needs):
-
-```bash
-# resolves each engine's A2A base automatically (by display name):
 BASE=https://$REGION-aiplatform.googleapis.com/v1beta1
 ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
-eng() { echo "$ENGINES_JSON" | jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name'; }
+eng() { jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name' <<< "$ENGINES_JSON"; }
+export LEGAL_A2A_URL=$BASE/$(eng vibeflix-legal)
+
+.venv/bin/python deploy/deploy_agents_a2a.py vendor_clearance
+```
+
+✅ **Verify:** its card fetch returns 200, like 3b.
+
+**3d. Deploy the ORCHESTRATOR — last** (needs the three domain engines):
+
+```bash
+ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
 export BRAND_STYLE_A2A_URL=$BASE/$(eng vibeflix-brand-style)
 export VENDOR_CLEARANCE_A2A_URL=$BASE/$(eng vibeflix-vendor-clearance)
 export DEAL_PRICING_A2A_URL=$BASE/$(eng vibeflix-deal-pricing)
-printf '%s\n' "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL"
-# none may end in "/null" — that means the engine isn't deployed (3b/3d)
+printf '%s\n' "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL"  # no "/null"
 
-printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nBRAND_STYLE_A2A_URL=%s\nVENDOR_CLEARANCE_A2A_URL=%s\nDEAL_PRICING_A2A_URL=%s\n' \
-  "$MCP_LICENSING_URL" "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL" > /tmp/env_orchestrator
-.venv/bin/adk deploy agent_engine agents/orchestrator --project $PROJECT --region $REGION --otel_to_cloud \
-  --display_name vibeflix-orchestrator \
-  --env_file /tmp/env_orchestrator --agent_engine_config_file /tmp/engine_config.json
+.venv/bin/python deploy/deploy_agents_a2a.py orchestrator
 ```
 
-⚠️ Known gap: the orchestrator's calls to the domain engines use A2A, and
-CLI-deployed engines don't serve the platform's `/a2a/v1/*` surface yet — its
-fan-out will fail at runtime until the agents are redeployed via the A2A
-template (`deploy/deploy_agents_a2a.py`). Deploying it now still lets every
-registry/identity/gateway/policy step proceed with all 6 engines.
-
-**3g. Verify each engine** answers over the Vertex AI stream endpoint (use `--mode adk` because `--mode a2a` fails to resolve the card due to client/container path mismatches):
+**3e. Record identities for step 4** (writes `deploy/agent_identities.json`;
+identity was already enabled at create, so this just collects the principals):
 
 ```bash
-for E in $(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
-  | jq -r '.reasoningEngines[] | select(.displayName // "" | startswith("vibeflix-")) | .name'); do
-  echo "── $E"
-  agents-cli run --url "https://$REGION-aiplatform.googleapis.com/v1beta1/$E" --mode adk "ping"
-done
+PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/enable_agent_identity.py
+```
+
+✅ **Verify step 3 complete:** 6 engines, each with identity and a serving card:
+
+```bash
+jq -r 'to_entries[] | "\(.key)\t\(.value.principal)"' deploy/agent_identities.json   # 6 rows, no null
 ```
 
 ---

@@ -590,6 +590,20 @@ See deploy/README.md § "Cloud phase 1" for prerequisites, verification, and tea
 
 Next phases: agents → Agent Runtime, registry + Agent Gateway.
 
+### Three ways to deploy an agent to Agent Runtime — and why we use the A2A template
+
+| | `adk deploy agent_engine` (ADK CLI) | **A2A template** (`deploy/deploy_agents_a2a.py`) ✅ ours | `agents-cli deploy` (agent-starter-pack) |
+|---|---|---|---|
+| Delivery | agent FOLDER + generated Dockerfile → container | pickled `A2aAgent` object (SDK, source-based) | scaffolded `deploy.py` + `AdkApp` (source tarball) |
+| Serves platform A2A (`/a2a/v1/*`) | ❌ container only implements the streamQuery contract — specs can advertise A2A but calls 404 (verified live) | ✅ the template registers AND implements the A2A methods | ✅ when scaffolded as an A2A agent (`is_a2a` metadata) |
+| Agent identity | post-deploy v1beta1 update | ✅ at create (`identity_type` in config) | ✅ `--agent-identity` flag |
+| Fits this repo | yes (folder-based) | yes (works on our monorepo layout) | needs the starter-pack project structure — one scaffolded project per agent |
+| Risk profile | battle-tested packaging, broken A2A | pickle-based packaging (imports must resolve in-engine), correct A2A | Google-maintained pipeline, but a repo restructure |
+
+The CLI path is fine for query-only engines; our orchestrator fans out over
+A2A, so the template path is required. `agents-cli` is the long-term managed
+equivalent if the repo is ever restructured per agent.
+
 ## 🎭 Interactive Flow Walkthrough
 
 - **Step 1: Ingest Image / Presets**: Choose a preset scenario or type a prompt commands to start. Sourcing Orchestrator initiates parallel checks across all 3 agents (Brand Style, Vendor & Licensing, Deal Pricing).
