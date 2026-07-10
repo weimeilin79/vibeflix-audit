@@ -154,6 +154,13 @@ if os.environ.get("MCP_LICENSING_URL"):  # absent in standalone `adk web` runs �
         "get_vendor", "find_vendors", "list_trademarks", "verify_trademark_record",
         "scan_global_exclusivity_clauses", "get_contract",
     ])]
+# RECALL: past audits are ingested into Memory Bank after every run
+# (app.py::_persist_audit) — load_memory lets the note responder read them
+# ("have we audited this vendor before?"). Works against whichever memory
+# service the Runner carries: Memory Bank in the cloud/app, InMemory locally
+# (searches return empty — graceful).
+from google.adk.tools import load_memory_tool as _lm
+_NOTE_TOOLS.append(_lm.load_memory_tool if hasattr(_lm, "load_memory_tool") else _lm.LoadMemoryTool())
 
 note_responder = LlmAgent(
     name="note_responder",
@@ -166,6 +173,8 @@ note_responder = LlmAgent(
         "deal_pricing, sourcing, legal...).\n"
         "- If the note is a QUESTION, answer it concisely and specifically. Prefer the "
         "reports (cite the finding, status, vendor id, contract id, etc.); when the answer "
+        "is about PAST audits ('have we audited this vendor before?'), call the "
+        "load_memory tool to search prior audit memories and answer from them; when it "
         "is a REGISTRY fact the reports don't contain — a vendor's authorized product "
         "categories or territories, a trademark's registrations, an exclusivity contract, "
         "an executed licensing contract — LOOK IT UP with your read-only registry tools "

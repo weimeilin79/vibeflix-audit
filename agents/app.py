@@ -172,7 +172,17 @@ _SESSIONS: dict[str, dict] = {}
 
 # The orchestrator's note-responder runs as its own in-memory agent (like the presenter).
 _NOTE_APP = "note_responder"
-note_responder_runner = InMemoryRunner(app=App(name=_NOTE_APP, root_agent=note_responder))
+# The note responder shares the APP's memory service — its load_memory tool
+# then searches the same Memory Bank _persist_audit ingests into (Vertex when
+# AGENT_ENGINE_ID is set, InMemory locally). Sessions stay ephemeral.
+from google.adk.sessions import InMemorySessionService as _NoteSessions
+from google.adk.artifacts import InMemoryArtifactService as _NoteArtifacts
+note_responder_runner = Runner(
+    app=App(name=_NOTE_APP, root_agent=note_responder),
+    session_service=_NoteSessions(),
+    artifact_service=_NoteArtifacts(),
+    memory_service=memory_service,
+)
 
 
 async def _respond_to_note(note: str, reports: dict) -> str | None:

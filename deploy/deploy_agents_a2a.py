@@ -74,12 +74,33 @@ AGENTS = {
 def make_runner_builder(agent_name: str):
     """Returns a cloudpickle-able zero-arg Runner factory (imports at call time,
     inside the engine, where extra_packages puts `agents/` on the path)."""
+    region = REGION      # baked into the pickled closure
+    project = PROJECT
+
     def build_runner():
         import importlib
+        import os
         from google.adk.apps import App
-        from google.adk.runners import InMemoryRunner
         mod = importlib.import_module(f"agents.{agent_name}.agent")
-        return InMemoryRunner(app=App(name=agent_name, root_agent=mod.root_agent))
+        app = App(name=agent_name, root_agent=mod.root_agent)
+        # ENGINE-LEVEL MEMORY: Agent Runtime sets GOOGLE_CLOUD_AGENT_ENGINE_ID
+        # inside every engine — present in the cloud, absent everywhere else, so
+        # local runs are untouched by construction. Sessions + Memory Bank are
+        # backed by THIS engine itself (regional, not the Gemini `global`).
+        eid = os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").rsplit("/", 1)[-1]
+        if eid:
+            from google.adk.runners import Runner
+            from google.adk.sessions import VertexAiSessionService
+            from google.adk.memory import VertexAiMemoryBankService
+            return Runner(
+                app=app,
+                session_service=VertexAiSessionService(
+                    project=project, location=region, agent_engine_id=eid),
+                memory_service=VertexAiMemoryBankService(
+                    project=project, location=region, agent_engine_id=eid),
+            )
+        from google.adk.runners import InMemoryRunner
+        return InMemoryRunner(app=app)
     return build_runner
 
 

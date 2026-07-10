@@ -243,11 +243,10 @@ printf '%s\n' "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_
 .venv/bin/python deploy/deploy_agents_a2a.py orchestrator
 ```
 
-**3e. Record identities for step 4** (writes `deploy/agent_identities.json`;
-identity was already enabled at create, so this just collects the principals):
+**3e. Record identities for step 4** (identity was already enabled at create — this only READS principals into `deploy/agent_identities.json` for step 4; do NOT run enable_agent_identity_and_a2a.py on template engines, they already serve A2A):
 
 ```bash
-PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/enable_agent_identity.py
+PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities.py
 ```
 
 ✅ **Verify step 3 complete:** 6 engines, each with identity and a serving card:
@@ -426,8 +425,16 @@ grant "$(M vibeflix-vendor-clearance)" vendor-clearance-market \
 grant "$(M vibeflix-legal)" legal \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'upsert_contract', 'get_contract']"
 
+# 6-bis (row 7). the ORCHESTRATOR engine → licensing, READ-ONLY — its
+#    note_responder answers registry questions ("what can VND-1008 produce?"):
+grant "$(M vibeflix-orchestrator)" orchestrator \
+  "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'find_vendors', 'list_trademarks', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract']"
+
 # 6. the console app → licensing (pickers, Database tab, contract reads,
 #    volume-annotation upsert, demo reset) — serviceAccount, not principal://
+#    ⚠️ requires the vibeflix-app SA, which step 5a creates. Either create it
+#    now (gcloud iam service-accounts create vibeflix-app + sleep 30) or run
+#    this one grant after 5a — grant_mcp_egress.sh skips it gracefully either way.
 grant "serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" app \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['list_trademarks', 'get_vendor', 'find_vendors', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract', 'upsert_contract', 'dump_stores', 'reset_vendors']"
 ```
