@@ -520,7 +520,7 @@ logging https://logging.googleapis.com
 pubsub https://pubsub.googleapis.com
 EOF
 # egress to them for EVERY agent (principalSet from 3a, unconditional):
-gcloud iap web add-iam-policy-binding --project=$PROJECT \
+gcloud iap web add-iam-policy-binding --project=$PROJECT --condition=None \
   --member="$AGENTS_SET" --role=roles/iap.egressor
 ```
 
