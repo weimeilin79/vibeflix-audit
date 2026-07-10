@@ -383,12 +383,19 @@ servers, so no server attribute is needed). Members: agents use
 their identity `principal://` from `deploy/agent_identities.json`; the console
 app uses its `serviceAccount:` (Cloud Run has no agent identity).
 
-Fastest route — apply every [`deploy/policies.yaml`](policies.yaml) row at once
-(`--dry-run` prints all six grants without applying):
+By default the grants are **resource-scoped** — bound to each MCP server's
+Agent-Registry entry, so they appear on the console's Agent-Platform → Policies
+page (associated with that server). ⚠️ `--resource-type=agent-registry` is a
+preview surface; if your gcloud rejects it, re-run with `--project-scope`
+(enforces identically, but NOT shown in the console).
+
+Fastest route — apply every [`deploy/policies.yaml`](policies.yaml) row at once:
 
 ```bash
-./deploy/grant_mcp_egress.sh --dry-run
-./deploy/grant_mcp_egress.sh
+./deploy/grant_mcp_egress.sh --dry-run        # preview
+./deploy/grant_mcp_egress.sh                  # resource-scoped (console-visible)
+# fallback if the preview flag is unsupported:
+./deploy/grant_mcp_egress.sh --project-scope
 ```
 
 Manual route — all six grants spelled out (zsh users: run
