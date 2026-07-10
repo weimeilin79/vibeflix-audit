@@ -85,12 +85,16 @@ def make_runner_builder(agent_name: str):
 
 def make_executor_builder(agent_name: str):
     def build_executor():
+        from vibeflix_common.a2a_compat import ensure
+        ensure()  # engine-side: template imports need the shim too
         from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
         return A2aAgentExecutor(runner=make_runner_builder(agent_name))
     return build_executor
 
 
 def agent_card(name: str, desc: str):
+    from vibeflix_common.a2a_compat import ensure
+    ensure()
     from a2a.types import AgentCapabilities, AgentCard, AgentSkill
     return AgentCard(
         name=f"vibeflix-{name.replace('_', '-')}",

@@ -1,10 +1,12 @@
 pyproject.toml
 vibeflix_common/__init__.py
+vibeflix_common/a2a_compat.py
 vibeflix_common/cloud_auth.py
 vibeflix_common/health.py
 vibeflix_common/image_input.py
 vibeflix_common/mcp_clients.py
 vibeflix_common/memory.py
+vibeflix_common/otel.py
 vibeflix_common/registry.py
 vibeflix_common/schema_guard.py
 vibeflix_common/serve_a2a.py
