@@ -52,4 +52,4 @@ agents/*/_vendor/
 deploy/toolspecs/
 deploy/agent-gateway.yaml
 deploy/iap-authz-extension.yaml
-vibeflix_common/
+/vibeflix_common/   # a2a-deploy temp vendor at REPO ROOT only — NOT packages/vibeflix-common/vibeflix_common/

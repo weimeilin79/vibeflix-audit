@@ -634,8 +634,8 @@ view has native **Agent** and **MCP server** nodes; edges come from OTel traces.
 ```bash
 gcloud services enable observability.googleapis.com apphub.googleapis.com \
   cloudtrace.googleapis.com telemetry.googleapis.com --project=$PROJECT
-gcloud apphub applications create vibeflix-mesh \\
-  --location=$REGION --scope-type=REGIONAL \\
+gcloud apphub applications create vibeflix-mesh \
+  --location=$REGION --scope-type=REGIONAL \
   --display-name="Vibeflix mesh" --project=$PROJECT
 # then register the Cloud Run services (app + 3 MCPs) into it:
 #   gcloud apphub applications services list/create — or console: App Hub →
