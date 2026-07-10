@@ -71,6 +71,44 @@ Enforcement layers, outermost first:
 4. **Gateway ingress (client-to-agent)** — the app's calls to orchestrator/ui_renderer are gateway-governed too (demo choice; note the query/streamQuery-only limitation).
 5. **Registry** — destinations not registered in Agent Registry are blocked outright.
 
+## Verified deployment facts (learned live, 2026-07-10)
+
+These are the non-obvious truths a fresh run must respect — none are in Google's docs:
+
+- **Two `A2aAgent` classes.** Use `vertexai.preview.reasoning_engines.A2aAgent`
+  (works with a2a-sdk 0.3.x + google-adk 2.3), NOT
+  `vertexai.agent_engines.templates.a2a.A2aAgent` (needs a2a-sdk ≥1.0, which
+  breaks ADK). `deploy_agents_a2a.py` uses the preview class.
+- **Engine config:** `identity_type=AGENT_IDENTITY` and `service_account` are
+  MUTUALLY EXCLUSIVE (400 if both). Identity wins → engines run as their own
+  `principal://…` and get baseline roles via the step-3a `principalSet://…`
+  grant, not via a per-engine SA.
+- **`extra_packages`** ships root-relative dir names only; `vibeflix_common`
+  must be copied to the repo root at deploy time (nested `packages/…` paths fail
+  in-engine with `No module named vibeflix_common`).
+- **`.gitignore` must anchor** `/vibeflix_common/` (root only) — an unanchored
+  pattern excludes the real `packages/vibeflix-common/vibeflix_common/` from
+  Cloud Build uploads, silently shipping an empty package.
+- **Engine A2A is REST/proto**, not JSON-RPC: `POST …/<engine>/a2a/v1/message:send`
+  with a PROTO body (`role:ROLE_USER`, `content:[{text}]` — NOT pydantic `parts`),
+  then poll `…/a2a/v1/tasks/{id}`. There is NO `/a2a/v1/card` route in this
+  generation (card 404 is normal). The orchestrator's `RemoteA2aAgent`/JSON-RPC
+  client therefore CANNOT call these engines yet — a REST/proto client shim is
+  the outstanding code task before end-to-end audits work.
+- **Gateway attachment** = PATCH `spec.deploymentSpec.agentGatewayConfig`
+  (`agentToAnywhereConfig.agentGateway`). Verify with the GET (describe)
+  endpoint — the LIST endpoint omits `deploymentSpec` and always reads null.
+- **IAP policies** created via `gcloud iap web add-iam-policy-binding` at PROJECT
+  scope enforce correctly but DON'T appear on the console's Agent-Platform
+  Policies page (that page shows per-registry-resource bindings —
+  `--resource-type=agent-registry --endpoint=<id>` is the console-visible form).
+- **Gateway is default-deny for Google's OWN endpoints** — register + grant
+  egress to aiplatform/telemetry/logging/pubsub BEFORE attaching, or agents lose
+  Gemini/telemetry.
+- **Attribute keys** (codelab-verbatim): `mcp.toolName` (camelCase),
+  `mcp.tool.isReadOnly`. There is NO documented `mcp.server` attribute — tool
+  names are unique across the 3 servers, so tool-name scoping is sufficient.
+
 ## Local development — unaffected
 
 The compose mesh keeps running exactly as today: `RUN_LOCAL` auto-detect keeps
