@@ -131,7 +131,7 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
 (⚠️ still preview — spellings can drift). Run sub-steps individually with
 `./deploy/setup_gateway.sh registry|gateway|policies|rewire`. Sub-steps:
 
-1. **Registry** — `gcloud alpha agent-registry services create` per MCP server
+1. **Registry** — `gcloud alpha agent-registry services create` per MCP server AND per agent (`vibeflix-<name>-agent`, `--endpoint-spec-type=no-spec`; each agent's interface URL = mTLS aiplatform host + its OWN engine path from `agent_identities.json`, since interface URLs are unique registry-wide — 8 entries total; requires step 3 done first, the script skips agents and tells you if identities are missing)
    AND per agent (agents use `--agent-spec-type` with their A2A card) — the
    gateway governs **A2A between agents too** (deny-by-default: only
    vendor_clearance gets egress to legal, per `policies.yaml` `a2a_policies`).

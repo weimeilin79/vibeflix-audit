@@ -369,6 +369,32 @@ gcloud alpha agent-registry services list --project=$PROJECT --location=$REGION 
   --format="value(displayName,name)"
 ```
 
+**4a-ii. Register the 5 AGENTS in the Agent Registry.** Agents are separate
+registry entries (step 4a covered only the MCP servers) — without these the
+console's agent list is empty, gateway A2A policies have nothing to bind to,
+and attached agents can't be reached (unregistered destinations are blocked).
+⚠️ Two rules learned the hard way: (1) this step REQUIRES step 3 completed
+first (`deploy/agent_identities.json` supplies each engine path); (2) interface
+URLs must be UNIQUE across the registry — each agent's URL is the mTLS
+aiplatform host **plus its own engine path**. If an earlier attempt registered
+an agent with the bare host URL, delete it first
+(`gcloud alpha agent-registry services delete <name> --location=$REGION --quiet`)
+or every later registration collides with "Interface URL already in use":
+
+```bash
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+  ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+  gcloud alpha agent-registry services create vibeflix-$A-agent \
+    --project=$PROJECT --location=$REGION \
+    --display-name="Vibeflix $A agent" \
+    --endpoint-spec-type=no-spec \
+    --interfaces='[{url="https://'$REGION'-aiplatform.mtls.googleapis.com/v1beta1/'$ENG'",protocolBinding="jsonrpc"}]'
+done
+gcloud alpha agent-registry services list --project=$PROJECT --location=$REGION
+```
+
+✅ **Verify:** the list shows **8 entries** — 3 `vibeflix-mcp-*` + 5 `vibeflix-*-agent`.
+
 **4b. Create the gateway** — a YAML import on the `network-services` surface,
 bound to the project's registry (our MCP backends are public run.app URLs, so
 the codelab's `networkConfig`/DNS-peering block for private-VPC backends is

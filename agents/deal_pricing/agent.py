@@ -170,6 +170,15 @@ def finalize(node_input):
 
 root_agent = Workflow(
     name="deal_pricing",
+    description=(
+        "Audits the vendor's AGREED deal terms — royalty rate, advance, and minimum "
+        "guarantee — against the licensor's official rate card: fetches the "
+        "deterministically-computed EXPECTED deal for the character, category, "
+        "territory, volume and net unit price (mcp_licensing.get_license_pricing), "
+        "reconciles each discrepancy against legitimate rate-card factors (volume "
+        "tiers, category/territory modifiers), and returns a cleared or flagged "
+        "PricingReport itemizing any unjustified deviations."
+    ),
     edges=[
         ("START", evaluate),
         (evaluate, reconcile),

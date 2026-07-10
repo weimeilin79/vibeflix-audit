@@ -1,11 +1,11 @@
 ---
 name: brand-compliance-audit
 description: >-
-  Verify the mockup actually depicts the licensed character/trademark under audit
+  Verify the artwork actually depicts the licensed character/trademark under audit
   (mismatch → rejected), extract its printed text, classify its product medium from
   the image, then run the deterministic brand-compliance pipeline (typo +
   printed-medium + asset-source gate) via the run_brand_audit tool. Use for any
-  mockup/asset compliance audit.
+  artwork/asset compliance audit.
 allowed-tools: run_brand_audit
 metadata:
   version: "2.1.0"
@@ -24,31 +24,31 @@ before you call it — never guess or fabricate them.
 ## 0. Trademark match — the image must depict the character under audit
 
 The request names the licensed character/trademark being audited (e.g. `grogu`,
-`stitch`, `minions`). BEFORE anything else, LOOK at the attached mockup and verify
+`stitch`, `minions`). BEFORE anything else, LOOK at the attached artwork and verify
 the artwork actually depicts THAT character:
 
 - **Clearly a different character/property** (e.g. the audit is for `grogu` but the
   artwork shows Minions) → REJECT AND BLOCK: `status`='rejected',
   `needs`=["image"], a `findings` entry
   `{element_id: "trademark_match", issue_type: "character_mismatch",
-  severity: "critical", description: "The mockup depicts <what you see>, not the
+  severity: "critical", description: "The artwork depicts <what you see>, not the
   licensed character '<stated character>' under audit."}`, and in `question` ask
-  for a mockup of the correct character. Do NOT call `run_brand_audit` — auditing
+  for artwork of the correct character. Do NOT call `run_brand_audit` — auditing
   another property's artwork is meaningless.
 - **Matches, or the artwork has no identifiable character** (plain typography /
   logo-only asset) → continue. If NO character was stated in the request, skip
   this check entirely.
 
 ## 1. Gather the inputs
-- **`image_uri`** — the mockup's storage link (e.g. a Cloud Storage `gs://…` URI).
+- **`image_uri`** — the artwork's storage link (e.g. a Cloud Storage `gs://…` URI).
   Take it from the known context or the conversation.
-- **`text`** — EXTRACT by actually reading the mockup image attached to the request
+- **`text`** — EXTRACT by actually reading the artwork image attached to the request
   (its printed strings). Report ONLY text you can genuinely read in the attached
   image. NEVER invent or guess plausible-sounding text.
 - **`medium`** — the physical product it will be MANUFACTURED/PRINTED as. If the
   request explicitly states a medium (e.g. "the vendor states the product medium is
   'vinyl figure box'"), use exactly that — the vendor knows the manufacturing plan.
-  Otherwise CLASSIFY it yourself from the attached mockup image: name the physical
+  Otherwise CLASSIFY it yourself from the attached artwork image: name the physical
   product the artwork is, or is applied to, as a short generic product name in
   lowercase (e.g. "poster", "vinyl figure box", "t-shirt", "mug wrap", "shot
   glass"). Report what you actually SEE — do not steer toward an approved-sounding
@@ -59,7 +59,7 @@ Do NOT call `run_brand_audit` and do NOT invent values when something is missing
 Instead set `status`='needs_input`, list what you need in `needs`, and put a clear
 question in `question`:
 - **No usable image** (no link, or you cannot see the image): `needs`=["image"];
-  ask for the mockup image / its approved storage link.
+  ask for the artwork image / its approved storage link.
 - **Image is visible but you genuinely cannot tell what product it is or is for**
   (rare — e.g. an abstract texture with no product context): `needs`=["medium"].
   Put your best guess, if any, in `extracted.medium` so it can pre-fill the field,

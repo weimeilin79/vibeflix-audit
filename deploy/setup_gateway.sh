@@ -37,6 +37,24 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
       --interfaces="url=$URL,protocolBinding=JSONRPC" \
       || echo "  (vibeflix-mcp-$S may already be registered — continuing)"
   done
+  # The 5 AGENTS are registry entries too (A2A policies + console list + gateway
+  # destinations all key off these; unregistered destinations are blocked).
+  # Interface URLs must be UNIQUE — each agent registers with its own engine path
+  # (from agent_identities.json, produced by step 3 / enable_agent_identity.py).
+  if [ ! -s "$HERE/agent_identities.json" ]; then
+    echo "  ⚠️ skipping AGENT registration: deploy/agent_identities.json missing —"
+    echo "     deploy the agents (step 3) first, then re-run: ./deploy/setup_gateway.sh registry"
+  else
+  for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+    ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' "$HERE/agent_identities.json")
+    gcloud alpha agent-registry services create "vibeflix-$A-agent" \
+      --project "$PROJECT" --location "$REGION" \
+      --display-name "Vibeflix $A agent" \
+      --endpoint-spec-type=no-spec \
+      --interfaces='[{url="https://'"$REGION"'-aiplatform.mtls.googleapis.com/v1beta1/'"$ENG"'",protocolBinding="jsonrpc"}]' \
+      || echo "  (vibeflix-$A-agent may already be registered — continuing)"
+  done
+  fi
   gcloud alpha agent-registry services list --project "$PROJECT" --location "$REGION" \
     --format "value(displayName,name)"
 fi

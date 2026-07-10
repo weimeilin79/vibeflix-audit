@@ -1,6 +1,6 @@
 """Brand Style Compliance Agent (the "Designer") — ADK 2.0 extract → audit agent.
 
-The agent does the EXTRACTION (reading the mockup's printed text and product medium,
+The agent does the EXTRACTION (reading the artwork's printed text and product medium,
 using its own multimodal vision when it can access the image); the MCP server is
 fully deterministic and only runs the checks.
 
@@ -61,7 +61,7 @@ class BrandStyleReport(BaseModel):
     # Populated when status is "needs_input" or "rejected": what to ask the user.
     question: str = ""
     # Which inputs are still needed from the user — e.g. ["image"], or ["medium"]
-    # in the rare case the medium can't be classified from the mockup. Drives
+    # in the rare case the medium can't be classified from the artwork. Drives
     # which field(s) the frontend renders.
     needs: list[str] = Field(default_factory=list)
     extracted: Extracted = Field(default_factory=Extracted)
@@ -73,16 +73,17 @@ brand_style_agent = LlmAgent(
     name="brand_style_compliance_agent",
     model="gemini-flash-latest",
     description=(
-        "Extracts a mockup's printed text and classifies its product medium from "
-        "the image (an explicitly stated medium overrides), then runs the "
-        "deterministic typo, printed-medium, and asset-source checks."
+        "Verifies the submitted product artwork depicts the licensed "
+        "character/trademark under audit, extracts its printed text and classifies "
+        "the product medium from the image (an explicitly stated medium overrides), "
+        "then runs the deterministic typo, printed-medium, and asset-source checks."
     ),
     instruction=(
         "You are the Brand Style Compliance Agent for the Vibeflix licensing "
         "pipeline. Known context (may be empty): image link `{image_uri?}`, market "
         "`{target_market?}`, licensed character/trademark under audit "
         "`{character_id?}`.\n\n"
-        "To audit a product mockup, use the `brand-compliance-audit` skill and "
+        "To audit product artwork, use the `brand-compliance-audit` skill and "
         "follow its steps exactly — it defines the fixed procedure and the only tool "
         "you may call. ALWAYS respond by filling the BrandStyleReport schema; never "
         "reply in prose."
