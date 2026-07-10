@@ -180,7 +180,20 @@ comparison). Identity + service account + OTel are set AT CREATE — no
 post-deploy configure pass needed. Re-running a name UPDATES the same engine.
 
 ```bash
-set -a; source deploy/.env; set +a          # PROJECT, REGION, RAG_CORPUS
+# everything explicit — no personal env files (deploy/.env is gitignored and
+# machine-specific; a fresh clone must work from these lines alone):
+export PROJECT=${PROJECT:-pokedemo-test}
+export REGION=${REGION:-us-central1}
+export RAG_LOCATION=$REGION
+# legal's RAG corpus (step 1d) — resolved live:
+export RAG_CORPUS=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
+  | jq -r '[.ragCorpora[] | select(.displayName=="vibeflix-legal-kb")][0].name')
+echo "RAG_CORPUS=$RAG_CORPUS"   # must print projects/…, not null
+
+# staging bucket for the SDK's source tarballs (create once; harmless if it exists):
+gsutil mb -p $PROJECT -l $REGION gs://$PROJECT-vibeflix-agent-staging 2>/dev/null || true
+
 export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
 export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
 export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
