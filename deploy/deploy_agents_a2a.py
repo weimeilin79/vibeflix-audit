@@ -93,15 +93,13 @@ def make_executor_builder(agent_name: str):
 
 
 def agent_card(name: str, desc: str):
-    from vibeflix_common.a2a_compat import ensure
-    ensure()
+    """a2a-sdk 0.3.x AgentCard — the model vertexai.preview's A2aAgent expects
+    (recipe verified from the agents-cli adk_a2a scaffold)."""
     from a2a.types import AgentCapabilities, AgentCard, AgentSkill
     return AgentCard(
         name=f"vibeflix-{name.replace('_', '-')}",
         description=desc,
-        # The platform serves the card from the engine's /a2a/v1/card; the url
-        # here is informational until the engine id exists.
-        url=f"https://{REGION}-aiplatform.googleapis.com/v1beta1/",
+        url=f"https://{REGION}-aiplatform.googleapis.com/v1beta1/",  # informational
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=True),
         default_input_modes=["text/plain"],
@@ -126,13 +124,28 @@ def requirements(name: str) -> list[str]:
     return lines
 
 
+def _check_sdk_compat():
+    """This script requires a2a-sdk>=1.0 (the vertexai A2aAgent template's
+    models) — but google-adk 2.3 requires a2a-sdk<1. The two cannot coexist:
+    resolving this needs a NEWER google-adk built against a2a-sdk 1.x
+    (see README: 'Three ways to deploy…' + the agents-cli probe plan)."""
+    import importlib.metadata as md
+    v = md.version("a2a-sdk")
+    if v.startswith("0."):
+        raise SystemExit(
+            f"a2a-sdk {v} is too old for the A2aAgent template (needs >=1.0).\n"
+            "Known deadlock: upgrading breaks google-adk 2.3. Next step is the\n"
+            "agents-cli lockfile probe / google-adk upgrade — do NOT pip-juggle."
+        )
+
+
 def main():
     import vertexai
     from vertexai import types
 
     client = vertexai.Client(project=PROJECT, location=REGION,
                              http_options=dict(api_version="v1beta1"))
-    from vertexai.agent_engines.templates.a2a import A2aAgent
+    from vertexai.preview.reasoning_engines import A2aAgent  # 0.3.x-compatible (per agents-cli scaffold)
 
     existing = {(e.api_resource.display_name or ""): e.api_resource.name
                 for e in client.agent_engines.list()}
