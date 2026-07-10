@@ -594,7 +594,7 @@ gcloud run services add-iam-policy-binding vibeflix-mcp-licensing --region $REGI
 A2A_BASE="https://$REGION-aiplatform.googleapis.com/v1"
 ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "$A2A_BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
-eng() { echo "$ENGINES_JSON" | jq -r --arg n "$1" '.reasoningEngines[] | select(.displayName==$n) | .name'; }
+eng() { jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name' <<< "$ENGINES_JSON"; }
 BRAND_URL=$A2A_BASE/$(eng vibeflix-brand-style)
 VENDOR_URL=$A2A_BASE/$(eng vibeflix-vendor-clearance)
 PRICING_URL=$A2A_BASE/$(eng vibeflix-deal-pricing)
