@@ -603,6 +603,7 @@ UI_URL=$A2A_BASE/$(eng vibeflix-ui-renderer)
 # gateway's mTLS/PSC surface; its access is IAM + the read-only IAP grant.
 
 # 5c. build + deploy
+export AR=$REGION-docker.pkg.dev/$PROJECT/vibeflix   # (re-set; step-2 var may be gone)
 gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app"
 gcloud run deploy vibeflix-app --image $AR/app --region $REGION \
   --service-account vibeflix-app@$PROJECT.iam.gserviceaccount.com \
