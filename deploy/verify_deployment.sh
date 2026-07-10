@@ -37,7 +37,7 @@ done
 
 echo "═══ Step 3 — engines + identity"
 ENG=$(curl -s -H "Authorization: Bearer $TOK" "https://$REGION-aiplatform.googleapis.com/v1beta1/projects/$PROJECT/locations/$REGION/reasoningEngines")
-for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
   ROWS=$(echo "$ENG" | jq --arg n "vibeflix-$A" '[.reasoningEngines[] | select(.displayName==$n)]')
   CNT=$(echo "$ROWS" | jq 'length')
   IDY=$(echo "$ROWS" | jq -r '.[0].spec.effectiveIdentity // empty')
@@ -52,7 +52,7 @@ echo "═══ Step 4 — registry, gateway, policies"
 REG=$(gcloud alpha agent-registry services list --project "$PROJECT" --location "$REGION" --format 'value(name)' 2>/dev/null)
 M=$(echo "$REG" | grep -c "vibeflix-mcp-" || true); AG=$(echo "$REG" | grep -c -- "-agent" || true)
 [ "$M" = "3" ] && ok "registry: 3 MCP servers" || bad "registry: $M/3 MCP servers"
-[ "$AG" = "5" ] && ok "registry: 5 agents" || bad "registry: $AG/5 agents (step 4a-ii)"
+[ "$AG" = "6" ] && ok "registry: 6 agents" || bad "registry: $AG/6 agents (step 4a-ii — orchestrator too)"
 have "$(gcloud alpha network-services agent-gateways describe vibeflix-gateway --location "$REGION" --project "$PROJECT" --format 'value(name)' 2>/dev/null)" \
   && ok "gateway vibeflix-gateway" || bad "gateway vibeflix-gateway"
 have "$(gcloud beta service-extensions authz-extensions describe vibeflix-gateway-iap-authz --location "$REGION" --project "$PROJECT" --format 'value(name)' 2>/dev/null)" \

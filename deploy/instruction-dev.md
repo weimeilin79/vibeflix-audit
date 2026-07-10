@@ -295,7 +295,7 @@ an agent with the bare host URL, delete it first
 or every later registration collides with "Interface URL already in use":
 
 ```bash
-for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
   ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
   gcloud alpha agent-registry services create vibeflix-$A-agent \
     --project=$PROJECT --location=$REGION \
@@ -306,7 +306,7 @@ done
 gcloud alpha agent-registry services list --project=$PROJECT --location=$REGION
 ```
 
-✅ **Verify:** the list shows **8 entries** — 3 `vibeflix-mcp-*` + 5 `vibeflix-*-agent`.
+✅ **Verify:** the list shows **9 entries** — 3 `vibeflix-mcp-*` + 6 `vibeflix-*-agent`.
 
 **4b. Create the gateway** — a YAML import on the `network-services` surface,
 bound to the project's registry (our MCP backends are public run.app URLs, so
@@ -500,10 +500,48 @@ URL": they are **attached by reference at deploy time**, and then discover MCP
 servers from the Agent Registry through the gateway (no `MCP_*_URL` env needed
 at all). Per the codelab's agent deploy:
 
+⚠️ **BEFORE attaching**: the gateway is default-deny for ALL egress — including
+Google's own endpoints. An attached agent loses Gemini/telemetry/sessions unless
+the platform endpoints are registered + granted first:
+
 ```bash
-#   --agent-gateway=projects/$PROJECT/locations/$REGION/agentGateways/vibeflix-gateway
-#   --mcp-invoker-sa=vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com
-#   (plus agent identity enabled — done in 3c)
+for EP in "aiplatform https://$REGION-aiplatform.googleapis.com" \
+          "aiplatform-mtls https://$REGION-aiplatform.mtls.googleapis.com" \
+          "telemetry https://telemetry.googleapis.com" \
+          "logging https://logging.googleapis.com" \
+          "pubsub https://pubsub.googleapis.com"; do
+  set -- $EP
+  gcloud alpha agent-registry services create "gcp-$1" \
+    --project=$PROJECT --location=$REGION --display-name="GCP $1" \
+    --endpoint-spec-type=no-spec \
+    --interfaces='[{url="'$2'",protocolBinding="JSONRPC"}]' \
+    || echo "  (gcp-$1 may already exist)"
+done
+# egress to them for EVERY agent (principalSet from 3a, unconditional):
+gcloud iap web add-iam-policy-binding --project=$PROJECT \
+  --member="$AGENTS_SET" --role=roles/iap.egressor
+```
+
+**Attach each engine** (PATCH its deployment spec; repeat per engine or loop):
+
+```bash
+GW="projects/$PROJECT/locations/$REGION/agentGateways/vibeflix-gateway"
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+  curl -s -X PATCH -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    -H "Content-Type: application/json" \
+    -d '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"agentToAnywhereConfig":{"agentGateway":"'$GW'"}}}}}' \
+    "https://$REGION-aiplatform.googleapis.com/v1beta1/$ENG?updateMask=spec.deploymentSpec.agentGatewayConfig" \
+    | jq -r '"'$A': " + (if .error then "⚠️ " + .error.message else "attached (op " + (.name|split("/")|last) + ")" end)'
+done
+```
+
+✅ **Verify:** every engine shows a non-null gateway binding:
+
+```bash
+curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1beta1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
+  | jq -r '.reasoningEngines[] | select(.displayName//""|startswith("vibeflix")) | "\(.displayName)\t\(.spec.deploymentSpec.agentGatewayConfig != null)"'
 ```
 
 The plain `adk deploy agent_engine` CLI has no gateway flag yet — gateway
