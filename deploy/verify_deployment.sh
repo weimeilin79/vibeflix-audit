@@ -66,9 +66,16 @@ for S in licensing market brand-style; do
   [ "${INV:-0}" = "1" ] && ok "invoker SA on vibeflix-mcp-$S" || bad "invoker SA missing on vibeflix-mcp-$S (4d)"
 done
 
-echo "═══ Step 4e — gateway attachment"
-ATT=$(echo "$ENG" | jq '[.reasoningEngines[] | select(.displayName // "" | startswith("vibeflix")) | select(.spec.deploymentSpec.agentGatewayConfig != null)] | length')
-[ "${ATT:-0}" -ge 1 ] && ok "$ATT engine(s) attached to the gateway" || bad "no engines attached to the gateway yet (4e)"
+echo "═══ Step 4e — gateway attachment (per-engine GET; list omits deploymentSpec)"
+ATT=0
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  EID=$(echo "$ENG" | jq -r --arg n "vibeflix-$A" '[.reasoningEngines[]|select(.displayName==$n)][0].name')
+  [ -n "$EID" ] && [ "$EID" != "null" ] || continue
+  GW=$(curl -s -H "Authorization: Bearer $TOK" "https://$REGION-aiplatform.googleapis.com/v1beta1/$EID" \
+    | jq -r '.spec.deploymentSpec.agentGatewayConfig.agentToAnywhereConfig.agentGateway // ""')
+  [ -n "$GW" ] && ATT=$((ATT+1))
+done
+[ "$ATT" = "6" ] && ok "all 6 engines attached to the gateway" || bad "$ATT/6 engines attached (4e)"
 
 echo "═══ Step 5 — console app"
 APPURL=$(gcloud run services describe vibeflix-app --region "$REGION" --project "$PROJECT" --format 'value(status.url)' 2>/dev/null)

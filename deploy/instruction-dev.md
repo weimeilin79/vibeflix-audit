@@ -541,9 +541,14 @@ done
 ✅ **Verify:** every engine shows a non-null gateway binding:
 
 ```bash
-curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://$REGION-aiplatform.googleapis.com/v1beta1/projects/$PROJECT/locations/$REGION/reasoningEngines" \
-  | jq -r '.reasoningEngines[] | select(.displayName//""|startswith("vibeflix")) | "\(.displayName)\t\(.spec.deploymentSpec.agentGatewayConfig != null)"'
+# NOTE: the LIST endpoint omits deploymentSpec — must GET each engine:
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+  GW=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://$REGION-aiplatform.googleapis.com/v1beta1/$ENG" \
+    | jq -r '.spec.deploymentSpec.agentGatewayConfig.agentToAnywhereConfig.agentGateway // "NOT ATTACHED"')
+  echo "vibeflix-$A → $(basename $GW)"
+done   # all 6 should print vibeflix-gateway
 ```
 
 The plain `adk deploy agent_engine` CLI has no gateway flag yet — gateway
