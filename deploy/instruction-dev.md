@@ -228,10 +228,11 @@ export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --regio
 export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
 # ⚠️ an EMPTY env value fails the deploy with "deployment_spec.env[N].value:
 # Required field is not set" — the :? guards below make a missing export fail fast.
-export RAG_CORPUS=<from step 1d>   # find it again:
-#   curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-#     "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
-#     | jq -r '.ragCorpora[] | "\(.displayName)\t\(.name)"' 
+# resolves the legal RAG corpus (from step 1d) automatically:
+export RAG_CORPUS=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
+  | jq -r '[.ragCorpora[] | select(.displayName=="vibeflix-legal-kb")][0].name')
+echo "RAG_CORPUS=$RAG_CORPUS"   # must print projects/…/ragCorpora/…, not null
 
 # engine config: the runtime SA (identity comes in 3c)
 cat > /tmp/engine_config.json <<EOF
