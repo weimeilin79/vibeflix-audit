@@ -279,14 +279,22 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   | jq -r '.reasoningEngines[] | "\(.displayName // "(unnamed)")\t\(.name)"'
 ```
 
-**3c. Expose A2A & Identity on the first 4 agents.**
-Before deploying `vendor_clearance`, you must expose `legal`'s A2A endpoints. Run the post-deploy script to configure the first 4 engines:
+**3c. Expose A2A & Identity on ALL agents deployed so far.**
+The script configures EVERY `vibeflix-*` engine it finds (all 4 at this point)
+to speak A2A — framework `a2a`, A2A methods registered, agent identity on. All
+of them need it (the orchestrator later calls brand_style and deal_pricing over
+A2A too); `legal` is simply the one that BLOCKS the next step, since
+`vendor_clearance`'s deploy needs its A2A URL:
 
 ```bash
 PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
 ```
 
-*This sets framework="a2a", unsets the service account, registers A2A methods, and activates identity. Confirm `legal`'s framework is `a2a` before moving on.*
+*This sets framework="a2a", unsets the service account, registers A2A methods,
+and activates identity — on every engine listed. Confirm ALL FOUR show framework
+`a2a` before moving on (re-running is safe: already-configured engines are
+skipped). The same script runs again at 3e and after 3f to pick up
+`vendor_clearance` and the orchestrator as they're deployed.*
 
 **3d. Deploy vendor_clearance last.**
 Now that `legal`'s A2A endpoints are exposed, fetch and export its A2A base URL:
