@@ -20,9 +20,15 @@ gcloud auth login && gcloud auth application-default login
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
 ```bash
-# APIs
-gcloud services enable firestore.googleapis.com pubsub.googleapis.com \
-  run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com aiplatform.googleapis.com
+# 1-0. Enable EVERY API the walkthrough touches (one shot, idempotent):
+gcloud services enable --project=$PROJECT \
+  firestore.googleapis.com pubsub.googleapis.com storage.googleapis.com \
+  run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com \
+  aiplatform.googleapis.com \
+  agentregistry.googleapis.com networkservices.googleapis.com \
+  networksecurity.googleapis.com iap.googleapis.com \
+  observability.googleapis.com apphub.googleapis.com \
+  cloudtrace.googleapis.com telemetry.googleapis.com
 
 # 1a. Firestore — a DEDICATED named db (not "(default)")
 gcloud firestore databases create --database=vibeflix-registry \
@@ -103,6 +109,18 @@ gcloud run deploy vibeflix-mcp-market --image $AR/mcp-market --region $REGION \
 gcloud run deploy vibeflix-mcp-brand-style --image $AR/mcp-brand-style --region $REGION \
   --service-account vibeflix-mcp-readonly@$PROJECT.iam.gserviceaccount.com \
   --no-allow-unauthenticated --memory 512Mi --max-instances 2 --set-env-vars "$common"
+```
+
+✅ **Verify all 3 services exist before continuing** (a lost paste of one
+deploy command is easy to miss — the IAM step below fails on a missing service):
+
+```bash
+gcloud run services list --project=$PROJECT --region=$REGION \
+  --filter="metadata.name:vibeflix-mcp" --format="table(metadata.name,status.url)"
+# expect EXACTLY these three, each with a URL:
+#   vibeflix-mcp-licensing · vibeflix-mcp-market · vibeflix-mcp-brand-style
+# missing one? its image is likely already built (gcloud builds list) —
+# just re-run that service's `gcloud run deploy …` command from 2c.
 ```
 
 **2d. Who may call them?** For now just you (verification). In step 4 the Agent

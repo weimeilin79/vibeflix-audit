@@ -33,6 +33,13 @@ EOF
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
 ```bash
+# enable every API used across the runbook (idempotent):
+gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.googleapis.com \
+  storage.googleapis.com run.googleapis.com artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com aiplatform.googleapis.com agentregistry.googleapis.com \
+  networkservices.googleapis.com networksecurity.googleapis.com iap.googleapis.com \
+  observability.googleapis.com apphub.googleapis.com cloudtrace.googleapis.com telemetry.googleapis.com
+
 ./deploy/setup_firestore.sh      # creates the vibeflix-registry db + SEEDS it:
                                  #   registries (brand/legal/market policy),
                                  #   vendors (CRUD store), audit_history smoke test
