@@ -398,58 +398,66 @@ Fastest route — apply every [`deploy/policies.yaml`](policies.yaml) row at onc
 ./deploy/grant_mcp_egress.sh --project-scope
 ```
 
-Manual route — all six grants spelled out (zsh users: run
+Manual route — all seven grants spelled out (zsh users: run
 `setopt interactive_comments` first, or the `#` comment lines execute as
-commands when pasted). Each follows the same pattern:
-write the condition file, extract the member, bind:
+commands when pasted). Each is **resource-scoped** — bound to the target MCP
+server's Agent-Registry resource via `--mcp-server` (so it shows on the console
+Policies page). Note the command is **`gcloud alpha iap web`** (`--mcp-server`
+is not in the GA track), and the `--mcp-server` value is the server's
+registryResource id (`agentregistry-…`), which the `mcpid` helper resolves:
 
 ```bash
-# grant <member> <title> <CEL expression>
+# grant <member> <mcp-server-shortname> <title> <CEL expression>
 grant() {
-  printf 'expression: >-\n  %s\ntitle: %s\n' "$3" "$2" > /tmp/cond.yaml
-  gcloud iap web add-iam-policy-binding --project=$PROJECT \
+  printf 'expression: >-\n  %s\ntitle: %s\n' "$4" "$3" > /tmp/cond.yaml
+  gcloud alpha iap web add-iam-policy-binding --project=$PROJECT --region=$REGION \
+    --resource-type=agent-registry --mcp-server="$(mcpid "$2")" \
     --member="$1" --role=roles/iap.egressor --condition-from-file=/tmp/cond.yaml
 }
-M() { jq -r ".\"$1\".principal" deploy/agent_identities.json; }   # agent → principal
+M()     { jq -r ".\"$1\".principal" deploy/agent_identities.json; }      # agent → principal
+mcpid() { gcloud alpha agent-registry services describe "$1" --project=$PROJECT \
+            --location=$REGION --format='value(registryResource)' | xargs basename; }  # → agentregistry-…
 
-# 1. brand_style → its MCP server, one tool
-grant "$(M vibeflix-brand-style)" brand-style \
+# 1. brand_style → brand-style server, one tool
+grant "$(M vibeflix-brand-style)" vibeflix-mcp-brand-style brand-style \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['run_brand_audit']"
 
 # 2. deal_pricing → licensing, rate card only
-grant "$(M vibeflix-deal-pricing)" deal-pricing \
+grant "$(M vibeflix-deal-pricing)" vibeflix-mcp-licensing deal-pricing \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_license_pricing']"
 
 # 3. vendor_clearance → licensing (clearance + onboarding writes)
-grant "$(M vibeflix-vendor-clearance)" vendor-clearance-licensing \
+grant "$(M vibeflix-vendor-clearance)" vibeflix-mcp-licensing vendor-clearance-licensing \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'find_vendors', 'create_vendor', 'update_vendor', 'list_trademarks', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'check_vendor_eligibility']"
 
 # 4. vendor_clearance → market
-grant "$(M vibeflix-vendor-clearance)" vendor-clearance-market \
+grant "$(M vibeflix-vendor-clearance)" vibeflix-mcp-market vendor-clearance-market \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['scan_ecom_marketplaces', 'check_sku_volume_caps', 'capture_audit_map']"
 
 # 5. legal → licensing (the ONLY caller allowed upsert_contract besides the app's admin stamp)
-grant "$(M vibeflix-legal)" legal \
+grant "$(M vibeflix-legal)" vibeflix-mcp-licensing legal \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'upsert_contract', 'get_contract']"
 
-# 6-bis (row 7). the ORCHESTRATOR engine → licensing, READ-ONLY — its
-#    note_responder answers registry questions ("what can VND-1008 produce?"):
-grant "$(M vibeflix-orchestrator)" orchestrator \
+# 6. orchestrator → licensing, READ-ONLY — its note_responder answers registry
+#    questions ("what can VND-1008 produce?"):
+grant "$(M vibeflix-orchestrator)" vibeflix-mcp-licensing orchestrator \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['get_vendor', 'find_vendors', 'list_trademarks', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract']"
 
-# 6. the console app → licensing (pickers, Database tab, contract reads,
+# 7. the console app → licensing (pickers, Database tab, contract reads,
 #    volume-annotation upsert, demo reset) — serviceAccount, not principal://
 #    ⚠️ requires the vibeflix-app SA, which step 5a creates. Either create it
 #    now (gcloud iam service-accounts create vibeflix-app + sleep 30) or run
-#    this one grant after 5a — grant_mcp_egress.sh skips it gracefully either way.
-grant "serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" app \
+#    this one grant after 5a.
+grant "serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com" vibeflix-mcp-licensing app \
   "api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['list_trademarks', 'get_vendor', 'find_vendors', 'verify_trademark_record', 'scan_global_exclusivity_clauses', 'get_contract', 'upsert_contract', 'dump_stores', 'reset_vendors']"
 ```
 
 (ui_renderer has no MCP dependencies → no grant, which under deny-by-default
-means it can reach nothing. The attribute keys are codelab-verbatim:
-`mcp.toolName` and `mcp.tool.isReadOnly` — note the inconsistent casing between
-the two is Google's, not a typo.)
+means it can reach nothing. Attribute keys are codelab-verbatim: `mcp.toolName`
+and `mcp.tool.isReadOnly` — the inconsistent casing is Google's, not a typo.
+For the console-invisible fallback, swap the `grant()` body for
+`gcloud iap web add-iam-policy-binding --project=$PROJECT …` with no
+`--resource-type`/`--mcp-server`.)
 
 **4d. Point MCP invocation at a dedicated invoker SA.** The gateway has no
 backend-egress SA of its own (its `serviceExtensionsServiceAccount` only calls

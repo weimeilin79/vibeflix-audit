@@ -31,16 +31,19 @@ MODE="${1:-}"
 [ "$MODE" = "--project-scope" ] && SCOPE=project || SCOPE=resource
 [ "$MODE" = "--dry-run" ] && DRY=1 || DRY=""
 
-# Resolve each MCP server's Agent-Registry endpoint id once (resource scope only).
-# The registered service's `name` last segment is the endpoint id IAP binds to.
-declare -A ENDPOINT
-if [ "$SCOPE" = resource ] && [ -z "$DRY" ]; then
-  for SRV in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
-    EID=$(gcloud alpha agent-registry services describe "$SRV" \
-      --project="$PROJECT" --location="$REGION" --format='value(name)' 2>/dev/null | xargs -r basename)
-    ENDPOINT[$SRV]="$EID"
-  done
-fi
+# Resolve an MCP server's Agent-Registry endpoint id (resource scope). The
+# registered service's `name` last segment is the endpoint id IAP binds to.
+# (Plain function — macOS bash 3.2 has no `declare -A`. Cached in temp files.)
+_EP_CACHE="$(mktemp -d)"
+# The MCP server's Agent-Registry resource id (registryResource basename =
+# agentregistry-XXXX) — this is what `--mcp-server` binds the IAP policy to.
+endpoint_for() {
+  local srv="$1" f="$_EP_CACHE/$1"
+  [ -f "$f" ] && { cat "$f"; return; }
+  gcloud alpha agent-registry services describe "$srv" \
+    --project="$PROJECT" --location="$REGION" --format='value(registryResource)' 2>/dev/null \
+    | xargs -r basename | tee "$f"
+}
 
 "$ROOT/.venv/bin/python" - <<'PYEOF' | while IFS='|' read -r CALLER MEMBER SERVER TOOLS; do
 import json, pathlib, sys, os, subprocess
@@ -82,15 +85,16 @@ EOF
     sed 's/^/    /' "$COND"; echo "    member: $MEMBER"; continue
   fi
   if [ "$SCOPE" = resource ]; then
-    EID="${ENDPOINT[$SERVER]:-}"
+    EID="$(endpoint_for "$SERVER")"
     if [ -z "$EID" ]; then
       echo "    ⚠️ no registry endpoint for $SERVER — is it registered (4a)? skipping"; continue
     fi
-    gcloud iap web add-iam-policy-binding \
-      --resource-type=agent-registry --endpoint="$EID" --region="$REGION" --project="$PROJECT" \
+    # ALPHA track; --mcp-server binds to the server's registry resource (console-visible).
+    gcloud alpha iap web add-iam-policy-binding \
+      --resource-type=agent-registry --mcp-server="$EID" --region="$REGION" --project="$PROJECT" \
       --member="$MEMBER" --role=roles/iap.egressor --condition-from-file="$COND" >/dev/null \
-      && echo "    granted (resource: $SERVER/$EID)" \
-      || echo "    ⚠️ failed — if gcloud rejects --resource-type=agent-registry, re-run with --project-scope"
+      && echo "    granted (mcp-server: $SERVER → $EID)" \
+      || echo "    ⚠️ failed — re-run with --project-scope for the console-invisible fallback"
   else
     gcloud iap web add-iam-policy-binding --project="$PROJECT" \
       --member="$MEMBER" --role=roles/iap.egressor --condition-from-file="$COND" >/dev/null \
