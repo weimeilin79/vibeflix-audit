@@ -353,7 +353,9 @@ grants where needed:
 # including engines deployed LATER (vendor_clearance in 3d, the orchestrator in
 # 3f). Grant once here; no re-run needed as engines are added.
 ORG=$(gcloud organizations list --format 'value(ID)' | head -1)
+PN=$(gcloud projects describe $PROJECT --format 'value(projectNumber)')   # project NUMBER, not id
 AGENTS_SET="principalSet://agents.global.org-$ORG.system.id.goog/attribute.platformContainer/aiplatform/projects/$PN"
+echo "$AGENTS_SET"   # must end in projects/<number> — an empty ORG or PN silently matches NOTHING
 for ROLE in roles/aiplatform.expressUser roles/serviceusage.serviceUsageConsumer roles/browser; do
   gcloud projects add-iam-policy-binding $PROJECT --condition=None \
     --member "$AGENTS_SET" --role $ROLE
