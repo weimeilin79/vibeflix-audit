@@ -379,11 +379,16 @@ and bind step-4 policies per registered-agent entry (coarser but works today).
 topology.md but deploys after the domain engines, whose A2A URLs it needs):
 
 ```bash
+# resolves each engine's A2A base automatically (by display name):
 BASE=https://$REGION-aiplatform.googleapis.com/v1beta1
-# fill from the engine list above:
-export BRAND_STYLE_A2A_URL=$BASE/<brand-style engine resource>
-export VENDOR_CLEARANCE_A2A_URL=$BASE/<vendor-clearance engine resource>
-export DEAL_PRICING_A2A_URL=$BASE/<deal-pricing engine resource>
+ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
+eng() { echo "$ENGINES_JSON" | jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name'; }
+export BRAND_STYLE_A2A_URL=$BASE/$(eng vibeflix-brand-style)
+export VENDOR_CLEARANCE_A2A_URL=$BASE/$(eng vibeflix-vendor-clearance)
+export DEAL_PRICING_A2A_URL=$BASE/$(eng vibeflix-deal-pricing)
+printf '%s\n' "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL"
+# none may end in "/null" — that means the engine isn't deployed (3b/3d)
 
 printf 'RUN_LOCAL=false\nGOOGLE_GENAI_USE_VERTEXAI=true\nPUBSUB_TOPIC=vibeflix-mesh-events\nMCP_LICENSING_URL=%s\nBRAND_STYLE_A2A_URL=%s\nVENDOR_CLEARANCE_A2A_URL=%s\nDEAL_PRICING_A2A_URL=%s\n' \
   "$MCP_LICENSING_URL" "$BRAND_STYLE_A2A_URL" "$VENDOR_CLEARANCE_A2A_URL" "$DEAL_PRICING_A2A_URL" > /tmp/env_orchestrator
