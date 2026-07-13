@@ -70,6 +70,17 @@ Re-apply IAM at any time (idempotent, safe to re-run):
    still emits a confident, clean verdict. `run_layers.sh` checks the callee's log for exactly
    this reason. See `tests/a2a/README.md`.
 5. **Step 4 must run AFTER the engines exist** (the grants key off `agent_identities.json`).
+6. **TWO A2A hosts — the app and the engines do NOT use the same one:**
+
+   | caller | `*_A2A_URL` host | why |
+   |---|---|---|
+   | **engines** (gateway-attached) | `REGION-aiplatform.**mtls**.googleapis.com` | egress goes THROUGH the gateway, which terminates the mTLS leg and only authorizes the destination it REGISTERED (the mtls url) |
+   | **the app** (plain Cloud Run SA) | `REGION-aiplatform.googleapis.com` | goes DIRECT — an mtls host demands a client cert the app doesn't have → **401** |
+
+   Get it wrong and `message:send` appears to work while every `GET /a2a/v1/tasks/{id}` poll
+   401s: the fast agent (brand_style) finishes, vendor_clearance/deal_pricing HANG FOREVER,
+   and the MCP tool LEDs never light. ⚠️ A bearer `GET` of the engine RESOURCE returns 200 on
+   **both** hosts, so that check will mislead you — it's the A2A METHOD calls that mtls rejects.
 
 ---
 

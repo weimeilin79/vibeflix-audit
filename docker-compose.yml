@@ -176,8 +176,33 @@ services:
       PORT: "8004"
     volumes: *gcloud-adc
 
-  # ---- App: frontend + FastAPI + orchestrator (A2A client). Calls the domain
-  #      agents (via orchestrator) and the ui_renderer, all over A2A. ----
+  # ---- Orchestrator agent (A2A server) — INDEPENDENT, exactly like the cloud engine.
+  #      The app is a THIN CLIENT: it calls this over A2A (same as ui_renderer) rather
+  #      than importing root_agent and running the workflow in-process. That keeps local
+  #      and cloud topologies identical — and in cloud it is what gives the orchestrator
+  #      its own agent identity, its own gateway-governed egress, and its own traces. ----
+  orchestrator:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.agent
+      args: { AGENT: orchestrator }
+    environment:
+      <<: *vertex-env
+      A2A_AGENT: orchestrator
+      A2A_HOST: orchestrator
+      A2A_PROTOCOL: http
+      PORT: "8006"
+      # It fans out to the three domain agents over A2A …
+      BRAND_STYLE_A2A_URL: http://brand_style:8001
+      VENDOR_CLEARANCE_A2A_URL: http://vendor_clearance:8002
+      DEAL_PRICING_A2A_URL: http://deal_pricing:8003
+      # … and reads the rate card / trademarks for its own steps.
+      MCP_LICENSING_URL: http://mcp_licensing:9002/mcp
+    volumes: *gcloud-adc
+    depends_on: [brand_style, vendor_clearance, deal_pricing, mcp_licensing]
+
+  # ---- App: frontend + FastAPI. A THIN CLIENT — it calls the orchestrator and the
+  #      ui_renderer over A2A, and runs no agent workflow itself. ----
   app:
     build: { context: ., dockerfile: deploy/Dockerfile.app }
     ports: ["8000:8000"]
@@ -187,6 +212,12 @@ services:
       # image upload to GCS (and Vertex persistence when AGENT_ENGINE_ID is set).
       <<: *vertex-env
       PORT: "8000"
+      # The INDEPENDENT orchestrator agent — the app calls it over A2A (thin client).
+      # Its presence is what switches the app off the in-process workflow: unset it and
+      # the app falls back to importing root_agent and running the graph itself.
+      ORCHESTRATOR_A2A_URL: http://orchestrator:8006
+      # Domain-agent URLs: still passed so the app can PROBE them for /api/ready
+      # (the fan-out itself is the orchestrator's job now, not the app's).
       BRAND_STYLE_A2A_URL: http://brand_style:8001
       VENDOR_CLEARANCE_A2A_URL: http://vendor_clearance:8002
       DEAL_PRICING_A2A_URL: http://deal_pricing:8003
@@ -210,4 +241,4 @@ services:
     volumes:
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
       - ./data/app:/app/data
-    depends_on: [brand_style, vendor_clearance, deal_pricing, ui_renderer, mcp_licensing]
+    depends_on: [orchestrator, ui_renderer, mcp_licensing]

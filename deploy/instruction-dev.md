@@ -853,15 +853,29 @@ gcloud run services add-iam-policy-binding vibeflix-mcp-licensing --region $REGI
 #     (no gcloud surface for Agent Runtime — REST + jq)
 #     ⚠️ Always use the mtls.googleapis.com endpoint so that container egress
 #     routes correctly through the Agent Gateway over the mTLS secure path.
-A2A_BASE="https://$REGION-aiplatform.mtls.googleapis.com/v1beta1"
-BASE="https://$REGION-aiplatform.googleapis.com/v1beta1"
+# ⚠️ THE APP USES THE **PLAIN** HOST — NOT the mtls one the ENGINES use.
+#
+# Two callers, two transports:
+#   ENGINES (gateway-attached) → MTLS url. Their egress goes THROUGH the Agent Gateway,
+#     which terminates the mTLS leg for them and only authorizes the destination it has
+#     REGISTERED (which is the mtls url). A bearer token alone is enough.
+#   THE APP (plain Cloud Run SA, NOT gateway-attached) → PLAIN url. Its request goes
+#     DIRECT to Google's endpoint, so an mtls host demands a client certificate the app
+#     does not have → **401 Unauthorized**.
+#
+# Symptom if you get this wrong: `POST message:send` seems to work, then every
+# `GET /a2a/v1/tasks/{id}` poll 401s — so the fast agent (brand_style) appears to finish
+# while vendor_clearance / deal_pricing HANG FOREVER and the MCP tool LEDs never light.
+# (A bearer GET of the engine RESOURCE returns 200 on BOTH hosts, so that check will
+# mislead you — it's the A2A METHOD calls that mtls rejects.)
+BASE="https://$REGION-aiplatform.googleapis.com/v1beta1"        # app → engines
 ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
 eng() { jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name' <<< "$ENGINES_JSON"; }
-BRAND_URL=$A2A_BASE/$(eng vibeflix-brand-style)
-VENDOR_URL=$A2A_BASE/$(eng vibeflix-vendor-clearance)
-PRICING_URL=$A2A_BASE/$(eng vibeflix-deal-pricing)
-UI_URL=$A2A_BASE/$(eng vibeflix-ui-renderer)
+BRAND_URL=$BASE/$(eng vibeflix-brand-style)
+VENDOR_URL=$BASE/$(eng vibeflix-vendor-clearance)
+PRICING_URL=$BASE/$(eng vibeflix-deal-pricing)
+UI_URL=$BASE/$(eng vibeflix-ui-renderer)
 # MCP_*_URL: the DIRECT run.app /mcp URLs (step 2) — the app cannot ride the
 # gateway's mTLS/PSC surface; its access is IAM + the read-only IAP grant.
 

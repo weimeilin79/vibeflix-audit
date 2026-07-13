@@ -53,6 +53,15 @@ ensure_endpoint gcp-iamcredentials-mtls https://iamcredentials.mtls.googleapis.c
 # GOOGLE_CLOUD_LOCATION=global ⇒ genai/session egress to the GLOBAL aiplatform host.
 ensure_endpoint gcp-aiplatform-global   https://aiplatform.googleapis.com
 ensure_endpoint gcp-aiplatform-mtls-glb https://aiplatform.mtls.googleapis.com
+# PUB/SUB — BOTH hosts. A gateway-attached engine egresses over mTLS, so registering only
+# https://pubsub.googleapis.com is NOT enough: the agents' mesh-telemetry publish is
+# refused with `403 Egress request is not authorized … unregistered in the Agent Registry`,
+# and (because publish() failures land on a future nobody reads) it fails SILENTLY —
+# the console's workflow graph just never draws, with no error anywhere. The MCP tool LEDs
+# still work, because the MCP servers are plain Cloud Run and are not gateway-governed,
+# which makes the failure look like a frontend bug. It isn't.
+ensure_endpoint gcp-pubsub              https://pubsub.googleapis.com
+ensure_endpoint gcp-pubsub-mtls         https://pubsub.mtls.googleapis.com
 echo
 
 echo "[grant_agent_iam] project=$PROJECT region=$REGION dry=${DRY:-0}"
@@ -79,6 +88,21 @@ for A in $AGENTS; do
   for R in $PROJECT_ROLES; do
     run gcloud projects add-iam-policy-binding "$PROJECT" --member="$P" --role="$R" --condition=None
   done
+done
+
+# ── 1b. PUB/SUB PUBLISHER on the mesh topic ───────────────────────────────────
+# The agents publish node/tool started/completed events (vibeflix_common.telemetry) that
+# drive the console's LIVE workflow graph and MCP tool LEDs (app: Pub/Sub → /api/mesh/events).
+# Without this the events are silently dropped and the console's graph + LEDs stay DARK,
+# with no error anywhere — the agent still runs fine, so it looks like a frontend bug.
+#
+# ⚠️ The topic already carries `principalSet://…` bindings, which LOOK like they cover the
+# agents but match NOTHING for agent identities. Grant the SPECIFIC principal.
+TOPIC="${PUBSUB_TOPIC:-vibeflix-mesh-events}"
+echo "── 1b/4 pub/sub publisher on $TOPIC (drives the console graph + tool LEDs)"
+for A in $AGENTS; do
+  run gcloud pubsub topics add-iam-policy-binding "$TOPIC" --project="$PROJECT" \
+    --member="$(M "$A")" --role=roles/pubsub.publisher
 done
 
 # ── 2. GOOGLE-API egress (gateway is default-deny on EVERYTHING outbound) ─────
@@ -134,6 +158,20 @@ for T in $AGENTS; do
       --member="$(M "$C")" --role=roles/iap.egressor
   done
   echo "  ✓ endpoint $T ← all agents"
+done
+
+# ── 3a. THE APP's SA — it calls the engines over A2A, so it needs context access ──
+# The app can POST /a2a/v1/message:send (create a task) with roles/aiplatform.user alone,
+# but reading the task back — GET /a2a/v1/tasks/{id}, which is how a2a_engine POLLS for the
+# result — lives in the agent's SESSION/CONTEXT surface and needs agentContextEditor.
+# Without it every poll 401s: /api/audit 500s, and in the UI the slow agents
+# (vendor_clearance, deal_pricing) HANG FOREVER while the fast one appears to finish.
+# (Same role the agent principals need for their own sessions — easy to grant to the
+# engines and forget for the app.)
+APP_SA="serviceAccount:${APP_SA_EMAIL:-vibeflix-app@$PROJECT.iam.gserviceaccount.com}"
+echo "── 3a/4 app SA A2A access ($APP_SA)"
+for R in roles/aiplatform.user roles/aiplatform.agentContextEditor roles/aiplatform.agentDefaultAccess; do
+  run gcloud projects add-iam-policy-binding "$PROJECT" --member="$APP_SA" --role="$R" --condition=None
 done
 
 # ── 3b. MCP INVOKER SA — how an agent-identity engine authenticates to Cloud Run ──

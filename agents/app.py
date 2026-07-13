@@ -125,10 +125,69 @@ class TelemetryPayload(BaseModel):
     overridden: bool
 
 
-# The ADK app wrapping the workflow graph. The orchestrator surfaces any needed
-# input (a missing image, a sourcing decision) as a field in its aggregate; the
-# app collects it and re-runs, so no in-graph interrupt/resumability is needed.
-# context_cache_config caches the stable instruction/semantic prefix on Vertex.
+_ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_A2A_URL", "").rstrip("/")
+
+
+def _orchestrator_is_remote() -> bool:
+    """Is the orchestrator an INDEPENDENT agent we call over A2A?
+
+    It must be. The orchestrator is a first-class agent in this mesh: it has its own
+    AGENT IDENTITY, its own gateway-governed egress, and its own traces. When the app
+    ran it IN-PROCESS (the old `Runner(root_agent=…)` below), none of that was true —
+    the vibeflix-orchestrator engine sat deployed and idle (0 inbound message:send), the
+    fan-out to brand/vendor/deal went out under the APP's plain service account instead
+    of the orchestrator's principal://, so the A2A egress policies were never in the
+    path, and the console showed no orchestrator traces.
+
+    So the app now talks to it exactly like it talks to ui_renderer: over A2A.
+    """
+    return bool(_ORCHESTRATOR_URL)
+
+
+def _orchestrator_agent():
+    """orchestrator client — same shape as `_presenter_agent()` (ui_renderer).
+
+    CLOUD: the Agent-Runtime engine speaks the REST/proto A2A dialect → direct_engine_agent.
+    LOCAL: the compose container speaks JSON-RPC A2A (`serve_a2a`) → RemoteA2aAgent.
+    a2a_engine_send() ONLY speaks the Agent-Runtime dialect, so it cannot be used locally.
+    """
+    from vibeflix_common.cloud_auth import run_local
+    if not run_local():
+        from vibeflix_common.a2a_engine import direct_engine_agent
+        return direct_engine_agent(
+            "orchestrator", "Runs the licensing audit workflow.", _ORCHESTRATOR_URL)
+    return RemoteA2aAgent(
+        name="orchestrator",
+        agent_card=a2a_card_url(_ORCHESTRATOR_URL),
+        **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
+    )
+
+
+_orchestrator_runner = None
+
+
+async def _run_orchestrator(request: dict) -> str:
+    """Send the audit request to the INDEPENDENT orchestrator agent; return its reply text."""
+    global _orchestrator_runner
+    if _orchestrator_runner is None:
+        _orchestrator_runner = InMemoryRunner(
+            app=App(name="vibeflix_orchestrator_client", root_agent=_orchestrator_agent()))
+    uid = f"orch-{uuid.uuid4().hex[:8]}"
+    sess = await _orchestrator_runner.session_service.create_session(
+        app_name="vibeflix_orchestrator_client", user_id=uid)
+    reply = ""
+    async for ev in _orchestrator_runner.run_async(
+        user_id=uid, session_id=sess.id, new_message=_content(json.dumps(request))
+    ):
+        t = _text_of(getattr(ev, "content", None))
+        if t:
+            reply = t
+    return reply
+
+
+# The in-process ADK app/runner is the LOCAL-ONLY fallback (and the thing the
+# orchestrator ENGINE itself runs internally). Keep it for `RUN_LOCAL` / no
+# ORCHESTRATOR_A2A_URL, but it is NOT the cloud path.
 adk_app = App(
     name=APP_NAME,
     root_agent=root_agent,
@@ -367,8 +426,25 @@ def _content(payload: str) -> types.Content:
 
 
 async def _run_once(request: dict) -> tuple[str, str, dict]:
-    """Run the workflow to completion on a fresh session; return (user_id, sid, aggregate)."""
+    """Run the workflow to completion; return (user_id, sid, aggregate).
+
+    CLOUD: call the ORCHESTRATOR ENGINE over A2A — it is an independent agent, exactly
+    like ui_renderer. It fans out to brand/vendor/deal under ITS OWN agent identity
+    (so the gateway's A2A egress policies are genuinely in the path) and returns the
+    finished aggregate. LOCAL (no ORCHESTRATOR_A2A_URL): run it in-process.
+    """
     user_id = f"audit-{uuid.uuid4().hex[:8]}"
+
+    if _orchestrator_is_remote():
+        reply = await _run_orchestrator(request)
+        aggregate = _parse_report_text(reply)
+        if not isinstance(aggregate, dict) or "style_report" not in aggregate:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Orchestrator returned no audit result: {str(reply)[:300]}",
+            )
+        return user_id, f"a2a-{uuid.uuid4().hex[:8]}", aggregate
+
     session = await runner.session_service.create_session(app_name=APP_NAME, user_id=user_id)
     aggregate: dict | None = None
     async for event in runner.run_async(
@@ -899,12 +975,70 @@ async def _stream_audit(request: dict):
     request = _apply_prior(request)  # thread prior reports/inputs if re-submitting
 
     user_id = f"audit-{uuid.uuid4().hex[:8]}"
-    session = await runner.session_service.create_session(app_name=APP_NAME, user_id=user_id)
     aggregate = None
     names, author_idx, filled = [], {}, set()
+    # On the A2A path there is no local ADK session (the orchestrator ENGINE owns its
+    # own). `_persist_audit` still needs an id, so synthesize one — leaving this unset
+    # made the SSE generator raise NameError mid-stream, which the console reports as
+    # "Stream failed: network error (is the mesh running?)".
+    sid = f"a2a-{uuid.uuid4().hex[:8]}"
+
+    # ── Run scoping ──────────────────────────────────────────────────────────────
+    # Mesh telemetry is ONE Pub/Sub bus fanned out to EVERY open console, and events
+    # outlive the run that emitted them (late deliveries, Pub/Sub redelivery, a second
+    # tab). The console was drawing nodes from runs that had already finished. So: mint
+    # an id here, thread it to the orchestrator (which parks it in ctx.state, so every
+    # node event it emits carries it), and hand the same id to the browser below — the
+    # console then renders only the events stamped with the run it is showing.
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
+    request = {**request, "run_id": run_id}
+    yield _sse({"event": "run", "run_id": run_id})
+
+    # ── CLOUD: the orchestrator is an INDEPENDENT AGENT — call it over A2A ────────
+    # It fans out to brand/vendor/deal under its OWN agent identity (so the gateway's
+    # A2A egress policies are actually in the path) and returns the finished aggregate.
+    #
+    # A2A gives us the RESULT, not the orchestrator's internal step events — so the
+    # per-agent panels fill when it returns rather than one-by-one. The LIVE feedback
+    # during the run is unaffected: the workflow graph + tool LEDs are driven by the
+    # Pub/Sub mesh-telemetry bridge (`/api/mesh/events`), which the agents and MCP
+    # servers publish to directly. The tail below already copes with "no plan arrived"
+    # — it rebuilds the panel list from the returned reports.
+    if _orchestrator_is_remote():
+        try:
+            reply = await _run_orchestrator(request)
+            parsed = _parse_report_text(reply)
+            print(f"[orchestrator] reply chars={len(reply or '')} "
+                  f"parsed={type(parsed).__name__} "
+                  f"keys={sorted(parsed)[:8] if isinstance(parsed, dict) else '—'}", flush=True)
+            if isinstance(parsed, dict) and ("reports" in parsed or "style_report" in parsed):
+                aggregate = parsed
+                # The tail renders from aggregate["reports"]. The orchestrator emits BOTH
+                # that and the flat *_report keys; if a build ever sends only the flat
+                # shape, rebuild `reports` from it so the panels still fill.
+                if "reports" not in aggregate:
+                    flat = {"brand_style_compliance_agent": aggregate.get("style_report"),
+                            "vendor_clearance_agent": aggregate.get("clearance_report"),
+                            "deal_pricing_agent": aggregate.get("pricing_report")}
+                    aggregate["reports"] = {k: v for k, v in flat.items() if isinstance(v, dict)}
+            else:
+                yield _sse({"event": "error",
+                            "message": f"Orchestrator returned no audit result: {str(reply)[:200]}"})
+                return
+        except Exception as e:
+            print(f"[orchestrator] FAILED: {type(e).__name__}: {e}", flush=True)
+            yield _sse({"event": "error", "message": f"{type(e).__name__}: {e}"})
+            return
+
+    # ── LOCAL fallback: run the orchestrator in-process (no ORCHESTRATOR_A2A_URL) ──
+    # (skipped entirely in cloud — `aggregate` is already filled by the A2A call above,
+    #  and the tail below renders it.)
     try:
+      if aggregate is None:  # noqa: E111 — keeps the loop body's original indentation
+        session = await runner.session_service.create_session(app_name=APP_NAME, user_id=user_id)
+        sid = session.id
         async for event in runner.run_async(
-            user_id=user_id, session_id=session.id, new_message=_content(json.dumps(request))
+            user_id=user_id, session_id=sid, new_message=_content(json.dumps(request))
         ):
             parsed = _parse_report_text(_text_of(getattr(event, "content", None)))
             # 1) the plan: build the pending surface for exactly the workflows the
@@ -945,11 +1079,18 @@ async def _stream_audit(request: dict):
         return
 
     reports = aggregate.get("reports") or {}
-    if not names:  # plan never arrived — fall back to whatever reports came back
+    if not names:  # no `__plan__` — rebuild the surface from whatever reports came back
         names = list(reports)
         author_idx = {n: i for i, n in enumerate(names)}
         for msg in stream_initial([title_from_name(n) for n in names], market, volume):
             yield _sse({"a2ui": msg})
+        # …and the GRAPH's nodes, which also came from `__plan__`. Without this the
+        # workflow graph renders the orchestrator alone and the domain agents vanish —
+        # exactly what happens on the A2A path, where the orchestrator is an independent
+        # agent and returns only its RESULT (no internal step events).
+        yield _sse({"event": "graph", "op": "plan",
+                    "nodes": [{"id": n, "label": title_from_name(n), "run": True}
+                              for n in names]})
 
     # 3) fill any shown panel that never streamed a valid report (e.g. recovered).
     #    Only dispatched workflows are shown, so there's nothing reused to tag here.
@@ -1009,7 +1150,7 @@ async def _stream_audit(request: dict):
                         "status": "cleared"})
         if entry["passed"]:
             yield _sse({"a2ui": stream_final_report(entry)})
-        await _persist_audit(user_id, session.id, aggregate)
+        await _persist_audit(user_id, sid, aggregate)
         # `passed` + contract let the client CLOSE the session (a fully-cleared,
         # contract-executed audit is final — re-submitting it makes no sense).
         # `capped_volume` tells the client the sourcing decision changed the
@@ -1071,9 +1212,17 @@ _MCP_TOOLS_CACHE: dict | None = None
 # so the Workflow graph's tool LEDs and node states light up in real time.
 _MESH_QUEUES: set = set()
 _MESH_BRIDGE_STARTED = False
+# Module-level refs: the SubscriberClient and its StreamingPullFuture MUST outlive
+# _start_mesh_bridge(). They used to be locals — so once the function returned nothing
+# held them, GC could collect the client, and the streaming pull silently died. Symptom:
+# the tool LEDs work for a while and then go dark FOREVER (the bridge never restarts,
+# because _MESH_BRIDGE_STARTED stays True).
+_MESH_CLIENT = None
+_MESH_FUTURE = None
 
 
 def _start_mesh_bridge(loop) -> bool:
+    global _MESH_CLIENT, _MESH_FUTURE
     subscription = os.environ.get("PUBSUB_SUBSCRIPTION", "").strip()
     if not subscription:
         return False
@@ -1088,13 +1237,39 @@ def _start_mesh_bridge(loop) -> bool:
             except Exception:
                 data = {"raw": msg.data.decode(errors="replace")}
             msg.ack()
+            # The console keys tool LEDs as `<mcp>/<tool>` (source minus the `mcp_`
+            # prefix) and graph nodes by agent id. Log what actually arrives so a dark
+            # LED can be told apart from an event that never fired.
+            print(f"[mesh] source={data.get('source')} node={data.get('node')} "
+                  f"tool={data.get('tool')} event={data.get('event')} "
+                  f"→ led_key={(data.get('source') or '').removeprefix('mcp_')}/{data.get('tool')}"
+                  f" subs={len(_MESH_QUEUES)}", flush=True)
             for q in list(_MESH_QUEUES):
                 try:
                     loop.call_soon_threadsafe(q.put_nowait, data)
                 except Exception:
                     pass
 
-        client.subscribe(path, callback=_on_message)   # background streaming pull
+        future = client.subscribe(path, callback=_on_message)  # background streaming pull
+
+        def _on_stream_done(fut):
+            # The streaming pull can die (transient stream break, auth expiry, ...).
+            # Reset the flag so the NEXT console connect restarts the bridge, instead of
+            # leaving the LEDs dark forever behind a stale _MESH_BRIDGE_STARTED=True.
+            global _MESH_BRIDGE_STARTED
+            _MESH_BRIDGE_STARTED = False
+            try:
+                fut.result()
+            except Exception as exc:
+                print(f"[mesh-bridge] streaming pull ENDED: {type(exc).__name__}: {exc} "
+                      f"— will restart on next /api/mesh/events connect", flush=True)
+            else:
+                print("[mesh-bridge] streaming pull ended (no error)", flush=True)
+
+        future.add_done_callback(_on_stream_done)
+        # Keep BOTH alive at module scope — as locals they were garbage-collectable, and
+        # when the client was collected the pull stopped and the LEDs went dark for good.
+        _MESH_CLIENT, _MESH_FUTURE = client, future
         print(f"[mesh-bridge] streaming pull started on {subscription}", flush=True)
         return True
     except Exception as e:

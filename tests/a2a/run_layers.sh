@@ -59,7 +59,7 @@ mcp_401s() {  # any 401 back from an MCP (the intermittent issue — see README)
 layer1() {
   echo "══ LAYER 1 — every agent → its MCP server"
   local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  echo "  brand_style      → $(send "$(eng brand-style)" 'Run the brand compliance audit. image: gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png ; character: grogu ; medium: vinyl figures')"
+  echo "  brand_style      → $(send "$(eng brand-style)" 'Run the brand compliance audit. image: gs://vibeflix-request-image/84d5370c-vendor_request_refine.png ; character: grogu ; medium: vinyl figures')"
   echo "  vendor_clearance → $(send "$(eng vendor-clearance)" 'Clear vendor VND-1001 for character grogu, territory Asia-Pacific, product category Vinyl Figures.')"
   echo "  deal_pricing     → $(send "$(eng deal-pricing)" 'Price check: character grogu, category Vinyl Figures, volume 50000, net unit price 12.5, agreed royalty 0.12, advance 50000, MG 100000.')"
   echo "  ── proof (CallToolRequest on each MCP; 0 = the verdict was FABRICATED):"
@@ -93,7 +93,7 @@ layer2() {
   # (orchestrator/agent.py::_build_brief): prose + "Additional operator-provided
   # inputs: k=v; k=v.". The reasoner has no output_schema, so an invented brief
   # format makes it emit free-form keys and the graph never sees `legal_request`.
-  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" "Audit the 'grogu' mockup at gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png for the Asia-Pacific market at a production volume of 50000 units. Additional operator-provided inputs: vendor=$NEWVENDOR; new_vendor=$NEWVENDOR — a new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures; product_category=Vinyl Figures; add_category_approved=yes.")"
+  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" "Audit the 'grogu' mockup at gs://vibeflix-request-image/84d5370c-vendor_request_refine.png for the Asia-Pacific market at a production volume of 50000 units. Additional operator-provided inputs: vendor=$NEWVENDOR; new_vendor=$NEWVENDOR — a new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures; product_category=Vinyl Figures; add_category_approved=yes.")"
   echo "  ── proof: did the LEGAL engine actually run? (model invocations)"
   printf "     legal engine model calls: %s   (0 = no hand-off happened)\n" "$(engine_ran "$(eng legal)" "$T")"
 }
@@ -112,7 +112,7 @@ layer3() {
   local NEWVENDOR="Kessel Run Collectibles $(date -u +%H%M%S)"
   local PAYLOAD
   PAYLOAD=$(cat <<JSON
-{"image_uri":"gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png",
+{"image_uri":"gs://vibeflix-request-image/84d5370c-vendor_request_refine.png",
  "target_market":"Asia-Pacific","volume":50000,"character":"grogu",
  "product_category":"Vinyl Figures","vendor":"$NEWVENDOR",
  "new_vendor":"$NEWVENDOR — new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures",
@@ -130,16 +130,53 @@ JSON
 }
 
 layer4() {
-  echo "══ LAYER 4 — app → ui_renderer, app → orchestrator"
+  echo "══ LAYER 4 — app → orchestrator ENGINE → domain engines, + app → ui_renderer"
+  echo "   The app is a THIN CLIENT: it calls the orchestrator over A2A (like ui_renderer)."
+  echo "   It does NOT import root_agent and run the workflow in-process any more."
   local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local APP; APP=$(gcloud run services describe vibeflix-app --region "$REGION" --project "$PROJECT" --format 'value(status.url)' 2>/dev/null)
   echo "  app: $APP"
-  echo "  /api/ready → $(curl -s -m 60 -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$APP/api/ready" | head -c 200)"
-  echo "  ── proof: ui_renderer + orchestrator engines ran"
-  for A in ui-renderer orchestrator; do
-    printf "     %-18s model calls: %s\n" "$A" "$(engine_ran "$(eng "$A")" "$T")"
+  echo "  /api/ready → $(curl -s -m 60 -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$APP/api/ready" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print("ready="+str(d.get("ready")), "|", ", ".join(f"{c[\"name\"]}={c.get(\"ok\")}" for c in d.get("components",[])))' 2>/dev/null)"
+
+  # A brand-new vendor so the run also exercises onboarding → the vendor→legal hand-off.
+  local NEWVENDOR="Kessel Run Collectibles $(date -u +%H%M%S)"
+  echo "  onboarding NEW vendor: $NEWVENDOR"
+  local PAYLOAD
+  PAYLOAD=$(cat <<JSON
+{"image_uri":"gs://vibeflix-request-image/84d5370c-vendor_request_refine.png",
+ "target_market":"Asia-Pacific","volume":50000,"character":"grogu",
+ "product_category":"Vinyl Figures","vendor":"$NEWVENDOR",
+ "new_vendor":"$NEWVENDOR — new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures",
+ "add_category_approved":"yes","medium":"vinyl figures","net_unit_price":12.5,
+ "agreed_royalty_rate":0.12,"agreed_advance":50000,"agreed_mg":100000}
+JSON
+)
+  echo "  POST /api/audit …"
+  curl -s --max-time 1800 -X POST "$APP/api/audit" \
+    -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+    -H 'Content-Type: application/json' -d "$PAYLOAD" | head -c 200
+  echo; echo
+
+  echo "  ── proof (the BACKEND's logs, never the app's reply):"
+  # ★ THE decisive check. The orchestrator engine sat deployed and IDLE for weeks —
+  #   0 inbound calls — because the app ran the workflow in-process. A non-zero count
+  #   here is what proves the orchestrator is a REAL independent agent: its own identity,
+  #   its own gateway-governed egress, its own traces.
+  local ORCH; ORCH="$(engine_ran "$(eng orchestrator)" "$T")"
+  printf "     %-22s %s   %s\n" "★ orchestrator engine" "$ORCH" \
+    "$([ "${ORCH:-0}" -gt 0 ] && echo '← app IS a thin client' || echo '← ✗ STILL running in-process!')"
+  for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+    printf "     %-22s %s\n" "$A" "$(engine_ran "$(eng "$A")" "$T")"
   done
-  echo "  (full audit: POST $APP/api/audit — see tests/a2a/README.md)"
+  echo "     ── MCP tools actually executed (0 ⇒ the verdicts were FABRICATED):"
+  for S in vibeflix-mcp-brand-style vibeflix-mcp-licensing vibeflix-mcp-market; do
+    printf "     %-28s CallToolRequest: %s\n" "$S" "$(calltools "$S" "$T")"
+  done
+  echo "     ── mesh telemetry (drives the console's graph + tool LEDs):"
+  local EV; EV=$(gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"vibeflix-app\" AND timestamp>=\"$T\"" \
+        --project="$PROJECT" --limit=300 --format='value(textPayload)' 2>/dev/null | grep -c '^\[mesh\]' || echo 0)
+  printf "     %-28s %s  (0 ⇒ LEDs/graph stay dark — check the Pub/Sub bridge)\n" "[mesh] events received" "$EV"
 }
 
 cd "$ROOT"

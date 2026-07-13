@@ -420,6 +420,12 @@ export default function ChatAudit() {
   const [busy, setBusy] = useState(false);
   // Live workflow graph (right pane): keyed by node id, driven by `graph` SSE events.
   const [graph, setGraph] = useState(null);
+  // The audit this console is showing. The app mints it per run and sends it as the
+  // first SSE frame; the mesh feed is filtered against it so a finished run's events
+  // can't paint the current graph. Refs, not state: the mesh EventSource handler is
+  // installed once and would otherwise close over a stale value.
+  const runIdRef = useRef(null);
+  const runActiveRef = useRef(false);
 
   const [imageUri, setImageUri] = useState('');
   // Set when a run ends fully passed with an executed contract — the session is final.
@@ -478,6 +484,22 @@ export default function ChatAudit() {
     const es = new EventSource(`${API_BASE}/api/mesh/events`);
     es.onmessage = (ev) => {
       let e; try { e = JSON.parse(ev.data); } catch { return; }
+
+      // ── Run scoping ──────────────────────────────────────────────────────────
+      // The mesh bus is shared: every console receives every event from every run,
+      // and events outlive their run (late delivery, Pub/Sub redelivery, a second
+      // tab). Both rules below exist because the graph was drawing nodes from runs
+      // that had already finished.
+      //   1. Stamped event (agents/orchestrator): it belongs to a run — render it
+      //      only if that run is the one on screen. This is what kills the reported
+      //      bug: a stale event always carries its OWN, different, id.
+      //   2. Unstamped event (the MCP servers — they serve a tool call and have no
+      //      idea which audit it belongs to): fall back to "only while THIS tab has
+      //      a run in flight". Their LEDs are transient, so that is enough.
+      if (e.run_id) {
+        if (e.run_id !== runIdRef.current) return;
+      } else if (!runActiveRef.current) return;
+
       // The legal hand-off announces itself (node: "legal") the moment it starts —
       // materialize/update the graph node immediately instead of waiting for
       // vendor_clearance's final report to reach the audit stream.
@@ -489,11 +511,39 @@ export default function ChatAudit() {
           parent: 'vendor_clearance_agent', status } } : g);
         return;
       }
+      // A WORKFLOW-NODE event from the orchestrator (no `tool`) — light that graph node
+      // LIVE, and materialize it if the plan hasn't arrived yet.
+      //
+      // Why this is needed: the orchestrator is now an INDEPENDENT agent, reached over
+      // A2A. A2A hands back its RESULT, not its internal step events — so the app can no
+      // longer stream a `__plan__` + per-agent reports as they happen, and the graph
+      // would sit empty until the run finished. The orchestrator publishes started/
+      // completed for each agent it dispatches (vibeflix_common.telemetry), so the graph
+      // builds itself from the mesh feed instead. Same mechanism the legal node above
+      // already used.
+      if (e.node && !e.tool && e.source === 'orchestrator') {
+        const status = e.event === 'started' ? 'running'
+          : e.event === 'failed' ? 'failed'
+          : (e.status || 'completed');
+        const label = e.node.replace(/_agent$/, '').replace(/_/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        setGraph((g) => ({
+          ...(g || {}),
+          [e.node]: { ...(g?.[e.node] || { id: e.node, label }), status },
+        }));
+        return;
+      }
       if (!e.tool) return;
       const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
       clearTimeout(timers[key]);
       if (e.event === 'started') {
         setToolLights((m) => ({ ...m, [key]: 'blink' }));
+        // WATCHDOG. Pub/Sub does NOT guarantee ordering: `completed` can be delivered
+        // BEFORE `started`. Without this, the late `started` re-lights a tool that has
+        // already finished and nothing ever clears it — the LED stays on forever.
+        // A blinking LED therefore always self-extinguishes.
+        timers[key] = setTimeout(
+          () => setToolLights((m) => ({ ...m, [key]: undefined })), 15000);
       } else {  // completed / failed → solid, then off
         setToolLights((m) => ({ ...m, [key]: 'on' }));
         timers[key] = setTimeout(() => setToolLights((m) => ({ ...m, [key]: undefined })), 1600);
@@ -537,6 +587,11 @@ export default function ChatAudit() {
   // transcript entry, so a re-run appends below instead of overwriting the last.
   const runStream = async (request, fallbackPhase) => {
     setBusy(true); setPhase('running'); setFields(null);
+    // Arm the mesh filter for a NEW run: drop the previous run's id immediately (its
+    // in-flight events are now stale) and accept unstamped MCP tool events again.
+    // The real id arrives in the first SSE frame, below.
+    runIdRef.current = null;
+    runActiveRef.current = true;
     // Keep prior nodes across a re-run (only orchestrator flips to running); the plan
     // decides which workflows actually re-run — the rest keep their last state.
     setGraph((g) => ({ ...(g || {}), orchestrator: { id: 'orchestrator', label: 'Orchestrator', status: 'running' } }));
@@ -561,7 +616,10 @@ export default function ChatAudit() {
           const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
           if (!dataLine) continue;
           let d; try { d = JSON.parse(dataLine.slice(6)); } catch { continue; }
-          if (d.a2ui) {
+          if (d.event === 'run') {
+            // The id the orchestrator will stamp on this run's mesh events.
+            runIdRef.current = d.run_id;
+          } else if (d.a2ui) {
             pmRef.current?.([retarget(d.a2ui, surfaceId)]);
           } else if (d.event === 'graph') {
             if (d.op === 'plan') {
@@ -609,7 +667,12 @@ export default function ChatAudit() {
     } catch (e) {
       push({ role: 'system', text: `Stream failed: ${e.message} (is the mesh running?)` });
       setPhase(fallbackPhase);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      // Run is over (done / awaiting input / error): stop accepting unstamped tool
+      // events. Keep runIdRef so this run's own trailing events still land.
+      runActiveRef.current = false;
+    }
   };
 
   // run_token threads the prior audit so the orchestrator re-runs only affected
@@ -745,6 +808,9 @@ export default function ChatAudit() {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
     setFields(null); setSessionId(null); setPhase('start'); setGraph(null); setContractId('');
+    // Blank graph ⇒ no run to scope to: reject every mesh event until the next run
+    // starts, so a finished audit's trailing events can't repopulate an empty graph.
+    runIdRef.current = null; runActiveRef.current = false;
     setNote(''); setNetUnitPrice(''); setAgreedRate(''); setAgreedAdvance(''); setAgreedMg('');
   };
   const uploadImage = async (fileObj) => {

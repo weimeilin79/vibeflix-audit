@@ -123,6 +123,13 @@ COMMON_ENV = {
     **({
         "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
         "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true",
+        # THE switch the console actually reads. Deployed engines default to NO_CONTENT
+        # (metadata only: model, tokens, timing) — which is why the trace view says
+        # "Prompt-response content collection is not enabled". `true` = capture the full
+        # prompt + response text in the spans.
+        # ⚠️ This LOGS PROMPTS AND MODEL OUTPUT. Fine for the demo; for a real tenant with
+        # customer data, use NO_CONTENT (or `false`) and keep content out of telemetry.
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc",
     } if _ENV.get("TELEMETRY", "").lower() == "on" else {

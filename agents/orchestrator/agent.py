@@ -40,7 +40,7 @@ from google.adk.events.event import Event
 
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC
 # (no-op when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.telemetry import instrument_node
+from vibeflix_common.telemetry import instrument_node, set_run_id
 from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url
 
 # Load the orchestrator's Vertex AI / project configuration from its local .env.
@@ -336,7 +336,11 @@ def _build_brief(image_uri: str, market: str, volume, medium: str = "", characte
 
 
 # Request keys that are plumbing, not audit inputs — never treated as dynamic inputs.
-_RESERVED_REQUEST_KEYS = {"prior_reports", "prior_inputs", "run_token", "image_path"}
+# `run_id` is plumbing, NOT an operator input: if it fell through the dynamic-input
+# channel it would be pasted into every agent brief and diffed by the dispatcher — and
+# since it is fresh each run, every re-submit would look like "the inputs changed" and
+# re-run all workflows instead of reusing their reports.
+_RESERVED_REQUEST_KEYS = {"prior_reports", "prior_inputs", "run_token", "image_path", "run_id"}
 
 
 def _extra_inputs(data: dict, known: dict) -> dict:
@@ -377,7 +381,15 @@ def ingest(node_input) -> Event:
             prior_inputs = data.get("prior_inputs") or {}
     except (ValueError, TypeError):
         pass
+    # Scope every mesh event this audit emits to the run that asked for it. The console
+    # subscribes to ONE shared telemetry bus, so without this it happily draws nodes
+    # belonging to a run that already finished. The app mints the id and threads it in
+    # with the request; parking it in ctx.state hands it to every downstream node (and
+    # to `instrument_node`, which stamps the started/completed events with it).
+    run_id = str(data.get("run_id") or "")
+    set_run_id(run_id)
     state = {
+        "run_id": run_id,
         "image_path": req.image_path,
         "image_uri": image_uri,
         "target_market": req.target_market,
@@ -577,7 +589,12 @@ async def dispatch(ctx: Context, node_input):
 
 def _make_guard(agent_name: str):
     @node(name=f"guard_{agent_name}", rerun_on_resume=True)
-    @instrument_node("orchestrator", f"guard_{agent_name}")
+    # Emit the mesh event under the AGENT's id, not the guard's. The graph's nodes are
+    # keyed by agent name (_AGENTS), so `guard_<agent>` matched nothing and the nodes
+    # never lit. Now dispatching an agent publishes started/completed for that node —
+    # which is how the graph animates LIVE now that the orchestrator is an independent
+    # agent (A2A returns its RESULT, not its internal step events).
+    @instrument_node("orchestrator", agent_name)
     async def guard(ctx: Context, node_input):
         """Run this agent, or reuse its prior report if `decide_reruns` left it clean."""
         dirty = ctx.state.get("dirty_set") or list(_AGENTS)

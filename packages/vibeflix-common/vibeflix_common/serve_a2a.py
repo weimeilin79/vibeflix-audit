@@ -31,7 +31,12 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
 from vibeflix_common.health import probe_mcp_from_env, banner
 
-_KNOWN = {"brand_style", "vendor_clearance", "deal_pricing", "ui_renderer", "legal"}
+# `orchestrator` is here because it is an INDEPENDENT agent, not something the app
+# hosts: the app is a thin A2A client in BOTH worlds (compose container :8006 / the
+# vibeflix-orchestrator engine in cloud). This set used to omit it — back when the app
+# imported root_agent and ran the workflow in-process.
+_KNOWN = {"brand_style", "vendor_clearance", "deal_pricing", "ui_renderer", "legal",
+          "orchestrator"}
 
 
 def _runner_with_plugins(agent):

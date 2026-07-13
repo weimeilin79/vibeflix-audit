@@ -13,6 +13,7 @@ current and future — emits a `started` event on entry and a `completed` (or
     instrument_fastmcp(mcp, source="mcp_licensing")   # BEFORE the @mcp.tool() defs
 """
 
+import contextvars
 import functools
 import inspect
 import json
@@ -22,6 +23,84 @@ import time
 _TOPIC = os.environ.get("PUBSUB_TOPIC", "").strip()
 _publisher = None
 _warned = False
+
+# ---- run scoping -----------------------------------------------------------
+# The mesh topic is ONE broadcast bus shared by every run and every open console.
+# Without a run id the console cannot tell "a node of the audit I am watching" from
+# "a node of the audit that finished 30 seconds ago" — and the graph renders BOTH.
+# Every event therefore carries the id of the run that produced it, and the console
+# drops any event stamped with a run that is not the one on screen.
+#
+# A ContextVar (not a global) because one engine serves CONCURRENT runs: asyncio
+# copies the context per task, so each request keeps its own id with no locking.
+_RUN_ID: contextvars.ContextVar[str] = contextvars.ContextVar("vibeflix_run_id", default="")
+
+
+def set_run_id(run_id: str) -> None:
+    """Bind the current task to a run (called once, where the request arrives)."""
+    _RUN_ID.set(str(run_id or ""))
+
+
+def get_run_id() -> str:
+    return _RUN_ID.get("")
+
+
+def _node_run_id(args) -> str:
+    """The run id for a node, preferring the workflow Context over the ContextVar.
+
+    WHY not just the ContextVar: a sync node runs via asyncio.to_thread, which copies
+    the context — a set_run_id() inside it is lost when the node returns. `ctx.state`
+    is the workflow's own durable store, so it survives across nodes, tasks and (on
+    Agent Runtime) across the resume of a suspended workflow. The ContextVar is the
+    fallback for nodes that never see a Context.
+    """
+    for a in args:
+        get = getattr(getattr(a, "state", None), "get", None)
+        if callable(get):
+            try:
+                rid = get("run_id")
+            except Exception:  # noqa: BLE001 — a foreign object with a .state.get
+                continue
+            if rid:
+                return str(rid)
+    return _RUN_ID.get("")
+
+
+def _publish_rest(project: str, payload: bytes, source: str, event: str) -> None:
+    """Publish over Pub/Sub's REST API instead of the gRPC client.
+
+    WHY: inside a GATEWAY-ATTACHED engine the gRPC PublisherClient is refused —
+        403 Egress request is not authorized. The endpoint is either incorrect or
+        unregistered in the Agent Registry.
+    …no matter how the pubsub host is registered. The Agent Gateway governs HTTP egress;
+    it cannot match a gRPC channel to a registered endpoint, so agent telemetry never
+    left the engine. The tool LEDs still worked (the MCP servers are plain Cloud Run and
+    are NOT gateway-governed), so the console's dead workflow graph looked like a frontend
+    bug for a very long time. It wasn't.
+
+    Plain HTTPS to https://pubsub.googleapis.com (the exact host registered as `gcp-pubsub`
+    and granted iap.egressor) passes governed egress cleanly — and keeps the telemetry ON
+    the governed path, which is the point of the demo.
+    """
+    import base64
+    import requests
+    import google.auth
+    import google.auth.transport.requests as _gar
+
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(_gar.Request())
+    hdr = {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+    if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+        hdr["Proxy-Authorization"] = f"Bearer {creds.token}"   # the gateway leg
+    r = requests.post(
+        f"https://pubsub.googleapis.com/v1/projects/{project}/topics/{_TOPIC}:publish",
+        headers=hdr, timeout=10,
+        json={"messages": [{
+            "data": base64.b64encode(payload).decode(),
+            "attributes": {"source": source, "event": event},
+        }]},
+    )
+    r.raise_for_status()
 
 
 def emit_event(source: str, event: str, tool: str = "", node: str = "",
@@ -36,7 +115,9 @@ def emit_event(source: str, event: str, tool: str = "", node: str = "",
             _publisher = pubsub_v1.PublisherClient()
         project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
         payload = json.dumps({
-            "run_id": run_id,
+            # Falls back to the task's bound run — so callers that never pass run_id
+            # (every MCP tool, most nodes) are still scoped correctly.
+            "run_id": run_id or _RUN_ID.get(""),
             "source": source,
             "node": node or source,
             "tool": tool,
@@ -45,9 +126,37 @@ def emit_event(source: str, event: str, tool: str = "", node: str = "",
             "detail": detail or (f"{tool}()" if tool else ""),
             "ts": int(time.time() * 1000),
         }).encode()
+        # Inside a gateway-attached ENGINE the gRPC publisher is refused (the gateway
+        # governs HTTP egress and cannot match a gRPC channel to a registered endpoint) —
+        # so agents publish over REST. The MCP servers are plain Cloud Run, not
+        # gateway-governed, so they keep the batching gRPC client.
+        if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+            _publish_rest(project, payload, source, event)
+            return
+
         # Returns a future; the client publishes from a background thread.
-        _publisher.publish(_publisher.topic_path(project, _TOPIC), payload,
-                           source=source, event=event)
+        fut = _publisher.publish(_publisher.topic_path(project, _TOPIC), payload,
+                                 source=source, event=event)
+
+        # SURFACE ASYNC FAILURES. publish() only raises synchronously for bad args — a
+        # PermissionDenied (no roles/pubsub.publisher) or a gateway egress denial lands on
+        # the FUTURE, and if nobody reads it the error is silently swallowed. That is how
+        # the console's graph + tool LEDs went dark in cloud with no error anywhere: the
+        # agents ran fine, the events just never left. Log the first failure loudly.
+        def _check(f):
+            global _warned
+            try:
+                f.result(timeout=0) if hasattr(f, "result") else None
+            except Exception as exc:  # noqa: BLE001
+                if not _warned:
+                    _warned = True
+                    print(f"[telemetry] PUBLISH FAILED (further failures silenced) — the "
+                          f"console's graph/LEDs will stay dark: {type(exc).__name__}: {exc}",
+                          flush=True)
+        try:
+            fut.add_done_callback(_check)
+        except Exception:
+            pass
     except Exception as e:  # telemetry must never break the tool call
         if not _warned:
             _warned = True
@@ -73,45 +182,56 @@ def instrument_node(source: str, node_name: str | None = None):
         if inspect.isasyncgenfunction(fn):
             @functools.wraps(fn)
             async def wrapped(*args, **kwargs):
-                emit_event(source, "started", node=name)
+                rid = _node_run_id(args)
+                emit_event(source, "started", node=name, run_id=rid)
                 try:
                     async for ev in fn(*args, **kwargs):
                         yield ev
                 except Exception as e:
-                    emit_event(source, "failed", node=name, detail=f"{name}: {type(e).__name__}")
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                               detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name)
+                # Re-read: the node may have just WRITTEN run_id into ctx.state (the
+                # orchestrator's `ingest` does exactly that), so `completed` can be
+                # scoped even when `started` fired before the id was known.
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
         elif inspect.isgeneratorfunction(fn):
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
-                emit_event(source, "started", node=name)
+                rid = _node_run_id(args)
+                emit_event(source, "started", node=name, run_id=rid)
                 try:
                     yield from fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, detail=f"{name}: {type(e).__name__}")
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                               detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name)
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
         elif inspect.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def wrapped(*args, **kwargs):
-                emit_event(source, "started", node=name)
+                rid = _node_run_id(args)
+                emit_event(source, "started", node=name, run_id=rid)
                 try:
                     result = await fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, detail=f"{name}: {type(e).__name__}")
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                               detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name)
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
                 return result
         else:
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
-                emit_event(source, "started", node=name)
+                rid = _node_run_id(args)
+                emit_event(source, "started", node=name, run_id=rid)
                 try:
                     result = fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, detail=f"{name}: {type(e).__name__}")
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                               detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name)
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
                 return result
 
         return wrapped
