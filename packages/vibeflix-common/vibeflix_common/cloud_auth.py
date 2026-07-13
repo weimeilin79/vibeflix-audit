@@ -277,9 +277,20 @@ def a2a_httpx_client(timeout: float = 600.0) -> httpx.AsyncClient | None:
 # ---------------------------------------------------------------------------
 
 def is_engine_url(base: str) -> bool:
-    """True when the A2A base points at a Vertex Agent Runtime engine."""
+    """True when the A2A base points at a Vertex Agent Runtime engine.
+
+    Must match BOTH host forms:
+        us-central1-aiplatform.googleapis.com        (plain)
+        us-central1-aiplatform.mtls.googleapis.com   (mtls — what *_A2A_URL now uses)
+
+    The old check was `host.endswith("aiplatform.googleapis.com")`, which the mtls host
+    FAILS (it ends in `mtls.googleapis.com`). That silently sent engine URLs down the
+    non-engine branch of the app's readiness probe, which then did `GET {base}/healthz`
+    on an engine that has no such route → `404 Not Found` and a UI that thinks every
+    agent is dead.
+    """
     host = urlsplit(base).hostname or ""
-    return host.endswith("aiplatform.googleapis.com")
+    return "aiplatform" in host and host.endswith("googleapis.com")
 
 
 def a2a_card_url(base: str) -> str:
