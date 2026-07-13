@@ -32,57 +32,6 @@ import httpx
 _AUTO_DETECTED: bool | None = None
 
 
-_MTLS_FILES: tuple[str, str] | None = None
-_MTLS_LOCK = threading.Lock()
-
-
-def mtls_cert_files() -> tuple[str, str] | None:
-    """(cert_path, key_path) for this workload's mTLS client certificate, or None.
-
-    WHY engine→engine A2A needs this:
-      • the agent endpoints are REGISTERED with the mtls URL, and the gateway only
-        authorizes the destination it has registered. A call to the PLAIN url is refused
-        by the gateway with 403 `Egress request is not authorized` — even when that URL is
-        added as an interface AND the caller holds iap.egressor on the endpoint (measured).
-      • on the MTLS url the gateway lets us through and *Google's* endpoint rejects a
-        bearer-only request with 401 — it wants the client certificate too.
-    So the only working combination is: mtls URL + bearer token + client cert.
-
-    You never mint this cert: Google API client certs come from Device Certificate
-    Authentication (a context-aware metadata file + a provider binary). `google-auth`
-    discovers it. Verified present inside Agent Runtime (cert≈1982B, key≈241B).
-
-    `requests`/`httpx` want FILE PATHS, but the provider hands back bytes — so we
-    materialize them once into 0600 temp files and reuse.
-    """
-    global _MTLS_FILES
-    with _MTLS_LOCK:
-        if _MTLS_FILES is not None:
-            return _MTLS_FILES
-        try:
-            from google.auth.transport import mtls
-            if not mtls.has_default_client_cert_source():
-                return None
-            cert_bytes, key_bytes = mtls.default_client_cert_source()()
-        except Exception as e:  # no provider here (laptop, plain Cloud Run)
-            print(f"[cloud_auth] no mTLS client cert available: {e!r}", flush=True)
-            return None
-        import tempfile
-        paths = []
-        for blob, suffix in ((cert_bytes, ".pem"), (key_bytes, ".key")):
-            fd, path = tempfile.mkstemp(suffix=suffix)
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(blob)
-            os.chmod(path, 0o600)
-            paths.append(path)
-        _MTLS_FILES = (paths[0], paths[1])
-        return _MTLS_FILES
-
-
-def is_mtls_host(url: str) -> bool:
-    return ".mtls.googleapis.com" in (urlsplit(url).hostname or "")
-
-
 def _on_gcp() -> bool:
     """Are we running ON Google Cloud? Cloud Run / Functions set K_SERVICE; for
     everything else (Agent Runtime, GCE) the metadata server is the canonical

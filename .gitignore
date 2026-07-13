@@ -52,4 +52,9 @@ agents/*/_vendor/
 deploy/toolspecs/
 deploy/agent-gateway.yaml
 deploy/iap-authz-extension.yaml
-/vibeflix_common/   # a2a-deploy temp vendor at REPO ROOT only — NOT packages/vibeflix-common/vibeflix_common/
+# a2a-deploy temp vendor at REPO ROOT only (regenerated every deploy) —
+# NOT packages/vibeflix-common/vibeflix_common/, which is the real source.
+# NOTE: a trailing '#' comment does NOT work in .gitignore — the whole line is
+# the pattern. That is why this used to match nothing.
+/vibeflix_common/
+packages/vibeflix-common/build/

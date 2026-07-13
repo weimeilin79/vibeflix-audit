@@ -103,13 +103,20 @@ EOF
       "customProvider": {"authzExtension": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/authzExtensions/vibeflix-gateway-iap-authz"]}}
     }' || echo "  (authz policy may already exist — continuing)"
   echo
-  # Per-caller tool grants: ALL rows of deploy/policies.yaml as roles/iap.egressor
-  # bindings with CEL server+tool conditions (members from agent_identities.json).
+  # EVERYTHING the agents need, in one idempotent pass — grant_agent_iam.sh registers the
+  # endpoints nothing else creates (gcp-iamcredentials, global aiplatform), grants the
+  # project roles, the Google-API egress, the ALL-TO-ALL A2A egress, the MCP invoker SA
+  # (impersonation — how an agent identity authenticates to Cloud Run at all), and then
+  # calls grant_mcp_egress.sh for the per-tool CEL allowlist.
+  #
+  # Do NOT go back to calling grant_mcp_egress.sh alone: it covers only the MCP tool
+  # policies. Every other grant was applied by hand during bring-up, which meant a fresh
+  # project rebuilt from this repo failed exactly the way ours did.
   if [ -f "$HERE/agent_identities.json" ]; then
-    "$HERE/grant_mcp_egress.sh"
+    PROJECT="$PROJECT" REGION="$REGION" "$HERE/grant_agent_iam.sh"
   else
     echo "  ⚠️ deploy/agent_identities.json missing — deploy the agents (step 3)"
-    echo "     first, then run: ./deploy/grant_mcp_egress.sh"
+    echo "     first, then run: ./deploy/grant_agent_iam.sh"
   fi
 fi
 

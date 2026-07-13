@@ -30,6 +30,49 @@ EOF
 
 ---
 
+## ⏱️ TL;DR — bring up a fresh project end-to-end
+
+Verified all 4 layers green on 2026-07-13. Run in this order; each step is expanded below.
+
+```bash
+export PROJECT=pokedemo-test REGION=us-central1
+
+./deploy/setup_pubsub.sh && ./deploy/setup_firestore.sh    # 1. foundations + seed data
+./deploy/deploy_mcp_cloudrun.sh                            # 2. the 3 MCP servers → Cloud Run
+
+.venv/bin/python -u deploy/deploy_agents_a2a.py            # 3. all 6 engines, ONE process
+PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities.py  # 3e
+
+./deploy/setup_gateway.sh                                  # 4. registry + gateway + ALL grants
+#    └─ ends by calling grant_agent_iam.sh: project roles (incl. agentContextEditor),
+#       Google-API egress, ALL-TO-ALL A2A egress, the MCP invoker SA (impersonation),
+#       gcp-iamcredentials registration, and the per-tool CEL allowlist.
+
+PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh  # 5. verify all 4 layers
+```
+
+Re-apply IAM at any time (idempotent, safe to re-run):
+`PROJECT=$PROJECT REGION=$REGION ./deploy/grant_agent_iam.sh [--dry-run]`
+
+**Five rules — each of these cost us hours:**
+
+1. **⛔ NEVER DELETE AN ENGINE.** The engine id is baked into its `principal://`. Redeploy
+   *updates in place* and keeps the id. Delete + recreate ⇒ new principal ⇒ every IAM grant
+   and registry endpoint silently orphaned, while the console still looks correct. If you do
+   delete: re-run `collect_agent_identities.py`, then `grant_agent_iam.sh`, then re-point the
+   registry endpoints.
+2. **Deploy the engines SERIALLY** — `deploy_agents_a2a.py` with no args (one process) is
+   safe. Several processes in parallel race on the vendored `vibeflix_common/` dir and a
+   deploy fails **silently**, leaving that engine on its OLD code.
+3. **⏱️ Wait 2–5 minutes after any registry/IAM change before judging it.** We discarded a
+   *correct* fix twice by testing ~40s in and seeing a 403.
+4. **Verify from the BACKEND's log, never the agent's reply** — an agent whose toolset failed
+   still emits a confident, clean verdict. `run_layers.sh` checks the callee's log for exactly
+   this reason. See `tests/a2a/README.md`.
+5. **Step 4 must run AFTER the engines exist** (the grants key off `agent_identities.json`).
+
+---
+
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
 ```bash

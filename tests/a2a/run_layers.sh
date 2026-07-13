@@ -29,11 +29,12 @@ sys.path.insert(0, str(pathlib.Path.cwd() / "packages/vibeflix-common"))
 from vibeflix_common.a2a_engine import a2a_engine_send
 base = ("https://us-central1-aiplatform.googleapis.com/v1beta1/projects/789872749985"
         f"/locations/us-central1/reasoningEngines/{sys.argv[1]}")
-# 600s, not 260: vendor_clearance / deal_pricing run many tool calls and were still
-# WORKING when the poll deadline expired — _extract_reply then returns "" and the layer
-# looks failed even though the MCP log shows the tool calls landing. An empty reply here
-# means "still running", not "broken".
-print(asyncio.run(a2a_engine_send(base, sys.argv[2], timeout=600))[:400].replace("\n", " "))
+# 1800s. The full chain (brand + vendor ↔ legal Q&A round-trip + deal) runs well past the
+# old 560s deadline; _extract_reply then returns "" on an unfinished task and the layer
+# looks failed even though the work COMPLETED server-side (legal's own log showed 5 model
+# calls while our client had already given up). An empty reply here means "still running",
+# not "broken" — check the callee's log before believing a failure.
+print(asyncio.run(a2a_engine_send(base, sys.argv[2], timeout=1800))[:400].replace("\n", " "))
 PYEOF
 }
 

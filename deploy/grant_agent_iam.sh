@@ -27,9 +27,33 @@ IDENT="$HERE/agent_identities.json"
 DRY=""; [ "${1:-}" = "--dry-run" ] && DRY=1
 
 AGENTS="brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator"
+INVOKER_SA="${MCP_INVOKER_SA:-vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com}"
 run() { [ -n "$DRY" ] && { echo "    + $*"; return 0; }; "$@" >/dev/null 2>&1 \
         && echo "    ✓ ${*: -1}" || echo "    ⚠️ FAILED: $*"; }
 M() { jq -r --arg k "vibeflix-$1" '.[$k].principal' "$IDENT"; }
+
+# ── 0. Endpoints this demo needs that nothing else creates ────────────────────
+# The gateway is DEFAULT-DENY on every outbound call — including the call an engine makes
+# to MINT its own MCP token. Without gcp-iamcredentials registered + granted,
+# IDTokenCredentials.refresh() is itself blocked and every MCP call 401s with no obvious
+# cause. Registered here so a fresh project works from the scripts alone.
+ensure_endpoint() {  # ensure_endpoint <name> <url>
+  gcloud alpha agent-registry services describe "$1" --project="$PROJECT" \
+    --location="$REGION" >/dev/null 2>&1 && return 0
+  [ -n "$DRY" ] && { echo "    + register $1 → $2"; return 0; }
+  gcloud alpha agent-registry services create "$1" \
+    --project="$PROJECT" --location="$REGION" --display-name="GCP ${1#gcp-}" \
+    --endpoint-spec-type=no-spec \
+    --interfaces="[{url=\"$2\",protocolBinding=\"jsonrpc\"}]" >/dev/null 2>&1 \
+    && echo "    ✓ registered $1" || echo "    ⚠️ could not register $1"
+}
+echo "── 0/4 required GCP endpoints"
+ensure_endpoint gcp-iamcredentials      https://iamcredentials.googleapis.com
+ensure_endpoint gcp-iamcredentials-mtls https://iamcredentials.mtls.googleapis.com
+# GOOGLE_CLOUD_LOCATION=global ⇒ genai/session egress to the GLOBAL aiplatform host.
+ensure_endpoint gcp-aiplatform-global   https://aiplatform.googleapis.com
+ensure_endpoint gcp-aiplatform-mtls-glb https://aiplatform.mtls.googleapis.com
+echo
 
 echo "[grant_agent_iam] project=$PROJECT region=$REGION dry=${DRY:-0}"
 echo "  principals under management:"
@@ -90,21 +114,53 @@ for A in $AGENTS; do
   done
 done
 
-# ── 3. A2A egress (agent → agent), scoped to the TARGET's registry ENDPOINT ───
-# Agents are registered --endpoint-spec-type=no-spec → ENDPOINT entries, so bind
-# with --endpoint (--mcp-server / --agent both 404 here).
-echo "── 3/4 A2A egress (caller → target)"
-grantA2A() {
-  local EP; EP="$(epid_at "vibeflix-$2-agent" "$REGION")"
-  [ -z "$EP" ] && { echo "    ⚠️ vibeflix-$2-agent not registered — skipping"; return; }
-  run gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
-    --endpoint="$EP" --region="$REGION" --project="$PROJECT" \
-    --member="$(M "$1")" --role=roles/iap.egressor
-}
-echo "  vendor-clearance → legal (private hand-off)"
-grantA2A vendor-clearance legal
-echo "  orchestrator → brand-style / vendor-clearance / deal-pricing (fan-out)"
-for T in brand-style vendor-clearance deal-pricing; do grantA2A orchestrator "$T"; done
+# ── 3. A2A egress — EVERY principal on EVERY agent endpoint (all-to-all) ──────
+# Agents are registered --endpoint-spec-type=no-spec → ENDPOINT entries, so bind with
+# --endpoint (--mcp-server / --agent both 404 here).
+#
+# ⚠️ ALL-TO-ALL, not just the caller→target pairs you expect (orchestrator→domain,
+# vendor→legal). An *agent* endpoint advertising the aiplatform host SHADOWS the
+# `GCP aiplatform` Service for every engine's OWN model call — so an engine holding no
+# grant on the agent endpoints gets `403 Egress request is not authorized` on its own
+# Gemini call and dies in _prepare_session before running a line of agent code. Granting
+# only the "real" A2A pairs took the whole fleet down and looked like gateway flakiness.
+echo "── 3/4 A2A egress (all principals × all agent endpoints)"
+for T in $AGENTS; do
+  EP="$(epid_at "vibeflix-$T-agent" "$REGION")"
+  [ -z "$EP" ] && { echo "    ⚠️ vibeflix-$T-agent not registered — skipping"; continue; }
+  for C in $AGENTS; do
+    run gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
+      --endpoint="$EP" --region="$REGION" --project="$PROJECT" \
+      --member="$(M "$C")" --role=roles/iap.egressor
+  done
+  echo "  ✓ endpoint $T ← all agents"
+done
+
+# ── 3b. MCP INVOKER SA — how an agent-identity engine authenticates to Cloud Run ──
+# An AGENT_IDENTITY engine has NO service account behind the metadata server, so
+# fetch_id_token() cannot work — and the Agent Gateway does NOT inject a credential for
+# you (there is no invoker-SA field on agentToAnywhereConfig, on the registry Service, or
+# in gcloud). Cloud Run accepts ONLY an audience-bound OIDC ID token (measured: access
+# token → 401 "could not be verified"; ID token → 200; none → 403).
+# So the engine mints its own by IMPERSONATING this SA (cloud_auth._id_token_via_impersonation),
+# which is exactly what the Agent Gateway codelab's --mcp-invoker-sa does: it only injects
+# MCP_INVOKER_SA as an env var. deploy_agents_a2a.py sets that env var; these are the grants.
+echo "── 3b/4 MCP invoker SA ($INVOKER_SA)"
+if ! gcloud iam service-accounts describe "$INVOKER_SA" --project="$PROJECT" >/dev/null 2>&1; then
+  run gcloud iam service-accounts create vibeflix-mcp-invoker --project="$PROJECT" \
+    --display-name "Vibeflix MCP invoker (agent-identity ID-token source)"
+  sleep 10
+fi
+# the SA must be able to invoke the MCP services …
+for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
+  run gcloud run services add-iam-policy-binding "$S" --region="$REGION" --project="$PROJECT" \
+    --member="serviceAccount:$INVOKER_SA" --role=roles/run.invoker
+done
+# … and each agent principal must be able to impersonate it.
+for A in $AGENTS; do
+  run gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" --project="$PROJECT" \
+    --member="$(M "$A")" --role=roles/iam.serviceAccountTokenCreator --condition=None
+done
 
 # ── 4. MCP tool egress (per-tool CEL allowlist from deploy/policies.yaml) ─────
 echo "── 4/4 MCP per-tool egress → deploy/grant_mcp_egress.sh"

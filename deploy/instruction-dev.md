@@ -17,6 +17,30 @@ gcloud auth login && gcloud auth application-default login
 
 ---
 
+## ⚠️ Five rules that will break a fresh build if you ignore them
+
+Verified end-to-end (all 4 layers) on 2026-07-13. Each of these cost us hours:
+
+1. **⛔ NEVER DELETE AN ENGINE.** The engine id is baked into its `principal://…/reasoningEngines/<ID>`.
+   Redeploying the same display name *updates in place* and keeps the id (Agent Runtime makes
+   a new immutable **revision**, not a new engine). Delete + recreate ⇒ NEW id ⇒ NEW principal
+   ⇒ every IAM grant and registry endpoint silently points at a dead principal, while the
+   console still looks correct.
+2. **Deploy the engines SERIALLY** (step 3). One process is safe; several in parallel race on
+   the vendored `vibeflix_common/` dir and a deploy fails **silently**, leaving that engine on
+   its OLD code.
+3. **⏱️ Wait 2–5 minutes after any registry/IAM change before you judge it.** Propagation is
+   not instant. We discarded a *correct* fix twice by testing ~40s in, seeing a 403, and
+   concluding it hadn't worked.
+4. **Verify from the BACKEND's log, never the agent's reply.** An agent whose toolset failed
+   to load still emits a confident, clean verdict — brand_style reported `status:"success"`,
+   `findings:[]` and a plausible `checks_run` while the MCP server had logged **zero**
+   `CallToolRequest` (the model was inventing the check names). See `tests/a2a/README.md`.
+5. **Step 4's grants are not optional and must come AFTER the engines exist** (they key off
+   `agent_identities.json`). The mesh fails in confusing, unrelated-looking ways without them.
+
+---
+
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
 ```bash
@@ -162,6 +186,29 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $URL/mcp \
 > us most of a day. If you ever do delete: re-run `collect_agent_identities.py`,
 > then `deploy/grant_agent_iam.sh`, then re-point the registry endpoints.
 
+> ### 🔑 The A2A auth rule (TWO parties authenticate ONE request)
+> An engine→engine call passes through the gateway on its way to the callee, and **both**
+> need a credential:
+>
+> | header | who reads it | what it does |
+> |---|---|---|
+> | `Proxy-Authorization: Bearer <token>` | the **Agent Gateway** | egress authorization (agent identity) |
+> | `Authorization: Bearer <token>` | the **target engine's** aiplatform endpoint | identifies the caller |
+>
+> Same token in both. `a2a_engine.py` used to send only `Proxy-Authorization` inside an
+> engine, so the callee received **no credential at all** and answered `401` — which we
+> spent a long time misreading as a missing client certificate.
+>
+> **Read the status code as a distance signal:**
+> - **`403 Egress request is not authorized`** → the **gateway** refused you. The request
+>   never left; the callee's log is empty. Cause: the destination URL doesn't match a
+>   registered Service you hold `iap.egressor` on.
+> - **`401 Unauthorized`** → the gateway **let you through** and the **target** refused you.
+>   Cause: missing/wrong credential for the callee.
+>
+> (Same pattern on the MCP hop, with Cloud Run as the target: no token → `403`; an *access*
+> token where an *ID* token is required → `401`; correct ID token → `200`.)
+
 > ### 🔑 The MCP auth rule (agent identity ⇒ impersonation)
 > Cloud Run only accepts an **audience-bound OIDC ID token** (verified: access
 > token → `401 "the access token could not be verified"`, ID token → `200`, no
@@ -282,17 +329,32 @@ PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities
 **3f. Grant Project-level IAM Roles to Agent Principals:**
 Since each reasoning engine is deployed with `identity_type = AGENT_IDENTITY`, they execute as their own unique `principal://...` identity rather than using the shared `vibeflix-agents` service account. Therefore, you must grant the necessary Google Cloud permissions directly to each agent's principal.
 
-**All of it is now one idempotent script** — project roles, Google-API egress, A2A
-egress, and the MCP per-tool egress (it calls `grant_mcp_egress.sh` for you):
-
 ```bash
-PROJECT=$PROJECT REGION=$REGION ./deploy/grant_agent_iam.sh          # apply
-PROJECT=$PROJECT REGION=$REGION ./deploy/grant_agent_iam.sh --dry-run
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  P=$(jq -r --arg k "vibeflix-$A" '.[$k].principal' deploy/agent_identities.json)
+  for R in roles/aiplatform.user \
+           roles/aiplatform.agentDefaultAccess \
+           roles/aiplatform.agentContextEditor \
+           roles/logging.logWriter \
+           roles/monitoring.metricWriter \
+           roles/browser \
+           roles/agentregistry.viewer; do
+    gcloud projects add-iam-policy-binding $PROJECT --member="$P" --role="$R" --condition=None
+  done
+done
 ```
 
-It grants each principal: `roles/aiplatform.user`, `roles/aiplatform.agentDefaultAccess`,
-**`roles/aiplatform.agentContextEditor`**, `roles/logging.logWriter`,
-`roles/monitoring.metricWriter`, `roles/browser`, `roles/agentregistry.viewer`.
+✅ **Verify** (each principal must show 7 roles — `0` means the grants missed, e.g. because
+the engines were deleted and recreated and these point at dead principals):
+
+```bash
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  P=$(jq -r --arg k "vibeflix-$A" '.[$k].principal' deploy/agent_identities.json)
+  N=$(gcloud projects get-iam-policy $PROJECT --flatten="bindings[].members" \
+        --filter="bindings.members:$P" --format="value(bindings.role)" | wc -l)
+  echo "  $A: $N roles"
+done
+```
 
 ⚠️ Two traps this encodes:
 - **`agentContextEditor` is required, not optional.** It's what lets an agent
@@ -527,22 +589,37 @@ For the console-invisible fallback, swap the `grant()` body for
 `gcloud iap web add-iam-policy-binding --project=$PROJECT …` with no
 `--resource-type`/`--mcp-server`.)
 
-**4c-iv. A2A egress grants (agent → agent).** Governed agent-to-agent calls need
-iap.egressor on the TARGET agent's registry ENDPOINT. Agents registered with
+**4c-iv. A2A egress grants (agent → agent) — ALL-TO-ALL.** Governed agent-to-agent calls
+need `iap.egressor` on the TARGET agent's registry ENDPOINT. Agents registered with
 `--endpoint-spec-type=no-spec` are ENDPOINT-type entries → use `--endpoint`
 (NOT `--mcp-server`, NOT `--agent`, which 404s). ALPHA track:
 
 ```bash
-epid() { gcloud alpha agent-registry services describe "$1-agent" --project=$PROJECT \
-  --location=$REGION --format='value(registryResource)' | xargs basename; }
-grantA2A() { gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
-  --endpoint="$(epid "$2")" --region=$REGION --project=$PROJECT \
-  --member="$1" --role=roles/iap.egressor; }
-M() { jq -r ".\"$1\".principal" deploy/agent_identities.json; }
-
-grantA2A "$(M vibeflix-vendor-clearance)" vibeflix-legal          # private hand-off
-for T in vibeflix-brand-style vibeflix-vendor-clearance vibeflix-deal-pricing; do
+for T in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  EP=$(gcloud alpha agent-registry services describe "vibeflix-$T-agent" --project=$PROJECT \
+        --location=$REGION --format='value(registryResource)' | xargs basename)
+  for C in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+    P=$(jq -r --arg k "vibeflix-$C" '.[$k].principal' deploy/agent_identities.json)
+    gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
+      --endpoint="$EP" --region=$REGION --project=$PROJECT \
+      --member="$P" --role=roles/iap.egressor
+  done
+done
 ```
+
+⚠️ **Grant ALL-TO-ALL, not just the pairs you expect** (orchestrator→domain, vendor→legal).
+An *agent* endpoint advertising the aiplatform host **shadows** the `GCP aiplatform` Service
+for every engine's **OWN model call** — so an engine holding no grant on the agent endpoints
+gets `403 Egress request is not authorized` on its own Gemini call and dies inside
+`_prepare_session` before a single line of agent code runs. Granting only the "real" A2A
+pairs took our whole fleet down and looked exactly like random gateway flakiness.
+
+⚠️ **A2A must target the MTLS url** — the one the agent endpoints are REGISTERED with
+(`https://$REGION-aiplatform.mtls.googleapis.com/v1beta1/<engine>`). The gateway only
+authorizes the destination it has registered: a call to the **plain** host is refused with
+`403 Egress request is not authorized` *even after* adding that URL as an interface AND
+granting `iap.egressor` on the endpoint (measured repeatedly — not a propagation delay).
+
 
 **4c-v. Google APIs egress grants (agent → Google APIs).** Because the gateway governs all outbound connections (default-deny), the engines' own Vertex AI and logging calls (e.g. `us-central1-aiplatform.mtls.googleapis.com`) will be blocked unless explicitly granted. Grant `roles/iap.egressor` on each Google-managed registry endpoint to all 6 agent principals:
 
