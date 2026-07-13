@@ -81,17 +81,18 @@ layer2() {
   # has no output_schema, so a chatty brief makes it emit free-form keys and the graph
   # never sees a `legal_request` → the legal node is skipped.
   #
-  # The category MUST be one the vendor doesn't already carry — legal only runs when a
-  # category is genuinely ONBOARDED (the update_vendor fact). This test MUTATES the
-  # registry, so a fixed name works once and then reports "cleared" forever after
-  # (the vendor now has it). Hence the unique suffix.
-  local CAT="Backpacks-$(date -u +%H%M%S)"
-  echo "  onboarding new category: $CAT"
+  # ⚠️ Legal is only consulted when a VENDOR IS ONBOARDED — i.e. a vendor that is NOT
+  # already in the licensing registry. Reusing an existing vendor (VND-1001) makes the
+  # agent correctly find it eligible, onboard nothing, emit no `legal_request`, and skip
+  # the legal node — which looks like a broken hand-off but is the agent behaving right.
+  # This test MUTATES the registry, so the vendor name must be NEW on every run.
+  local NEWVENDOR="Kessel Run Collectibles $(date -u +%H%M%S)"
+  echo "  onboarding NEW vendor: $NEWVENDOR"
   # Use the EXACT brief shape the orchestrator sends in production
   # (orchestrator/agent.py::_build_brief): prose + "Additional operator-provided
   # inputs: k=v; k=v.". The reasoner has no output_schema, so an invented brief
   # format makes it emit free-form keys and the graph never sees `legal_request`.
-  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" "Audit the 'grogu' mockup at gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png for the Asia-Pacific market at a production volume of 50000 units. Additional operator-provided inputs: add_category_approved=yes; product_category=$CAT; vendor=VND-1001.")"
+  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" "Audit the 'grogu' mockup at gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png for the Asia-Pacific market at a production volume of 50000 units. Additional operator-provided inputs: vendor=$NEWVENDOR; new_vendor=$NEWVENDOR — a new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures; product_category=Vinyl Figures; add_category_approved=yes.")"
   echo "  ── proof: did the LEGAL engine actually run? (model invocations)"
   printf "     legal engine model calls: %s   (0 = no hand-off happened)\n" "$(engine_ran "$(eng legal)" "$T")"
 }
@@ -105,17 +106,21 @@ layer3() {
   # vendor_clearance with raw prose over A2A is unreliable — its clearance reasoner has no
   # output_schema, so it free-styles the JSON shape and the graph never sees `legal_request`
   # (⇒ the legal hand-off silently never fires). The hand-off is exercised properly HERE.
-  local CAT="Backpacks-$(date -u +%H%M%S)"
+  # A BRAND-NEW vendor every run — that (not a new category) is what triggers onboarding,
+  # hence the vendor→legal hand-off. An existing vendor is simply cleared and legal never runs.
+  local NEWVENDOR="Kessel Run Collectibles $(date -u +%H%M%S)"
   local PAYLOAD
   PAYLOAD=$(cat <<JSON
 {"image_uri":"gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png",
  "target_market":"Asia-Pacific","volume":50000,"character":"grogu",
- "product_category":"$CAT","vendor":"VND-1001","add_category_approved":"yes",
+ "product_category":"Vinyl Figures","vendor":"$NEWVENDOR",
+ "new_vendor":"$NEWVENDOR — new manufacturer in Taiwan, contact ops@kesselrun.example, specialises in vinyl figures",
+ "add_category_approved":"yes",
  "medium":"vinyl figures","net_unit_price":12.5,"agreed_royalty_rate":0.12,
  "agreed_advance":50000,"agreed_mg":100000}
 JSON
 )
-  echo "  onboarding new category: $CAT (forces the vendor→legal hand-off)"
+  echo "  onboarding NEW vendor: $NEWVENDOR (this is what forces the vendor→legal hand-off)"
   echo "  orchestrator → $(send "$(eng orchestrator)" "$PAYLOAD")"
   echo "  ── proof: each downstream engine actually ran (legal = the layer-2 hand-off)"
   for A in brand-style vendor-clearance deal-pricing legal; do

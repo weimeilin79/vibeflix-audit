@@ -50,33 +50,48 @@ Note which host your egress actually uses:
 
 Register and grant BOTH; we keep `global` (see deploy_agents_a2a.py COMMON_ENV).
 
-### 2. ⚠️ TWO registered Services claiming the SAME HOST (the trap that cost us hours)
+### 2. ⚠️ The endpoint must advertise the URL you ACTUALLY CALL (this blocked layers 2–4)
 
-The agent registry entries (`vibeflix-<agent>-agent`) must advertise the **mtls** URL
-ONLY:
+The `vibeflix-<agent>-agent` endpoints were registered advertising ONLY the **mtls** URL,
+while `vibeflix_common/a2a_engine.py` calls the **plain** host with a bearer token and no
+client certificate. The gateway matches a destination against the *registered interface*:
 
-```
-https://us-central1-aiplatform.mtls.googleapis.com/v1beta1/<engine>
-```
+| call | result |
+|---|---|
+| plain host | **403** — matches no agent endpoint → default-deny. The `iap.egressor` grant on that endpoint was correct but simply never applied. |
+| mtls host | **401** — an mtls endpoint requires a client cert we don't send. |
 
-We added the **plain** URL as a second interface
-(`https://us-central1-aiplatform.googleapis.com/v1beta1/<engine>`) so that our plain
-bearer-token A2A client would be authorized. That host is ALREADY claimed by the
-`GCP aiplatform` Service — and with two Services claiming one host, the gateway denied
-**ALL** aiplatform egress, fleet-wide. Every engine then died on its own model/session
-call (`_prepare_session` → `create_session`) with `403 Egress request is not
-authorized`, *before any agent code ran*.
+**Fix: register BOTH URLs** on every agent endpoint (`--interfaces` takes a list). Then
+the existing grants bite and engine→engine A2A works with no code change.
 
-It presented as random flakiness and sent us chasing `GOOGLE_CLOUD_LOCATION`, IAM and
-propagation for hours. **Reverting the agent endpoints to mtls-only restored the whole
-fleet.** If you see a sudden fleet-wide 403 after touching the registry, check for a
-host collision first.
+Verified this does **not** collide with the `GCP aiplatform` Service, which claims the
+same host. (An earlier version of this file claimed the plain URL caused a fleet-wide
+egress collapse. That was a **misdiagnosis** — the outage came from another change made
+in the same window, judged before propagation completed. All six endpoints now carry both
+URLs and egress is healthy.)
 
 ⏱️ **IAP/IAM/registry propagation takes 2–5 minutes.** After any registry or egressor
 change, WAIT before judging. We tested a correct fix 40s after applying it, saw a 403,
 and wrongly discarded it.
 
 **Re-run:** `./tests/a2a/run_layers.sh 1`
+
+## 🧪 Testing the agents: two things that look like bugs but aren't
+
+**1. Legal only runs when a VENDOR IS ONBOARDED.** The `vendor_clearance → legal`
+hand-off fires only for a vendor that is NOT already in the licensing registry. Test with
+an existing vendor (e.g. `VND-1001`) and the agent correctly finds it eligible, onboards
+nothing, emits no `legal_request`, and skips the legal node — the legal engine shows zero
+activity and it looks like a broken hand-off. It isn't. **Use a brand-new vendor name on
+every run** (the harness mints `Kessel Run Collectibles <HHMMSS>`); these tests MUTATE the
+registry, so a fixed name works once and never again.
+
+**2. Don't drive vendor_clearance with raw A2A prose.** Its clearance reasoner has no
+`output_schema` (deliberately — it's the conversational node) and reads `{vendor?}`,
+`{product_category?}`, `{add_category_approved?}` from **session state**, which only the
+app/orchestrator populate. With no state it invents values: we asked for category
+`Backpacks-135850` and it cheerfully reported on `Apparel`. Drive it through **layer 3**
+(orchestrator + JSON payload) — that's the production path and the only reliable one.
 
 ## Prerequisites (see `deploy/instruction-dev.md`)
 

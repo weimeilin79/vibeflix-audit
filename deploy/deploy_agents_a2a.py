@@ -61,15 +61,18 @@ if identities_path.exists():
     _ENV.setdefault("MCP_LICENSING_URL", get_run_url("vibeflix-mcp-licensing"))
     _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
     
-    # A2A hops use the PLAIN aiplatform endpoint, not the mtls one. `a2a_engine.py`
-    # authenticates with a bearer access token and NO client certificate — an mtls
-    # endpoint demands a client cert, so it answers 401 Unauthorized (this is exactly
-    # what broke the vendor_clearance → legal hand-off: the legal engine never even
-    # saw the request, and vendor_clearance reported `legal_failed`).
-    # The plain host and its private-IP form (240.0.0.2) are both registered under the
-    # gcp-aiplatform registry endpoint and granted to every agent principal, so
-    # gateway egress permits them.
-    _A2A = f"https://{REGION}-aiplatform.googleapis.com/v1beta1"
+    # A2A hops use the MTLS aiplatform endpoint — the URL the agent endpoints are
+    # REGISTERED with in the Agent Registry. The gateway only authorizes the destination
+    # it has registered:
+    #   plain URL → 403 `Egress request is not authorized`, even after adding that URL as
+    #               an interface on the endpoint AND granting the caller iap.egressor on
+    #               it (measured repeatedly — this is NOT a propagation delay).
+    #   mtls URL  → gateway allows it through.
+    # On the mtls host, Google's endpoint additionally requires the workload's CLIENT
+    # CERTIFICATE (available in Agent Runtime — verified) and an `Authorization` header;
+    # a2a_engine.py now sends Authorization (for the target) + Proxy-Authorization (for
+    # the gateway) + the client cert.
+    _A2A = f"https://{REGION}-aiplatform.mtls.googleapis.com/v1beta1"
     _ENV.setdefault("LEGAL_A2A_URL", f"{_A2A}/{identities['vibeflix-legal']['engine']}")
     _ENV.setdefault("BRAND_STYLE_A2A_URL", f"{_A2A}/{identities['vibeflix-brand-style']['engine']}")
     _ENV.setdefault("VENDOR_CLEARANCE_A2A_URL", f"{_A2A}/{identities['vibeflix-vendor-clearance']['engine']}")

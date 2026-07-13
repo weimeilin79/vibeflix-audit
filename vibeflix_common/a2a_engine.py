@@ -35,27 +35,39 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     import google.auth.transport.requests as _gar
     import requests
 
+    import os
+    from vibeflix_common.cloud_auth import is_mtls_host, mtls_cert_files
+
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     creds.refresh(_gar.Request())
-    import os
+
+    # TWO different parties need to authenticate this one request:
+    #   Proxy-Authorization → the Agent Gateway (egress authorization, agent identity)
+    #   Authorization       → the TARGET engine's aiplatform endpoint
+    # This used to send ONLY Proxy-Authorization inside an engine, so Google's endpoint
+    # saw no credential at all and answered 401 — which we spent a long time mistaking
+    # for a missing client certificate.
+    hdr = {
+        "Authorization": f"Bearer {creds.token}",
+        "Content-Type": "application/json",
+        "Connection": "close",
+    }
     if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
-        hdr = {
-            "Proxy-Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json",
-            "Connection": "close"
-        }
-    else:
-        hdr = {
-            "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json",
-            "Connection": "close"
-        }
+        hdr["Proxy-Authorization"] = f"Bearer {creds.token}"
+
+    # The agent endpoints are REGISTERED with the mtls URL and the gateway only authorizes
+    # the destination it has registered: a call to the PLAIN url is refused with
+    # `403 Egress request is not authorized` even when that URL is added as an interface
+    # AND the caller holds iap.egressor on the endpoint (measured, repeatedly). So we call
+    # the mtls URL — and an mtls endpoint also wants the workload's CLIENT CERTIFICATE.
+    cert = mtls_cert_files() if is_mtls_host(base) else None
     body = {"message": {"role": "ROLE_USER", "messageId": "vibeflix",
                         "content": [{"text": text}]}}
     url = f"{base}/a2a/v1/message:send"
     while True:
         with requests.Session() as s:
-            r = s.post(url, json=body, headers=hdr, timeout=60, allow_redirects=False)
+            r = s.post(url, json=body, headers=hdr, timeout=60, allow_redirects=False,
+                       cert=cert)
         if r.status_code in (301, 302, 303, 307, 308):
             url = r.headers["Location"]
             continue
@@ -76,7 +88,8 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
         params = {"history_length": 50}
         while True:
             with requests.Session() as s:
-                g = s.get(url, params=params, headers=hdr, timeout=60, allow_redirects=False)
+                g = s.get(url, params=params, headers=hdr, timeout=60, allow_redirects=False,
+                          cert=cert)
             if g.status_code in (301, 302, 303, 307, 308):
                 url = g.headers["Location"]
                 params = None  # query parameters are already in the redirect URL

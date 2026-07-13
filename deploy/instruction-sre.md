@@ -358,9 +358,38 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
 
    Know which host you actually egress to: `GOOGLE_CLOUD_LOCATION=global` ⇒ genai + `VertexAiSessionService` use the **global** host `https://aiplatform.googleapis.com` (`gcp-aiplatform-global`); pinned to a region ⇒ `https://REGION-aiplatform.googleapis.com` (`gcp-aiplatform`). Register and grant **both**.
 
-   **⚠️ The trap: two Services claiming the SAME HOST.** The agent registry entries (`vibeflix-<agent>-agent`) must advertise the **mtls URL only**. We added the plain URL (`https://REGION-aiplatform.googleapis.com/v1beta1/<engine>`) as a second interface so a plain bearer-token A2A client would be authorized — but that host is already claimed by the `GCP aiplatform` Service. With two Services claiming one host the gateway denied **ALL aiplatform egress, fleet-wide**: every engine died in `_prepare_session`/`create_session` or on the Gemini call, before any agent code ran. Reverting the agent endpoints to mtls-only restored the fleet. **If a fleet-wide 403 appears right after you touch the registry, look for a host collision first** — it masquerades perfectly as random gateway flakiness.
+   **⚠️ The endpoint must advertise the URL you ACTUALLY CALL.** This is what blocked
+   engine→engine A2A (layers 2–4) for a whole session. The `vibeflix-<agent>-agent`
+   endpoints were registered advertising only the **mtls** URL
+   (`https://REGION-aiplatform.mtls.googleapis.com/v1beta1/<engine>`), while
+   `vibeflix_common/a2a_engine.py` calls the **plain** host with a bearer token and no
+   client certificate. The gateway matches the destination against the *registered
+   interface*, so:
+   - plain call → matches no agent endpoint → falls through to default-deny → **403**
+     (`Egress request is not authorized`), even though `iap.egressor` on that endpoint
+     was correctly granted — the grant simply never applied.
+   - mtls call → **401**, because an mtls endpoint requires a client cert we don't send.
 
-   ⏱️ **Propagation is 2–5 minutes.** After any registry/egressor change, WAIT before judging. We tested a correct fix 40s after applying it, saw a 403, and wrongly discarded it — twice.
+   **Fix:** register BOTH URLs as interfaces on each agent endpoint:
+   ```bash
+   B="https://$REGION-aiplatform.googleapis.com/v1beta1"
+   M="https://$REGION-aiplatform.mtls.googleapis.com/v1beta1"
+   for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+     ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+     gcloud alpha agent-registry services update "vibeflix-$A-agent" \
+       --project=$PROJECT --location=$REGION \
+       --interfaces="[{\"protocolBinding\":\"jsonrpc\",\"url\":\"$M/$ENG\"},{\"protocolBinding\":\"jsonrpc\",\"url\":\"$B/$ENG\"}]"
+   done
+   ```
+   (Verified: this does NOT collide with the `GCP aiplatform` Service, which claims the
+   same host. An earlier revision of this runbook claimed it caused a fleet-wide egress
+   collapse — that was a misdiagnosis; the outage came from a different change made in the
+   same window and judged before propagation finished.)
+
+   ⏱️ **Propagation is 2–5 minutes.** After any registry/egressor change, WAIT before
+   judging. We tested a correct fix ~40s after applying it, saw a 403, and wrongly
+   discarded it — twice. Judging too early was the single most expensive habit of the
+   whole exercise.
 
 4. **Symptom → cause quick table**:
 
