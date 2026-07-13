@@ -59,8 +59,20 @@ have "$(gcloud beta service-extensions authz-extensions describe vibeflix-gatewa
   && ok "IAP authz extension" || bad "IAP authz extension (4c-i)"
 AP=$(curl -s -H "Authorization: Bearer $TOK" "https://networksecurity.googleapis.com/v1alpha1/projects/$PROJECT/locations/$REGION/authzPolicies" | jq -r '.authzPolicies[]?.name' | grep -c vibeflix-gateway-iap-policy || true)
 [ "${AP:-0}" -ge 1 ] && ok "authz policy bound to gateway" || bad "authz policy binding (4c-ii)"
-G=$(gcloud iap web get-iam-policy --project "$PROJECT" --format json 2>/dev/null | jq '[.bindings[]? | select(.role=="roles/iap.egressor") | select((.condition.expression // "") | contains("mcp.toolName"))] | length')
-[ "${G:-0}" -ge 5 ] && ok "IAP egress grants ($G with corrected conditions)" || bad "IAP egress grants: ${G:-0}/5+ (run grant_mcp_egress.sh)"
+# Egress grants are RESOURCE-scoped (--mcp-server) → check each MCP server's
+# registry-resource IAM, not the project iap_web root.
+G=0
+for SRV in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
+  RR=$(gcloud alpha agent-registry services describe "$SRV" --project "$PROJECT" --location "$REGION" --format='value(registryResource)' 2>/dev/null | xargs -r basename)
+  [ -n "$RR" ] || continue
+  N=$(gcloud alpha iap web get-iam-policy --resource-type=agent-registry --mcp-server="$RR" --region "$REGION" --project "$PROJECT" --format json 2>/dev/null \
+      | jq '[.bindings[]? | select(.role=="roles/iap.egressor")] | length' 2>/dev/null)
+  G=$((G + ${N:-0}))
+done
+# also count project-scoped grants (--project-scope fallback mode)
+PG=$(gcloud iap web get-iam-policy --project "$PROJECT" --format json 2>/dev/null | jq '[.bindings[]? | select(.role=="roles/iap.egressor") | select((.condition.expression // "") | contains("mcp.toolName"))] | length' 2>/dev/null)
+G=$((G + ${PG:-0}))
+[ "${G:-0}" -ge 6 ] && ok "IAP egress grants ($G on registry resources)" || bad "IAP egress grants: ${G:-0}/6+ (run grant_mcp_egress.sh)"
 for S in licensing market brand-style; do
   INV=$(gcloud run services get-iam-policy "vibeflix-mcp-$S" --region "$REGION" --project "$PROJECT" --format json 2>/dev/null | jq -r '.bindings[]? | select(.role=="roles/run.invoker") | .members[]' | grep -c "vibeflix-mcp-invoker" || true)
   [ "${INV:-0}" = "1" ] && ok "invoker SA on vibeflix-mcp-$S" || bad "invoker SA missing on vibeflix-mcp-$S (4d)"

@@ -1,26 +1,26 @@
 {
   "vibeflix-orchestrator": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/7645105008798597120",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/7645105008798597120"
-  },
-  "vibeflix-vendor-clearance": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/8759323704107728896",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/8759323704107728896"
-  },
-  "vibeflix-legal": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/2447528826347978752",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/2447528826347978752"
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/3932837094078021632",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/3932837094078021632"
   },
   "vibeflix-ui-renderer": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/3033418990371209216",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/3033418990371209216"
-  },
-  "vibeflix-deal-pricing": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/7291150225584947200",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/7291150225584947200"
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/4545326643400409088",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/4545326643400409088"
   },
   "vibeflix-brand-style": {
-    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/2378145244588802048",
-    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/2378145244588802048"
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/3483603031247814656",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/3483603031247814656"
+  },
+  "vibeflix-vendor-clearance": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/8004091157220950016",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/8004091157220950016"
+  },
+  "vibeflix-deal-pricing": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/4405152104998502400",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/4405152104998502400"
+  },
+  "vibeflix-legal": {
+    "engine": "projects/789872749985/locations/us-central1/reasoningEngines/8652609503562301440",
+    "principal": "principal://agents.global.org-298490623289.system.id.goog/resources/aiplatform/projects/789872749985/locations/us-central1/reasoningEngines/8652609503562301440"
   }
 }

@@ -92,7 +92,7 @@ def request_insurance_rider(vendor_id: str, category: str) -> dict:
 
 legal_agent = LlmAgent(
     name="legal_clearance_agent",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Clears the legal work for a newly-onboarded vendor × category and "
                 "executes the licensing contract. In this demo only vendor_clearance "
                 "hands off to it, but any agent could.",

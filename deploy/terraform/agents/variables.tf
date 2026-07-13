@@ -24,3 +24,8 @@ variable "asset_buckets" {
   type        = list(string)
   default     = ["vibeflix-request-image", "vibeflix-approved-assets"]
 }
+
+variable "org_id" {
+  description = "Organization numeric id — for the agent-identity principalSet member"
+  type        = string
+}

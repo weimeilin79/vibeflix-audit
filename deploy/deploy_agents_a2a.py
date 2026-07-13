@@ -40,17 +40,91 @@ REGION = _ENV.get("REGION", "us-central1")
 ONLY = sys.argv[1] if len(sys.argv) > 1 else None
 assert PROJECT, "set PROJECT in deploy/.env"
 
+def get_run_url(service_name: str) -> str:
+    import subprocess
+    cmd = ["gcloud", "run", "services", "describe", service_name,
+           "--platform", "managed", "--region", REGION, "--project", PROJECT,
+           "--format", "value(status.url)"]
+    try:
+        url = subprocess.check_output(cmd).decode().strip()
+        return f"{url}/mcp" if url else ""
+    except Exception as e:
+        print(f"Error getting URL for {service_name}: {e}")
+        return ""
+
+import json
+identities_path = ROOT / "deploy" / "agent_identities.json"
+if identities_path.exists():
+    identities = json.loads(identities_path.read_text())
+    
+    _ENV.setdefault("MCP_BRAND_STYLE_URL", get_run_url("vibeflix-mcp-brand-style"))
+    _ENV.setdefault("MCP_LICENSING_URL", get_run_url("vibeflix-mcp-licensing"))
+    _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
+    
+    # A2A hops use the PLAIN aiplatform endpoint, not the mtls one. `a2a_engine.py`
+    # authenticates with a bearer access token and NO client certificate — an mtls
+    # endpoint demands a client cert, so it answers 401 Unauthorized (this is exactly
+    # what broke the vendor_clearance → legal hand-off: the legal engine never even
+    # saw the request, and vendor_clearance reported `legal_failed`).
+    # The plain host and its private-IP form (240.0.0.2) are both registered under the
+    # gcp-aiplatform registry endpoint and granted to every agent principal, so
+    # gateway egress permits them.
+    _A2A = f"https://{REGION}-aiplatform.googleapis.com/v1beta1"
+    _ENV.setdefault("LEGAL_A2A_URL", f"{_A2A}/{identities['vibeflix-legal']['engine']}")
+    _ENV.setdefault("BRAND_STYLE_A2A_URL", f"{_A2A}/{identities['vibeflix-brand-style']['engine']}")
+    _ENV.setdefault("VENDOR_CLEARANCE_A2A_URL", f"{_A2A}/{identities['vibeflix-vendor-clearance']['engine']}")
+    _ENV.setdefault("DEAL_PRICING_A2A_URL", f"{_A2A}/{identities['vibeflix-deal-pricing']['engine']}")
+
 STAGING = f"gs://{PROJECT}-vibeflix-agent-staging"
 
-# Env shipped to every engine. No custom Dockerfile here, so we control
-# GOOGLE_CLOUD_LOCATION ourselves → Gemini keeps `global` like local.
+# Env shipped to every engine.
+# WEB_CONCURRENCY=1 forces the engine to run with a single worker process,
+# preventing process-isolated task stores from returning 404 on polling.
 COMMON_ENV = {
     "RUN_LOCAL": "false",
     "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    # KEEP THIS "global" — and register the GLOBAL aiplatform hosts in the Agent Registry.
+    #
+    # The genai client + VertexAiSessionService egress to a host derived from this value:
+    #   global       → https://aiplatform.googleapis.com            (gcp-aiplatform-global)
+    #   us-central1  → https://us-central1-aiplatform.googleapis.com (gcp-aiplatform)
+    # The gateway is default-deny, so whichever host is used MUST be a registered Service
+    # in the Agent Registry with roles/iap.egressor granted to the agent principal.
+    #
+    # Measured: with location=global + the global hosts registered/granted, the fleet ran
+    # clean (layer 1 fully green, zero 401s). Pinning to the REGION — even with the regional
+    # hosts registered AND granted, and every other registered endpoint granted too — still
+    # 403'd on every engine. So the regional path is NOT a working substitute here; the
+    # global host is what Agent Runtime actually egresses to. Do not "helpfully" pin this
+    # to the region.
     "GOOGLE_CLOUD_LOCATION": "global",
     "PUBSUB_TOPIC": _ENV.get("PUBSUB_TOPIC", "vibeflix-mesh-events"),
-    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true",
+    "GOOGLE_API_USE_CLIENT_CERTIFICATE": "false",
+    "GOOGLE_API_USE_MTLS_ENDPOINT": "never",
+    "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
+    # An AGENT_IDENTITY engine has NO service account behind the metadata server,
+    # so fetch_id_token() can't work — yet the Cloud Run MCPs require an
+    # audience-bound OIDC ID token. The engine impersonates this SA to mint one
+    # (cloud_auth._id_token_via_impersonation). Same mechanism as the Agent Gateway
+    # codelab's --mcp-invoker-sa. Needs: agent principal -> tokenCreator on this SA,
+    # plus iap.egressor on the gcp-iamcredentials registry endpoints (gateway is
+    # default-deny, so even the token-minting call must be allowlisted).
+    "MCP_INVOKER_SA": _ENV.get(
+        "MCP_INVOKER_SA", f"vibeflix-mcp-invoker@{PROJECT}.iam.gserviceaccount.com"),
+    "WEB_CONCURRENCY": "1",
+    # Engine OTLP telemetry → Cloud Trace / Observability panel. Off by default
+    # because the HTTP exporter crashes on the py3.14 base (pyOpenSSL) and 403s
+    # through the gateway. Enable with TELEMETRY=on, which ALSO forces the gRPC
+    # exporter (bypasses the broken requests/pyOpenSSL path) — needs the mTLS
+    # telemetry egress endpoints registered (setup step) + a rebuild to verify.
+    **({
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc",
+    } if _ENV.get("TELEMETRY", "").lower() == "on" else {
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "false",
+    }),
 }
 
 AGENTS = {
@@ -81,8 +155,14 @@ def make_runner_builder(agent_name: str):
         import importlib
         import os
         from google.adk.apps import App
-        mod = importlib.import_module(f"agents.{agent_name}.agent")
-        app = App(name=agent_name, root_agent=mod.root_agent)
+        # The agent name comes from THIS engine's own env (VIBEFLIX_AGENT_NAME,
+        # set per-engine in config["env_vars"]). Do NOT trust the pickled closure
+        # `agent_name`: cloudpickle serialized every engine's executor with the
+        # last loop value ("orchestrator"), so all engines imported the wrong
+        # module and failed. Reading from env at runtime is immune to that.
+        name = os.environ.get("VIBEFLIX_AGENT_NAME") or agent_name
+        mod = importlib.import_module(f"agents.{name}.agent")
+        app = App(name=name, root_agent=mod.root_agent)
         # ENGINE-LEVEL MEMORY: Agent Runtime sets GOOGLE_CLOUD_AGENT_ENGINE_ID
         # inside every engine — present in the cloud, absent everywhere else, so
         # local runs are untouched by construction. Sessions + Memory Bank are
@@ -162,21 +242,48 @@ def _check_sdk_compat():
         )
 
 
+import threading
+_VENDORED_LOCK = threading.Lock()
+
 def _vendored_common() -> str:
     """extra_packages resolves RELATIVE root-level dirs (the scaffold's proven
     pattern: extra_packages=["app"]). Copy vibeflix_common to the repo root for
-    the duration of the deploy; cleaned up in main()'s finally."""
+    the duration of the deploy; cleaned up in main()'s finally.
+
+    ALWAYS re-copy. This used to be `if not os.path.exists(dst)` with a no-op
+    cleanup, which meant the root copy was a fossil from the FIRST deploy: every
+    later deploy shipped that stale snapshot and silently ignored edits to
+    packages/vibeflix-common. That cost us hours — the engines ran a cloud_auth.py
+    old enough to predate agent-identity ID-token minting, so every MCP call 401'd
+    while the fix sat on disk, deployed-but-not-really.
+    """
     import shutil
-    dst = ROOT / "vibeflix_common"
-    shutil.rmtree(dst, ignore_errors=True)
-    shutil.copytree(ROOT / "packages" / "vibeflix-common" / "vibeflix_common", dst,
-                    ignore=shutil.ignore_patterns("__pycache__"))
+    with _VENDORED_LOCK:
+        dst = ROOT / "vibeflix_common"
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(ROOT / "packages" / "vibeflix-common" / "vibeflix_common", dst,
+                        ignore=shutil.ignore_patterns("__pycache__"))
     return "vibeflix_common"
 
 
 def _cleanup_vendored():
-    import shutil
-    shutil.rmtree(ROOT / "vibeflix_common", ignore_errors=True)
+    """Deliberately a NO-OP — do NOT rmtree the root copy here.
+
+    Staleness is already prevented by _vendored_common() re-copying on EVERY deploy.
+    Deleting on exit adds nothing and creates a footgun: `_VENDORED_LOCK` is a
+    threading lock, so it does not guard separate PROCESSES. Running two deploys
+    concurrently (`deploy_agents_a2a.py a & deploy_agents_a2a.py b &`) had one
+    process rmtree the shared root copy while the other was mid-copytree:
+
+        shutil.Error: [Errno 2] No such file or directory: .../vibeflix_common/a2a_compat.py
+        FileNotFoundError: Package specified but not found: package='vibeflix_common'
+
+    …and the deploy silently failed, leaving the engine on its OLD env/code.
+    ⚠️ Deploy agents SERIALLY, or in one process (`deploy_agents_a2a.py` with no args,
+    which is the normal path and is safe).
+    """
+    pass
 
 
 def main():
@@ -191,15 +298,18 @@ def main():
     existing = {(e.api_resource.display_name or ""): e.api_resource.name
                 for e in client.agent_engines.list()}
 
-    for name, spec in AGENTS.items():
-        if ONLY and name != ONLY:
-            continue
+    from concurrent.futures import ThreadPoolExecutor
+
+    def deploy_one(name, spec):
         missing = [k for k in spec["env"] if not _ENV.get(k)]
         if missing:
             print(f"── skipping {name}: export {', '.join(missing)} first")
-            continue
+            return
         display = f"vibeflix-{name.replace('_', '-')}"
-        env = {**COMMON_ENV, **{k: _ENV[k] for k in spec["env"]}}
+        # VIBEFLIX_AGENT_NAME: the runtime authority for which agent module this
+        # engine loads (see build_runner) — the pickled closure is unreliable.
+        env = {**COMMON_ENV, "VIBEFLIX_AGENT_NAME": name,
+               **{k: _ENV[k] for k in spec["env"]}}
         app = A2aAgent(agent_card=agent_card(name, spec["desc"]),
                        agent_executor_builder=make_executor_builder(name))
         config = {
@@ -212,6 +322,11 @@ def main():
             "env_vars": env,
             "requirements": requirements(name),
             "extra_packages": ["agents", _vendored_common()],
+            "agent_gateway_config": {
+                "agent_to_anywhere_config": {
+                    "agent_gateway": f"projects/{PROJECT}/locations/{REGION}/agentGateways/vibeflix-gateway"
+                }
+            },
         }
         if display in existing:
             print(f"── updating {display} ({existing[display]})…")
@@ -220,10 +335,17 @@ def main():
             print(f"── creating {display}…")
             engine = client.agent_engines.create(agent=app, config=config)
         res = engine.api_resource
-        print(f"   engine:    {res.name}")
-        print(f"   card:      https://{REGION}-aiplatform.googleapis.com/v1beta1/{res.name}/a2a/v1/card")
         ident = getattr(getattr(res, "spec", None), "effective_identity", None)
-        print(f"   identity:  {ident}")
+        print(f"   engine {display}: {res.name}\n   card {display}: https://{REGION}-aiplatform.googleapis.com/v1beta1/{res.name}/a2a/v1/card\n   identity {display}: {ident}")
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = []
+        for name, spec in AGENTS.items():
+            if ONLY and name != ONLY:
+                continue
+            futures.append(executor.submit(deploy_one, name, spec))
+        for f in futures:
+            f.result()
 
 
 if __name__ == "__main__":

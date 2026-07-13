@@ -90,39 +90,69 @@ terraform -chdir=deploy/terraform/agents init
 terraform -chdir=deploy/terraform/agents apply -var project=$PROJECT -var region=$REGION
 ```
 
-**3b. Deploy the 5 engines.** `deploy_agents.sh` drives the ADK 2.3 CLI: each
-agent folder (with its own `requirements.txt`; the script VENDORS `vibeflix-common`
-into each folder — the private repo can't be pip-cloned) becomes one engine; A2A serving is automatic; the script passes the
-runtime SA via the engine-config file, ships env via `--env_file`, and re-runs
-UPDATE the same engine (it resolves `--agent_engine_id` by display name instead
-of duplicating). Engines are regional; Gemini's `global` location ships in each
-agent's own `.env` — those files are gitignored, so on a fresh clone the script
-**creates any missing `agents/<name>/.env`** from `$PROJECT` automatically:
+**3b. Deploy each agent via the A2A TEMPLATE — one at a time, in dependency order.**
+`deploy/deploy_agents_a2a.py` wraps each `root_agent` in the SDK's `A2aAgent` template, so the engine's container genuinely serves platform A2A (`/a2a/v1/card`, `message/send`). Identity + service account + OTel are set at create time — no post-deploy configure pass needed. Re-running a name updates the same engine.
 
+First, resolve `RAG_CORPUS`:
 ```bash
-export $(terraform -chdir=deploy/terraform/mcp output -json mcp_urls | jq -r 'to_entries[] | "\(.key)=\(.value)"')
-export RAG_CORPUS=<from setup_legal_rag>
+export RAG_CORPUS=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION/ragCorpora" \
+  | jq -r '[.ragCorpora[] | select(.displayName=="vibeflix-legal-kb")][0].name')
+echo "RAG_CORPUS=$RAG_CORPUS"
 
-./deploy/deploy_agents.sh                    # brand_style, deal_pricing, ui_renderer, legal
-export LEGAL_A2A_URL=<legal's A2A card URL — printed above>
-./deploy/deploy_agents.sh vendor_clearance
+# Staging bucket for source tarballs:
+gsutil mb -p $PROJECT -l $REGION gs://$PROJECT-vibeflix-agent-staging 2>/dev/null || true
+
+export MCP_LICENSING_URL=$(gcloud run services describe vibeflix-mcp-licensing --region $REGION --format 'value(status.url)')/mcp
+export MCP_MARKET_URL=$(gcloud run services describe vibeflix-mcp-market --region $REGION --format 'value(status.url)')/mcp
+export MCP_BRAND_STYLE_URL=$(gcloud run services describe vibeflix-mcp-brand-style --region $REGION --format 'value(status.url)')/mcp
+
+# Deploy first 4 agents:
+.venv/bin/python deploy/deploy_agents_a2a.py brand_style
+.venv/bin/python deploy/deploy_agents_a2a.py deal_pricing
+.venv/bin/python deploy/deploy_agents_a2a.py ui_renderer
+.venv/bin/python deploy/deploy_agents_a2a.py legal
 ```
 
-Deploys take 5–10 min each and continue server-side if the CLI times out.
-
-**3c. Agent identity & A2A routing (preview).** `deploy_agents.sh` finishes by running
-`deploy/enable_agent_identity_and_a2a.py`, which sets the engine config field
-`identity_type = types.IdentityType.AGENT_IDENTITY` (v1beta1 update), configures `agent_framework = "a2a"`, and embeds the A2A class methods on every
-vibeflix engine. It writes each agent's `principal://…` to
-`deploy/agent_identities.json` — those principals are what step 4's policies and
-per-agent IAM bind to. Re-run it standalone anytime:
-
+**3c. Deploy vendor_clearance** (requires legal's A2A base):
 ```bash
-PROJECT=$PROJECT REGION=$REGION python deploy/enable_agent_identity_and_a2a.py
+BASE=https://$REGION-aiplatform.googleapis.com/v1beta1
+A2A_BASE=https://$REGION-aiplatform.mtls.googleapis.com/v1beta1
+ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
+eng() { jq -r --arg n "$1" '[.reasoningEngines[] | select(.displayName==$n)][0].name' <<< "$ENGINES_JSON"; }
+export LEGAL_A2A_URL=$A2A_BASE/$(eng vibeflix-legal)
+
+.venv/bin/python deploy/deploy_agents_a2a.py vendor_clearance
 ```
 
-If the preview misbehaves, the shared `vibeflix-agents` SA from 3a is the
-fallback (policies then bind per registered-agent entry instead — coarser).
+**3d. Deploy the ORCHESTRATOR last** (requires the domain engines):
+```bash
+ENGINES_JSON=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "$BASE/projects/$PROJECT/locations/$REGION/reasoningEngines")
+export BRAND_STYLE_A2A_URL=$A2A_BASE/$(eng vibeflix-brand-style)
+export VENDOR_CLEARANCE_A2A_URL=$A2A_BASE/$(eng vibeflix-vendor-clearance)
+export DEAL_PRICING_A2A_URL=$A2A_BASE/$(eng vibeflix-deal-pricing)
+
+.venv/bin/python deploy/deploy_agents_a2a.py orchestrator
+```
+
+**3e. Record identities for step 4** (identity was enabled at creation — this reads principals into `deploy/agent_identities.json`):
+```bash
+PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities.py
+```
+
+**3f. Grant Project-level IAM Roles to Agent Principals:**
+Since each reasoning engine is deployed with `identity_type = AGENT_IDENTITY`, they execute as their own unique `principal://...` identity rather than using the shared `vibeflix-agents` service account. Therefore, you must grant the necessary Google Cloud permissions directly to each agent's principal:
+
+```bash
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  P=$(jq -r --arg k "vibeflix-$A" '.[$k].principal' deploy/agent_identities.json)
+  for R in roles/aiplatform.user roles/aiplatform.agentDefaultAccess roles/logging.logWriter roles/monitoring.metricWriter roles/browser roles/agentregistry.viewer; do
+    gcloud projects add-iam-policy-binding $PROJECT --member="$P" --role="$R" --condition=None
+  done
+done
+```
 
 Verify each engine: `agents-cli run --url https://$REGION-aiplatform.googleapis.com/v1beta1/<engine resource name> --mode adk "ping"`.
 
@@ -160,6 +190,32 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
    ./deploy/grant_mcp_egress.sh             # roles/iap.egressor + CEL per row
    ```
 
+   Also grant egress permissions for Google APIs (Vertex AI, logging, telemetry) to all agents:
+
+   ```bash
+   # Egress grants for regional Google APIs (Vertex AI, Logging, Telemetry):
+   for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+     P=$(jq -r --arg k "vibeflix-$A" '.[$k].principal' deploy/agent_identities.json)
+     for G in gcp-aiplatform gcp-aiplatform-mtls gcp-telemetry gcp-telemetry-mtls gcp-cloudtrace gcp-cloudtrace-mtls gcp-logging gcp-logging-mtls; do
+       EP=$(gcloud alpha agent-registry services describe "$G" --project=$PROJECT --location=$REGION --format='value(registryResource)' | xargs basename)
+       gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
+         --endpoint="$EP" --region=$REGION --project=$PROJECT \
+         --member="$P" --role=roles/iap.egressor
+     done
+   done
+
+   # Egress grants for global Google APIs (Pub/Sub, global Agent Registry):
+   for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+     P=$(jq -r --arg k "vibeflix-$A" '.[$k].principal' deploy/agent_identities.json)
+     for G in gcp-pubsub gcp-agentregistry-global gcp-agentregistry-mtls-global; do
+       EP=$(gcloud alpha agent-registry services describe "$G" --project=$PROJECT --location=global --format='value(registryResource)' | xargs basename)
+       gcloud alpha iap web add-iam-policy-binding --resource-type=agent-registry \
+         --endpoint="$EP" --region=global --project=$PROJECT \
+         --member="$P" --role=roles/iap.egressor
+     done
+   done
+   ```
+
    Members come from `deploy/agent_identities.json` (agents → `principal://…`;
    the console app → its `serviceAccount:`).
 4. **Rewire MCP invocation** — the gateway exposes no backend-egress SA; create
@@ -175,13 +231,31 @@ terraform -chdir=deploy/terraform/mcp apply \
 # Runtime agents (attached by reference), not by public-HTTPS callers.
 ```
 
-Then **attach the agents to the gateway by reference** (the gateway has no
-public URL — it's an mTLS/PSC surface consumed by Agent Runtime): gateway
-reference + `vibeflix-mcp-invoker` go into the engine config at deploy time,
-after which agents discover MCP servers from the registry through the gateway
-(no `MCP_*_URL` env). Until attached, agents keep their direct URLs. Attached
-flow: *agent (own identity, mTLS) → gateway (IAP policy) → invoker-SA OIDC →
-Cloud Run* — agents hold no per-MCP credentials.
+Then **attach the agents to the gateway by reference** (the gateway has no public URL — it's an mTLS/PSC surface consumed by Agent Runtime):
+
+```bash
+GW="projects/$PROJECT/locations/$REGION/agentGateways/vibeflix-gateway"
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+  curl -s -X PATCH -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    -H "Content-Type: application/json" \
+    -d '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"agentToAnywhereConfig":{"agentGateway":"'$GW'"}}}}}' \
+    "https://$REGION-aiplatform.googleapis.com/v1beta1/$ENG?updateMask=spec.deploymentSpec.agentGatewayConfig" \
+    | jq -r '"'$A': " + (if .error then "⚠️ " + .error.message else "attached" end)'
+done
+```
+
+Wait 2-4 minutes for the LROs to finish (this is a full engine redeploy under the hood), then verify:
+
+```bash
+for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
+  ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' deploy/agent_identities.json)
+  GW_BOUND=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://$REGION-aiplatform.googleapis.com/v1beta1/$ENG" \
+    | jq -r '.spec.deploymentSpec.agentGatewayConfig.agentToAnywhereConfig.agentGateway // "NOT ATTACHED"')
+  echo "vibeflix-$A → $(basename $GW_BOUND)"
+done
+```
 
 Optional Gemini Enterprise visibility, per agent:
 
@@ -218,6 +292,17 @@ graph LEDs light from the `-app-cloud` subscription, contract lands in history.
 ---
 
 
+## Step 6
+
+> **Engine traces (OTEL → Cloud Trace / Observability panel).** Engine OTLP export
+> is OFF by default: on the py3.14 engine base its HTTP exporter crashes
+> (pyOpenSSL "Context has already been used") and egresses over mTLS. To enable:
+> (1) register the -mtls telemetry/logging/cloudtrace egress endpoints (step 4);
+> (2) redeploy engines with `TELEMETRY=on ./deploy/deploy_agents_a2a.py <agent>`,
+> which sets `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` +
+> `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` (gRPC exporter avoids the pyOpenSSL/HTTP path).
+> ⚠️ gRPC-exporter fix is coded but NOT yet live-verified — confirm traces land.
+
 ## Step 6 — Application Topology (agents + MCP in Cloud Monitoring)
 
 The Monitoring [Application Topology](https://docs.cloud.google.com/monitoring/docs/application-topology)
@@ -244,7 +329,86 @@ MCP-server nodes after a few audits' worth of traffic.
 
 ---
 
+## Troubleshooting A2A Routing & Authentication
+
+If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent (A2A) calls:
+
+1. **A2A base URLs must use the PLAIN endpoint, NOT `mtls.googleapis.com`**:
+   - Use `https://<region>-aiplatform.googleapis.com/v1beta1/<engine>`.
+   - ⚠️ An earlier revision of this runbook told you to use the **mtls** host. That is wrong and it breaks A2A: `vibeflix_common/a2a_engine.py` authenticates with a bearer access token and **no client certificate**, and an mTLS endpoint requires one — so it answers **`401 Unauthorized`**. Symptom: `[vendor_clearance] legal call failed: HTTPError: 401 Client Error: Unauthorized for url: https://…-aiplatform.mtls.googleapis.com/…/a2a/v1/message:send`, and the callee engine shows *zero* activity (it never saw the request).
+   - The plain host **and** its in-container private-IP form (`240.0.0.2`) are BOTH registered as interfaces on the `gcp-aiplatform` registry endpoint and granted `iap.egressor` to every agent principal, so gateway egress permits the plain host. (Registering only the mtls variant is what made the plain host look "blocked" in the first place.)
+   - Rule of thumb: **mtls endpoints are for the Google client libraries** (which do present a client cert); **our raw `requests`/`httpx` A2A calls use the plain endpoint.**
+   
+2. **Workload Identity OIDC Limitations** — and how the agent ACTUALLY reaches an MCP:
+   - Engines running under `AGENT_IDENTITY` (rather than a Google Service Account) cannot generate/sign OpenID Connect (OIDC) ID tokens via the metadata server for Cloud Run targets. There is no service account behind the metadata server, so `fetch_id_token()` fails.
+   - ⚠️ **The Agent Gateway does NOT sign the request to Cloud Run on the agent's behalf.** (An earlier revision of this runbook claimed it did — it does not, and believing that costs days.) There is no invoker-SA field on `agentToAnywhereConfig`, on the Agent Registry service, or in the gcloud surface. The gateway *authorizes* egress (IAP `roles/iap.egressor` + per-tool CEL); it does not *authenticate* you to the backend.
+   - An access token is NOT enough. Cloud Run rejects it — measured directly against the MCP:
+
+     | token presented | Cloud Run |
+     |---|---|
+     | OAuth2 access token | **401** `"the access token could not be verified"` |
+     | audience-bound OIDC ID token | **200** |
+     | no token | **403** |
+
+   - **The agent must mint its own ID token by impersonating an invoker SA** (`MCP_INVOKER_SA` → `impersonated_credentials.IDTokenCredentials`, audience = `scheme://host` of the MCP). This is the same mechanism as the Agent Gateway codelab's `--mcp-invoker-sa`, which merely injects that env var. See instruction-dev "The MCP auth rule" for the three grants required.
+
+3. **`403 Egress request is not authorized` — the rule, and the trap**:
+
+   **The rule (simple).** *"The destination endpoint must be explicitly registered as a Service in the Agent Registry"*, and the calling agent's principal must hold `roles/iap.egressor` on it. Default-deny; anything else 403s. `deploy/grant_agent_iam.sh` grants **every registered `GCP *` endpoint** to **every** agent — derived from the registry, never hand-maintained. (Ours was hand-maintained and drifted: it omitted `agentregistry` ×4, `pubsub`, and `telemetry-regional`.)
+
+   Know which host you actually egress to: `GOOGLE_CLOUD_LOCATION=global` ⇒ genai + `VertexAiSessionService` use the **global** host `https://aiplatform.googleapis.com` (`gcp-aiplatform-global`); pinned to a region ⇒ `https://REGION-aiplatform.googleapis.com` (`gcp-aiplatform`). Register and grant **both**.
+
+   **⚠️ The trap: two Services claiming the SAME HOST.** The agent registry entries (`vibeflix-<agent>-agent`) must advertise the **mtls URL only**. We added the plain URL (`https://REGION-aiplatform.googleapis.com/v1beta1/<engine>`) as a second interface so a plain bearer-token A2A client would be authorized — but that host is already claimed by the `GCP aiplatform` Service. With two Services claiming one host the gateway denied **ALL aiplatform egress, fleet-wide**: every engine died in `_prepare_session`/`create_session` or on the Gemini call, before any agent code ran. Reverting the agent endpoints to mtls-only restored the fleet. **If a fleet-wide 403 appears right after you touch the registry, look for a host collision first** — it masquerades perfectly as random gateway flakiness.
+
+   ⏱️ **Propagation is 2–5 minutes.** After any registry/egressor change, WAIT before judging. We tested a correct fix 40s after applying it, saw a 403, and wrongly discarded it — twice.
+
+4. **Symptom → cause quick table**:
+
+   | symptom | actual cause |
+   |---|---|
+   | `403 Egress request is not authorized`, seemingly at random | `GOOGLE_CLOUD_LOCATION=global` → egress to the unregistered GLOBAL aiplatform host (see 3) |
+   | MCP `401`, `Failed to get tools from toolset` | agent identity can't mint an ID token — impersonation not wired (see above) |
+   | `Failed to create MCP session: unhandled errors in a TaskGroup`, **intermittent**, MCP logs show `200 OK` | NOT auth — a **TimeoutError**. `StreamableHTTPConnectionParams.timeout` defaults to **5s** and ADK applies it to the whole `list_tools()` handshake. A cold agent-identity connection must first mint an impersonated ID token (2 round trips, themselves gateway-governed) and blows the budget. Fix: `timeout=60` + `prewarm_id_token()` at import (both in `mcp_clients.py`). The TaskGroup swallows the cause — always dig out the real sub-exception before assuming auth |
+   | MCP `403` | no `Authorization` header at all — token minting threw and the header was dropped |
+   | `TASK_STATE_FAILED` before agent code runs | principal missing `roles/aiplatform.agentContextEditor` → `create_session()` fails in `_prepare_session` |
+   | 401/403 everywhere, but console policies look right | engines were DELETED and recreated → new engine ids → new principals → every grant orphaned. Re-run `grant_agent_iam.sh` |
+   | code fix "deployed" but behaviour unchanged | stale vendored copy. `_vendored_common()` must re-copy every deploy (it now does) |
+   | console **playground** returns `400` / code `9` | expected: A2A-only engines expose `on_message_send` (`api_mode=a2a_extension`), not `query`. The playground calls `:query`, the container 404s, the platform wraps it as `FAILED_PRECONDITION`. Drive these engines over `/a2a/v1/message:send` instead |
+
+4. **Verifying a layer actually passes — do NOT trust the agent's own answer.**
+   A compliance agent whose toolset failed to load will still emit a confident,
+   clean verdict: we observed `status: "success"`, `findings: []` and a plausible
+   `checks_run` list while the MCP had **never been called once**. The model was
+   inventing the check names (they changed between runs). Always confirm against
+   the *backend's* log, not the agent's report:
+
+   ```bash
+   # the ONLY trustworthy proof a governed MCP tool call really executed:
+   gcloud logging read 'resource.type="cloud_run_revision" AND
+     resource.labels.service_name="vibeflix-mcp-brand-style"' \
+     --project=$PROJECT --limit=200 --freshness=15m \
+     --format='value(textPayload)' | grep -oiE 'CallToolRequest|ListToolsRequest' | sort | uniq -c
+   # ListToolsRequest only  → the tool was LISTED, never CALLED → the verdict is fabricated
+   # CallToolRequest >= 1   → the tool really ran
+
+   # what the ENGINE got back from the MCP (401 = impersonation not working):
+   gcloud logging read 'resource.type="aiplatform.googleapis.com/ReasoningEngine" AND
+     resource.labels.reasoning_engine_id="<ID>"' --project=$PROJECT --limit=300 --freshness=15m \
+     --format='value(textPayload)' | grep -oE 'HTTP Request: POST https://vibeflix-mcp[^"]*"HTTP/1.1 [0-9]{3}'
+   ```
+
+   The agents now **fail closed** (`vibeflix_common/tool_guard.py`): if a required
+   tool is absent from the LlmRequest, the model is never called and the agent
+   returns `status: "error"` instead of a fake pass.
+
+---
+
 ## Teardown (reverse order)
+
+> ⚠️ Teardown is for tearing the demo DOWN — never as a step in "redeploying".
+> Deleting an engine mints a new id on recreate, hence a new `principal://`, which
+> orphans every IAM grant and registry endpoint. To ship new code, just re-run
+> `deploy_agents_a2a.py <name>`: it UPDATES in place and keeps the engine id.
 
 ```bash
 gcloud run services delete vibeflix-app --region $REGION

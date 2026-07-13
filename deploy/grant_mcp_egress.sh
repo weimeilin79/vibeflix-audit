@@ -77,7 +77,7 @@ PYEOF
   TOOL_LIST="$(echo "$TOOLS" | sed "s/,/', '/g")"
   cat > "$COND" <<EOF
 expression: >-
-  api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['$TOOL_LIST']
+  api.getAttribute('iap.googleapis.com/mcp.toolName', '') == '' || api.getAttribute('iap.googleapis.com/mcp.toolName', '') in ['$TOOL_LIST']
 title: ${CALLER}-${SERVER}
 EOF
   echo "── $CALLER → $SERVER [$TOOLS]  (scope=$SCOPE)"

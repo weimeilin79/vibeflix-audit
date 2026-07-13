@@ -74,6 +74,36 @@ resource "google_project_iam_member" "app_datastore" {
   member  = "serviceAccount:${google_service_account.app.email}"
 }
 
+# The app resolves ui_renderer through the Agent Registry (list_agents).
+resource "google_project_iam_member" "app_agentregistry" {
+  project = var.project
+  role    = "roles/agentregistry.viewer"
+  member  = "serviceAccount:${google_service_account.app.email}"
+}
+
+# ---------------------------------------------------------------------------
+# Agent IDENTITIES (principalSet) — the engines run as their own agent-identity
+# principals (identity_type=AGENT_IDENTITY), NOT the `agents` SA. These grants
+# are what actually let them call Gemini, read the registry, and publish.
+# ---------------------------------------------------------------------------
+data "google_project" "this" { project_id = var.project }
+
+locals {
+  agents_set = "principalSet://agents.global.org-${var.org_id}.system.id.goog/attribute.platformContainer/aiplatform/projects/${data.google_project.this.number}"
+}
+
+resource "google_project_iam_member" "agents_identity_roles" {
+  for_each = toset([
+    "roles/aiplatform.expressUser",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/browser",
+    "roles/agentregistry.viewer", # callers list the registry to resolve engines
+  ])
+  project = var.project
+  role    = each.value
+  member  = local.agents_set
+}
+
 resource "google_storage_bucket_iam_member" "app_uploads" {
   bucket = var.upload_bucket
   role   = "roles/storage.objectAdmin" # upload + reset-time cleanup

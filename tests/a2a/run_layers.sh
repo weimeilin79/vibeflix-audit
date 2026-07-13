@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#
+# run_layers.sh — exercise the 4 mesh layers and VERIFY each from the backend's logs.
+#
+#   ./tests/a2a/run_layers.sh            # all layers
+#   ./tests/a2a/run_layers.sh 1          # just layer 1
+#   ./tests/a2a/run_layers.sh 2 3        # layers 2 and 3
+#
+# ⚠️ NEVER judge a layer by the agent's own reply. An agent whose toolset failed
+# still emits a confident, clean verdict — we watched brand_style report
+# status:"success", findings:[] with a plausible checks_run list while the MCP had
+# ZERO CallToolRequest (the model invented the check names; they changed run to
+# run). The pass criterion is always the BACKEND's log:
+#     MCP layer  → CallToolRequest in the MCP's Cloud Run log
+#     A2A layer  → the callee engine's log shows it ran
+#
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+PROJECT="${PROJECT:-pokedemo-test}"; REGION="${REGION:-us-central1}"
+PY="$ROOT/.venv/bin/python"
+IDENT="$ROOT/deploy/agent_identities.json"
+eng() { jq -r --arg k "vibeflix-$1" '.[$k].engine' "$IDENT" | sed 's#.*/##'; }
+BASE="https://$REGION-aiplatform.googleapis.com/v1beta1/projects/789872749985/locations/$REGION/reasoningEngines"
+
+send() {  # send <engine_id> <brief>   → prints the agent's reply (truncated)
+  GOOGLE_CLOUD_PROJECT=$PROJECT "$PY" - "$1" "$2" <<'PYEOF'
+import sys, asyncio, pathlib
+sys.path.insert(0, str(pathlib.Path.cwd() / "packages/vibeflix-common"))
+from vibeflix_common.a2a_engine import a2a_engine_send
+base = ("https://us-central1-aiplatform.googleapis.com/v1beta1/projects/789872749985"
+        f"/locations/us-central1/reasoningEngines/{sys.argv[1]}")
+# 600s, not 260: vendor_clearance / deal_pricing run many tool calls and were still
+# WORKING when the poll deadline expired — _extract_reply then returns "" and the layer
+# looks failed even though the MCP log shows the tool calls landing. An empty reply here
+# means "still running", not "broken".
+print(asyncio.run(a2a_engine_send(base, sys.argv[2], timeout=600))[:400].replace("\n", " "))
+PYEOF
+}
+
+calltools() {  # calltools <cloud-run-service> <since>  → count of CallToolRequest
+  gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$1\" AND timestamp>=\"$2\"" \
+    --project="$PROJECT" --limit=400 --format='value(textPayload,jsonPayload.message)' 2>/dev/null \
+    | grep -oic 'CallToolRequest' || echo 0
+}
+
+engine_ran() {  # engine_ran <engine_id> <since> → lines showing the model actually ran
+  gcloud logging read "resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"$1\" AND timestamp>=\"$2\"" \
+    --project="$PROJECT" --limit=300 --format='value(textPayload)' 2>/dev/null \
+    | grep -ci 'Sending out request, model' || echo 0
+}
+
+mcp_401s() {  # any 401 back from an MCP (the intermittent issue — see README)
+  gcloud logging read "resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"$1\" AND timestamp>=\"$2\"" \
+    --project="$PROJECT" --limit=300 --format='value(textPayload)' 2>/dev/null \
+    | grep -c '401 Unauthorized' || echo 0
+}
+
+layer1() {
+  echo "══ LAYER 1 — every agent → its MCP server"
+  local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  echo "  brand_style      → $(send "$(eng brand-style)" 'Run the brand compliance audit. image: gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png ; character: grogu ; medium: vinyl figures')"
+  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" 'Clear vendor VND-1001 for character grogu, territory Asia-Pacific, product category Vinyl Figures.')"
+  echo "  deal_pricing     → $(send "$(eng deal-pricing)" 'Price check: character grogu, category Vinyl Figures, volume 50000, net unit price 12.5, agreed royalty 0.12, advance 50000, MG 100000.')"
+  echo "  ── proof (CallToolRequest on each MCP; 0 = the verdict was FABRICATED):"
+  for S in vibeflix-mcp-brand-style vibeflix-mcp-licensing vibeflix-mcp-market; do
+    printf "     %-28s %s\n" "$S" "$(calltools "$S" "$T")"
+  done
+  printf "     %-28s %s  (see README: intermittent, retried)\n" "engine 401s (brand_style)" "$(mcp_401s "$(eng brand-style)" "$T")"
+}
+
+layer2() {
+  echo "══ LAYER 2 — vendor_clearance → legal (private A2A hand-off)"
+  local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  # The legal hand-off fires ONLY when a category is actually ONBOARDED (the
+  # update_vendor fact) — clearing an already-eligible vendor/category correctly
+  # skips legal. So force an onboarding: a category the vendor doesn't yet carry.
+  # …and the onboarding itself needs explicit approval (needs: add_category_approved),
+  # so grant it up front or the agent stops at needs_input and never reaches legal.
+  # Phrase the brief in the reasoner's own state vocabulary (vendor / character_id /
+  # target_market / product_category / add_category_approved). Prose confuses it: it
+  # has no output_schema, so a chatty brief makes it emit free-form keys and the graph
+  # never sees a `legal_request` → the legal node is skipped.
+  #
+  # The category MUST be one the vendor doesn't already carry — legal only runs when a
+  # category is genuinely ONBOARDED (the update_vendor fact). This test MUTATES the
+  # registry, so a fixed name works once and then reports "cleared" forever after
+  # (the vendor now has it). Hence the unique suffix.
+  local CAT="Backpacks-$(date -u +%H%M%S)"
+  echo "  onboarding new category: $CAT"
+  # Use the EXACT brief shape the orchestrator sends in production
+  # (orchestrator/agent.py::_build_brief): prose + "Additional operator-provided
+  # inputs: k=v; k=v.". The reasoner has no output_schema, so an invented brief
+  # format makes it emit free-form keys and the graph never sees `legal_request`.
+  echo "  vendor_clearance → $(send "$(eng vendor-clearance)" "Audit the 'grogu' mockup at gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png for the Asia-Pacific market at a production volume of 50000 units. Additional operator-provided inputs: add_category_approved=yes; product_category=$CAT; vendor=VND-1001.")"
+  echo "  ── proof: did the LEGAL engine actually run? (model invocations)"
+  printf "     legal engine model calls: %s   (0 = no hand-off happened)\n" "$(engine_ran "$(eng legal)" "$T")"
+}
+
+layer3() {
+  echo "══ LAYER 3 — orchestrator → brand/vendor/deal (A2A fan-out)"
+  local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  # Send the JSON payload the app sends (orchestrator/_parse_audit_request accepts JSON
+  # or natural language). JSON is the real contract: it populates the SESSION STATE
+  # ({vendor?}, {add_category_approved?}, …) that the domain agents template on. Driving
+  # vendor_clearance with raw prose over A2A is unreliable — its clearance reasoner has no
+  # output_schema, so it free-styles the JSON shape and the graph never sees `legal_request`
+  # (⇒ the legal hand-off silently never fires). The hand-off is exercised properly HERE.
+  local CAT="Backpacks-$(date -u +%H%M%S)"
+  local PAYLOAD
+  PAYLOAD=$(cat <<JSON
+{"image_uri":"gs://vibeflix-request-image/0aa7dd74-vendor_request_refine.png",
+ "target_market":"Asia-Pacific","volume":50000,"character":"grogu",
+ "product_category":"$CAT","vendor":"VND-1001","add_category_approved":"yes",
+ "medium":"vinyl figures","net_unit_price":12.5,"agreed_royalty_rate":0.12,
+ "agreed_advance":50000,"agreed_mg":100000}
+JSON
+)
+  echo "  onboarding new category: $CAT (forces the vendor→legal hand-off)"
+  echo "  orchestrator → $(send "$(eng orchestrator)" "$PAYLOAD")"
+  echo "  ── proof: each downstream engine actually ran (legal = the layer-2 hand-off)"
+  for A in brand-style vendor-clearance deal-pricing legal; do
+    printf "     %-18s model calls: %s\n" "$A" "$(engine_ran "$(eng "$A")" "$T")"
+  done
+}
+
+layer4() {
+  echo "══ LAYER 4 — app → ui_renderer, app → orchestrator"
+  local T; T=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  local APP; APP=$(gcloud run services describe vibeflix-app --region "$REGION" --project "$PROJECT" --format 'value(status.url)' 2>/dev/null)
+  echo "  app: $APP"
+  echo "  /api/ready → $(curl -s -m 60 -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$APP/api/ready" | head -c 200)"
+  echo "  ── proof: ui_renderer + orchestrator engines ran"
+  for A in ui-renderer orchestrator; do
+    printf "     %-18s model calls: %s\n" "$A" "$(engine_ran "$(eng "$A")" "$T")"
+  done
+  echo "  (full audit: POST $APP/api/audit — see tests/a2a/README.md)"
+}
+
+cd "$ROOT"
+LAYERS=("$@"); [ ${#LAYERS[@]} -eq 0 ] && LAYERS=(1 2 3 4)
+for L in "${LAYERS[@]}"; do "layer$L"; echo; done

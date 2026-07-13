@@ -155,17 +155,41 @@ print(f"[app] persistence: {memory_summary()}")
 # we fall back to a rule-based summary — the UI keeps working.
 PRESENTER_APP = "a2ui_presenter"
 _UI_RENDERER_URL = os.environ.get("UI_RENDERER_A2A_URL", "").rstrip("/")
-presenter_runner = (
-    InMemoryRunner(app=App(
-        name=PRESENTER_APP,
-        root_agent=RemoteA2aAgent(
-            name="a2ui_presenter",
-            agent_card=a2a_card_url(_UI_RENDERER_URL),
-            **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
-        ),
-    ))
-    if _UI_RENDERER_URL else None
-)
+
+
+def _presenter_agent():
+    """ui_renderer client — CLOUD via Agent Registry, LOCAL via direct A2A."""
+    from vibeflix_common.cloud_auth import run_local
+    if not run_local():
+        from vibeflix_common.a2a_engine import direct_engine_agent
+        return direct_engine_agent(
+            "a2ui_presenter", "Renders reports into A2UI panels.", _UI_RENDERER_URL)
+    return RemoteA2aAgent(
+        name="a2ui_presenter",
+        agent_card=a2a_card_url(_UI_RENDERER_URL),
+        **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
+    )
+
+
+# Built LAZILY: constructing the cloud presenter calls the Agent Registry, which
+# must not run at import (a registry hiccup would crash app startup; the app has
+# a rule-based presenter fallback). `_get_presenter_runner()` builds it on first
+# use and caches; failure → None → fallback.
+_presenter_runner_cache = "unset"
+
+
+def _get_presenter_runner():
+    global _presenter_runner_cache
+    if _presenter_runner_cache == "unset":
+        try:
+            _presenter_runner_cache = (
+                InMemoryRunner(app=App(name=PRESENTER_APP, root_agent=_presenter_agent()))
+                if _UI_RENDERER_URL else None
+            )
+        except Exception as e:
+            print(f"[app] presenter unavailable ({type(e).__name__}: {e}); using fallback", flush=True)
+            _presenter_runner_cache = None
+    return _presenter_runner_cache
 
 # Audit conversations awaiting more input: token -> {user_id, request(accumulated)}.
 _SESSIONS: dict[str, dict] = {}
@@ -206,6 +230,7 @@ async def _respond_to_note(note: str, reports: dict) -> str | None:
 async def _run_presenter(payload: dict) -> dict | None:
     """One UI-Render agent round-trip (over A2A) → its Presentation dict, or None
     if it's unconfigured/unreachable or produced nothing parseable."""
+    presenter_runner = _get_presenter_runner()
     if presenter_runner is None:
         return None
     user_id = "presenter"
@@ -271,8 +296,9 @@ async def _design_fields(tokens: list, prompts: list, aggregate: dict, request: 
         f = by_name.get(token)
         if not f:
             return None                      # a token was dropped → don't trust the design
+        name = _FIELD_SPECS.get(token, {}).get("name", token)
         spec = {
-            "name": token,
+            "name": name,
             "label": f.get("label") or token,
             "type": f.get("type") if f.get("type") in _FIELD_TYPES else "text",
             "placeholder": f.get("placeholder", ""),
@@ -1166,18 +1192,28 @@ async def _probe_agent(svc: dict) -> dict:
     t0 = time.monotonic()
     try:
         if is_engine_url(base):
-            # Agent Runtime: no /healthz. Liveness = the engine serves its A2A
-            # card; the agent's MCP dependencies are handshaken from HERE (the
-            # app), preserving the exact components[].mcp shape the UI renders.
+            # Agent Runtime: no /healthz and NO /a2a/v1/card route (400/Not Found).
+            # Liveness = the engine RESOURCE responds (GET the reasoningEngine =
+            # 200 when deployed); the agent's MCP deps are handshaken from HERE
+            # (the app), preserving the components[].mcp shape the UI renders.
             async with httpx.AsyncClient(timeout=15.0, auth=maybe_auth()) as client:
-                resp = await client.get(a2a_card_url(base))
+                resp = await client.get(base)
                 resp.raise_for_status()
             comp["reachable"] = True
+            # For engines, liveness = the engine responds. The MCP handshake is
+            # BEST-EFFORT info only: the app SA can only invoke mcp-licensing
+            # (least privilege) — the agents reach market/brand-style through the
+            # GATEWAY under their own identity, so an app-side 403 here is
+            # EXPECTED and must NOT gate readiness (it would false-negative).
+            comp["ok"] = True
             from vibeflix_common.health import _probe_one
             urls = [(k, os.environ[k]) for k in svc.get("mcp_envs", []) if os.environ.get(k)]
-            results = await asyncio.gather(*(_probe_one(u) for _, u in urls))
-            comp["mcp"] = [{"name": k, "url": u, **r} for (k, u), r in zip(urls, results)]
-            comp["ok"] = all(m["ok"] for m in comp["mcp"]) if comp["mcp"] else True
+            results = await asyncio.gather(*(_probe_one(u) for _, u in urls), return_exceptions=True)
+            comp["mcp"] = [
+                {"name": k, "url": u,
+                 **(r if isinstance(r, dict) else {"ok": None, "detail": "app not authorized (agents reach it via gateway)"})}
+                for (k, u), r in zip(urls, results)
+            ]
         else:
             async with httpx.AsyncClient(timeout=6.0, auth=maybe_auth()) as client:
                 resp = await client.get(f"{base}/healthz")

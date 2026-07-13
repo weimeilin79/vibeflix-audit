@@ -73,7 +73,7 @@ def _parse(text: str) -> dict:
 # ---- the pricing reasoner: rate card -> expected -> per-component compare ----
 pricing_reasoner = LlmAgent(
     name="pricing_reasoner",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Reasons the deal-pricing audit: expected vs agreed royalty / advance / MG.",
     instruction=(
         "You are the Deal Pricing reasoner for the Vibeflix pipeline. The deal is: character "
@@ -102,7 +102,7 @@ pricing_reasoner = LlmAgent(
 # ---- the resolver: adjudicate ONE unresolved discrepancy against the rules ----
 resolver = LlmAgent(
     name="pricing_resolver",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Adjudicates one unresolved pricing discrepancy against the rate-card rules.",
     instruction=(
         "You are given ONE unresolved pricing discrepancy plus the rate-card rules and deal "

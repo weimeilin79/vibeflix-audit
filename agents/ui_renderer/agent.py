@@ -62,7 +62,7 @@ class Presentation(BaseModel):
 
 presenter_agent = LlmAgent(
     name="a2ui_presenter",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Renders any set of compliance-workflow reports into A2UI panels.",
     instruction=_SKILL.instructions,
     output_schema=Presentation,

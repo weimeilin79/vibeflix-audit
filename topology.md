@@ -117,3 +117,54 @@ every hop plain-http, the orchestrator runs **in-process in the app** locally
 local and switches to the remote orchestrator engine when deployed), and no
 gateway/IAM exists locally. The one code prerequisite this adds: the app needs
 that runner-vs-remote-orchestrator switch before step 5 of the cloud runbooks.
+
+## Token Exchange & Routing Flow (Gateway Egress)
+
+Here is a sequence and flow diagram explaining how the tokens are obtained, routed, and translated from the Reasoning Engine to the MCP server on Cloud Run:
+
+```text
++-------------------------------------------------------------------------------------------------+
+|                                     TOKEN EXCHANGE & ROUTING                                    |
++-------------------------------------------------------------------------------------------------+
+
+ [ Vertex AI Reasoning Engine ]
+         (Agent Container)
+                |
+                | 1. Read Workload Identity credentials (metadata server)
+                v
+       [ google.auth.default() ]
+                |
+                | 2. Obtain federated OAuth2 Access Token (ya29...)
+                v
+       [ cloud_auth.py Hook ]
+                |
+                | 3. Set Proxy-Authorization: Bearer <Access Token>
+                |    (Keep Authorization header empty)
+                |
+                v  (DNS routes to PSC IP of Agent Gateway)
+ +------------------------------------------------------------------------------------------------+
+ | [ Agent Gateway (IAP Egress Proxy) ]                                                           |
+ |                                                                                                |
+ |  4. Authenticate & Authorize:                                                                  |
+ |     IAP validates the Access Token. Checks if the agent principal has                          |
+ |     the `roles/iap.egressor` role on the target registry endpoint.                             |
+ |                                                                                                |
+ |  5. Strip Proxy Header:                                                                        |
+ |     Proxy-Authorization header is stripped from the outgoing request.                          |
+ |                                                                                                |
+ |  6. Sign outbound request:                                                                     |
+ |     Gateway mints a standard Google OIDC ID Token (signed by google.com)                       |
+ |     for the target Cloud Run service audience using the gateway's service account.             |
+ |     Attaches: Authorization: Bearer <Google OIDC ID Token>                                     |
+ +------------------------------------------------------------------------------------------------+
+                |
+                v  (Request sent over public internet or VPC)
+ [ Cloud Run Backend (MCP Server) ]
+                |
+                | 7. Validate Invocation:
+                |    Cloud Run verifies the OIDC ID Token signature against google.com.
+                |    Checks that the gateway's service account has `roles/run.invoker` on the service.
+                v
+        [ 200 OK Response ]
+```
+

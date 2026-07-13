@@ -36,7 +36,7 @@ from google.adk.events.event import Event
 from vibeflix_common.mcp_clients import mcp_toolset
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
 # when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.cloud_auth import maybe_auth, resolve_a2a_rpc_url
+from vibeflix_common.cloud_auth import maybe_auth, resolve_a2a_rpc_url, run_local
 from vibeflix_common.telemetry import instrument_node, emit_event
 
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "vendor-clearance"
@@ -55,8 +55,17 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 _LEGAL_URL = os.environ.get("LEGAL_A2A_URL", "").rstrip("/")
 
 
+async def _call_legal_cloud(brief: str) -> str:
+    """CLOUD: call the legal engine's A2A endpoint DIRECTLY (LEGAL_A2A_URL is the
+    engine resource URL). Registry resolution 403s from an attached engine."""
+    from vibeflix_common.a2a_engine import a2a_engine_send
+    return await a2a_engine_send(_LEGAL_URL, brief)
+
+
 async def _call_legal(brief: str) -> str:
     """One legal round-trip over A2A (fresh context) → the reply text."""
+    if not run_local():
+        return await _call_legal_cloud(brief)
     body = {"jsonrpc": "2.0", "id": 1, "method": "message/send",
             "params": {"message": {"role": "user", "kind": "message",
                                    "messageId": uuid.uuid4().hex,
@@ -102,7 +111,7 @@ class ClearanceReport(BaseModel):
 # The clearance REASONER — conversational (no output_schema → no malformed finalizer).
 clearance_reasoner = LlmAgent(
     name="clearance_reasoner",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Reasons the vendor/character/territory/category clearance and vendor admin.",
     instruction=(
         "You are the Vendor & Licensing Clearance reasoner for the Vibeflix pipeline. The "
@@ -143,7 +152,7 @@ clearance_reasoner = LlmAgent(
 # and forth (Flow A) without ever leaving this service.
 vendor_liaison = LlmAgent(
     name="vendor_liaison",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Answers the legal agent's questions about a vendor from the licensing registry.",
     instruction=(
         "The legal clearance agent has asked a question about a vendor while drafting a "

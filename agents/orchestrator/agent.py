@@ -69,14 +69,31 @@ def _secondary_addendum() -> str:
                              _ADDENDUM_FALLBACK, field="secondary_addendum_contract") or _ADDENDUM_FALLBACK)
 
 
+# url_env → the agent's Agent-Registry displayName (cloud path). The registry
+# entries are "Vibeflix <name> agent" (deploy step 4a-ii).
+_REGISTRY_DISPLAY = {
+    "BRAND_STYLE_A2A_URL": "vibeflix-brand-style",
+    "VENDOR_CLEARANCE_A2A_URL": "vibeflix-vendor-clearance",
+    "DEAL_PRICING_A2A_URL": "vibeflix-deal-pricing",
+}
+
+
 def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
     base = os.environ.get(url_env)
     if not base:
         raise RuntimeError(
             f"A2A URL not configured: set {url_env} (e.g. http://{name}:8001)."
         )
+    from vibeflix_common.cloud_auth import run_local
+    if not run_local():
+        # CLOUD: call the target engine's A2A endpoint DIRECTLY (registry
+        # resolution 403s from a gateway-attached engine). base is the engine
+        # resource URL from the env var.
+        from vibeflix_common.a2a_engine import direct_engine_agent
+        return direct_engine_agent(name, description, base)
+    # LOCAL: direct A2A to the compose service (unchanged).
     kwargs = {}
-    client = a2a_httpx_client()   # None locally; Google-authed client in the cloud
+    client = a2a_httpx_client()
     if client is not None:
         kwargs["httpx_client"] = client
     return RemoteA2aAgent(
@@ -132,7 +149,7 @@ _DISPATCH_SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" /
 
 workflow_dispatcher = LlmAgent(
     name="workflow_dispatcher",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Decides which compliance workflows the orchestrator should run for a request.",
     instruction=_DISPATCH_SKILL.instructions,
     output_schema=DispatchDecision,
@@ -164,7 +181,7 @@ _NOTE_TOOLS.append(_lm.load_memory_tool if hasattr(_lm, "load_memory_tool") else
 
 note_responder = LlmAgent(
     name="note_responder",
-    model="gemini-flash-latest",
+    model="gemini-2.5-flash",
     description="Answers the operator's free-text note/question about an audit, or acks added context.",
     instruction=(
         "You are the Sourcing Orchestrator, replying to the operator's free-text note that "

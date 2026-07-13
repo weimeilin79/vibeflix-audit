@@ -49,7 +49,7 @@ missing tokens (any of `"vendor"`, `"character"`, `"territory"`, `"category"`). 
 
 ## Step 1 — verify the vendor exists (onboard it if not)
 
-Call **`get_vendor(VENDOR)`** FIRST.
+Call the **`get_vendor`** tool with the vendor ID FIRST.
 
 - If it returns an **error / not found**, the vendor isn't onboarded yet. Look at the
   **`create_vendor` tool's own parameters** to see what a vendor record requires — its
@@ -60,8 +60,8 @@ Call **`get_vendor(VENDOR)`** FIRST.
   `{tool: "create_vendor", reason, params}` (fill `params` with whatever you already
   know, e.g. the vendor name + the CATEGORY as a product category + the TERRITORY as an
   operating territory). Stop — you'll be re-invoked with the details.
-- When the details arrive (in `{new_vendor?}` or the message), call
-  **`create_vendor(vendor_json)`** with them — set `"status": "active"` so the newly
+- When the details arrive (in `{new_vendor?}` or the message), call the
+  **`create_vendor`** tool with the `vendor_json` — set `"status": "active"` so the newly
   onboarded vendor is immediately usable (do NOT set it to pending_review) — then
   continue to Step 2.
 - If `get_vendor` returns a record, use it and continue.
@@ -70,14 +70,13 @@ Call **`get_vendor(VENDOR)`** FIRST.
 
 Using VENDOR, CHARACTER, TERRITORY, and CATEGORY:
 
-1. **Exclusivity** — `scan_global_exclusivity_clauses(CHARACTER, TERRITORY)`. If
+1. **Exclusivity** — Call `scan_global_exclusivity_clauses` with the character ID and target market. If
    `has_conflict`, record an `exclusivity_collision` issue (severity `critical`), set
    `partner_conflict`, and describe the block + expiration.
-2. **Trademark / customs** — `verify_trademark_record(CHARACTER, TERRITORY)`. If
+2. **Trademark / customs** — Call `verify_trademark_record` with the character ID and target market. If
    `registration_status` isn't `Valid` or `territory_status` isn't `registered`, record
    a `trademark_customs` issue (severity `warning`).
-3. **Vendor eligibility** — `check_vendor_eligibility(VENDOR, TERRITORY, CATEGORY,
-   CHARACTER)`. Put the vendor in `recommended_vendors` with `vendor_id`, `legal_name`,
+3. **Vendor eligibility** — Call `check_vendor_eligibility` with the vendor ID, target market, product category, and character ID. Put the vendor in `recommended_vendors` with `vendor_id`, `legal_name`,
    `hq_country`, its `eligible` flag, and a `note` (the first blocking reason, if any).
 
    **Category onboarding:** if the ONLY reason the vendor is ineligible is that it does
@@ -96,7 +95,7 @@ Using VENDOR, CHARACTER, TERRITORY, and CATEGORY:
    - If the vendor is ineligible for any OTHER reason (suspended, not cleared for the
      territory, or an exclusivity lock), just record a `vendor_ineligible` issue
      (severity `critical`) — do not offer onboarding.
-4. **Marketplace leaks** — `scan_ecom_marketplaces(CHARACTER, TERRITORY)` → `ecom_status`.
+4. **Marketplace leaks** — Call `scan_ecom_marketplaces` with the character ID and target market → `ecom_status`.
 
 Set `status` to `blocked` if there is an exclusivity collision OR the vendor is not
 eligible; otherwise `cleared`. Output the ClearanceReport schema only — never prose.

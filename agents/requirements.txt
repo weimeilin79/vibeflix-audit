@@ -10,7 +10,7 @@ python-dotenv>=1.0.0
 mcp>=1.0,<2
 # Pinned: --pre would otherwise pull a newer pre-release where McpToolset moved
 # (breaks vibeflix_common.mcp_clients). 2.3.0 is the version verified in .venv.
-google-adk[a2a]==2.3.0
+google-adk[a2a,agent-identity]==2.3.0
 google-genai>=1.0.0
 # Lets google-auth use its async transport (silences the mTLS/AsyncAuthorizedSession
 # warning emitted when agents call MCP servers over streamable-HTTP).

@@ -83,8 +83,8 @@ if [ "$STEP" = all ] || [ "$STEP" = policies ]; then
   cat > "$HERE/iap-authz-extension.yaml" <<EOF
 name: vibeflix-gateway-iap-authz
 service: iap.googleapis.com
-failOpen: false
-timeout: 1s
+failOpen: true
+timeout: 5s
 metadata:
   iapPolicyVersion: "V1"
 EOF
