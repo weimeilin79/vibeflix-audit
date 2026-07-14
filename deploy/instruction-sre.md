@@ -70,6 +70,41 @@ PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities
 PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh  # 7. verify all 4 layers
 ```
 
+### ✅ VERIFY AFTER EVERY STEP — a deploy can exit 0 and still be broken
+
+`deploy/verify_deployment.sh` is read-only, prints ✅/❌ per check, and **exits non-zero on
+failure so it can gate the next step**. Run the matching step number as you go:
+
+```bash
+./deploy/verify_deployment.sh 1    || exit 1   # after foundations   — Firestore, Pub/Sub, RAG
+./deploy/verify_deployment.sh 2    || exit 1   # after MCP servers   — up, anonymous=403, authed≠403
+./deploy/verify_deployment.sh 3    || exit 1   # after engines pass 1 — 6 engines, AGENT IDENTITY on
+./deploy/verify_deployment.sh 5    || exit 1   # after the app        — pinned 1/1, task-store gate 403/200
+./deploy/verify_deployment.sh 4    || exit 1   # after the gateway    — registry, policies, egress grants
+./deploy/verify_deployment.sh 4s   || exit 1   # after the grants     — EVERY principal + SA + role
+./deploy/verify_deployment.sh 4e   || exit 1   # gateway attachment   — all 6 engines attached
+./deploy/verify_deployment.sh 3b   || exit 1   # after engines pass 2 — TELEMETRY, TASK_STORE_URL, trace propagation
+./deploy/verify_deployment.sh                  # everything (50+ checks)
+```
+
+**Why this is not optional.** Every one of these has silently broken the mesh before, and each
+looked like something else:
+- `3b` catches the two failures a green deploy hides: **tracing off across the whole fleet**
+  (TELEMETRY used to default off, so forgetting the flag untraced everything and still exited 0)
+  and **`TASK_STORE_URL` empty** (the engines fall back to a per-replica task store and ~87% of
+  task polls 404 — the tell that you skipped engine pass 2).
+- `4s` audits **every agent principal, every service account, every role**: `agentContextEditor`
+  (without it the agent cannot write its own sessions → opaque `TASK_STATE_FAILED` before your
+  code runs), topic-scoped `pubsub.publisher` (without it the mesh telemetry never leaves the
+  engine and the console's graph silently never draws), the MCP invoker SA + `tokenCreator`
+  (an AGENT_IDENTITY engine has **no** service account, so it must impersonate one to mint an
+  OIDC token — no invoker SA ⇒ every MCP call 401s), and that the engines run as **agent
+  identities, not service accounts** (if they run as an SA, the demo isn't demonstrating the
+  thing it exists to demonstrate).
+- `5` proves the task store is actually **gated** (403 without the key, 200 with) — the app is
+  public so the browser can load it, which means those endpoints would otherwise be
+  world-writable.
+
 **Then VERIFY — a deploy can exit 0 and still be broken.** Read the state back from all six engines
 (`GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`, `TASK_STORE_URL` set, `A2A_TRACE_PROPAGATION=on`),
 and confirm the app logs `[taskstore] CREATE …` while **no** engine logs a `[task-store] … FAILED` fallback.

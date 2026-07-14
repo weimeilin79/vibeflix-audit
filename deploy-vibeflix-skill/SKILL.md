@@ -97,6 +97,32 @@ If you skip pass 2, everything still "works" — but each engine silently falls 
 
 ## Verify — do not trust exit codes
 
+**`deploy/verify_deployment.sh` is the contract.** Read-only, ✅/❌ per check, non-zero exit on
+failure — so it GATES the next step. Run the matching step number after every step, and do not
+proceed past a ❌:
+
+```bash
+./deploy/verify_deployment.sh 1    # foundations: Firestore, Pub/Sub, RAG
+./deploy/verify_deployment.sh 2    # MCP servers: up, anonymous=403, authed≠403
+./deploy/verify_deployment.sh 3    # engines pass 1: 6 engines, AGENT IDENTITY on
+./deploy/verify_deployment.sh 5    # the app: pinned 1/1, task-store gate 403/200
+./deploy/verify_deployment.sh 4    # gateway: registry, policies, egress grants
+./deploy/verify_deployment.sh 4s   # EVERY principal + service account + role
+./deploy/verify_deployment.sh 4e   # all 6 engines attached to the gateway
+./deploy/verify_deployment.sh 3b   # engines pass 2: TELEMETRY, TASK_STORE_URL, trace propagation
+./deploy/verify_deployment.sh      # everything (50+ checks)
+```
+
+`3b` and `4s` are the two that catch the failures a green deploy hides — a fleet with tracing
+silently off, engines silently on a per-replica task store, a missing `agentContextEditor`
+(agent cannot write its own sessions → opaque `TASK_STATE_FAILED`), a missing topic-scoped
+`pubsub.publisher` (mesh telemetry never leaves the engine, console graph never draws), no MCP
+invoker SA (an agent identity has NO service account, so it must impersonate one to mint an
+OIDC token — every MCP call 401s), or engines running as a service account instead of an agent
+identity (in which case the demo is not demonstrating the thing it exists to demonstrate).
+
+## Manual spot-checks (beyond the script)
+
 A deploy can exit 0 and still be broken. After step 6, **read the state back**:
 
 ```bash

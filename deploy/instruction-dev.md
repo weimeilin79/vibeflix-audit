@@ -67,6 +67,11 @@ Verified end-to-end (all 4 layers) on 2026-07-13. Each of these cost us hours:
 
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
+> ✅ **When this step is done, prove it:** `./deploy/verify_deployment.sh 1`
+> (read-only, exits non-zero on failure). A deploy exiting 0 does **not** mean the
+> thing is there — that is how the whole fleet ended up untraced and how the engines
+> silently fell back to a per-replica task store.
+
 ```bash
 # 1-0. Enable EVERY API the walkthrough touches (one shot, idempotent):
 gcloud services enable --project=$PROJECT \
@@ -101,6 +106,11 @@ gcloud pubsub subscriptions create vibeflix-mesh-events-app-cloud \
 ---
 
 ## Step 2 — MCP servers → Cloud Run (with credentials)
+
+> ✅ **When this step is done, prove it:** `./deploy/verify_deployment.sh 2`
+> (read-only, exits non-zero on failure). A deploy exiting 0 does **not** mean the
+> thing is there — that is how the whole fleet ended up untraced and how the engines
+> silently fell back to a per-replica task store.
 
 **2a. Image registry + builds** (Cloud Build → Artifact Registry):
 
@@ -194,6 +204,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $URL/mcp \
 ---
 
 ## Step 3 — Agents → Agent Runtime + agent identity
+
+> ✅ **When this step is done, prove it:** `./deploy/verify_deployment.sh 3`
+> (read-only, exits non-zero on failure). A deploy exiting 0 does **not** mean the
+> thing is there — that is how the whole fleet ended up untraced and how the engines
+> silently fell back to a per-replica task store.
 
 > Code prerequisite: the repo's cloud-auth changes (identity-token headers on
 > `mcp_clients` + A2A calls; `_CONTRACTS` in Firestore) must be merged first.
@@ -412,6 +427,11 @@ done
 ---
 
 ## Step 4 — Agent Gateway + policies
+
+> ✅ **When this step is done, prove it:** `./deploy/verify_deployment.sh 4`
+> (read-only, exits non-zero on failure). A deploy exiting 0 does **not** mean the
+> thing is there — that is how the whole fleet ended up untraced and how the engines
+> silently fell back to a per-replica task store.
 
 Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/cloudnet-agent-gateway)
 (⚠️ preview — verify spellings against your gcloud release).
@@ -850,6 +870,11 @@ agents-cli publish gemini-enterprise --registration-type a2a \
 ---
 
 ## Step 5 — Frontend (console app) → Cloud Run
+
+> ✅ **When this step is done, prove it:** `./deploy/verify_deployment.sh 5`
+> (read-only, exits non-zero on failure). A deploy exiting 0 does **not** mean the
+> thing is there — that is how the whole fleet ended up untraced and how the engines
+> silently fell back to a per-replica task store.
 
 ```bash
 # 5a. app runtime SA — Vertex (engine A2A calls), Firestore (audit history),
