@@ -2,7 +2,14 @@
 # Layer 3: app → ui_renderer (presenter). Grant if gateway-routed + probe via a full audit.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; D="$DIR/diag.sh"
-export PROJECT="${PROJECT:-pokedemo-test}" REGION="${REGION:-us-central1}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  This used to default to a hardcoded project — so forgetting to export PROJECT" >&2
+  echo "  silently deployed to (or read from) SOMEONE ELSE'S project." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+export PROJECT="${PROJECT}" REGION="${REGION:-us-central1}"
 APP_SA="serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com"
 APP_URL=$(gcloud run services describe vibeflix-app --region $REGION --format 'value(status.url)')
 echo "═══ 3a: grant app → ui_renderer ═══"; "$D" grant_a2a "$APP_SA" vibeflix-ui-renderer

@@ -1,6 +1,6 @@
 variable "project" {
   type    = string
-  default = "pokedemo-test"
+  # No default — a hardcoded project id silently deploys to the wrong place.
 }
 
 variable "region" {

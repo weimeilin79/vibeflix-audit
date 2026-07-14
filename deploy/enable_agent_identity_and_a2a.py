@@ -8,9 +8,9 @@ This script updates each deployed Reasoning Engine to:
 It uses direct REST API calls to bypass Python SDK pydantic validation constraints.
 
 Usage:
-    PROJECT=pokedemo-test REGION=us-central1 python deploy/enable_agent_identity_and_a2a.py
+    PROJECT=<your-project> REGION=us-central1 python deploy/enable_agent_identity_and_a2a.py
     # or for a single engine:
-    PROJECT=pokedemo-test REGION=us-central1 python deploy/enable_agent_identity_and_a2a.py vibeflix-brand-style
+    PROJECT=<your-project> REGION=us-central1 python deploy/enable_agent_identity_and_a2a.py vibeflix-brand-style
 """
 
 import asyncio

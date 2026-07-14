@@ -53,19 +53,69 @@ def get_run_url(service_name: str) -> str:
         return ""
 
 import json
+
+
+def _project_number(project_id: str) -> str:
+    """The numeric id — engine resource names are `projects/<NUMBER>/...`, not the id."""
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["gcloud", "projects", "describe", project_id, "--format=value(projectNumber)"],
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return ""
+
+
 identities_path = ROOT / "deploy" / "agent_identities.json"
+identities = {}
 if identities_path.exists():
-    identities = json.loads(identities_path.read_text())
-    
-    _ENV.setdefault("MCP_BRAND_STYLE_URL", get_run_url("vibeflix-mcp-brand-style"))
-    _ENV.setdefault("MCP_LICENSING_URL", get_run_url("vibeflix-mcp-licensing"))
-    _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
+    _loaded = json.loads(identities_path.read_text())
 
-    # Where the engines keep their A2A tasks (the app, not this replica's memory).
-    # get_run_url() appends /mcp for the MCP servers — strip it; we want the app root.
-    _ENV.setdefault("TASK_STORE_URL",
-                    get_run_url("vibeflix-app").removesuffix("/mcp"))
+    # ⚠️ REFUSE IDENTITIES THAT BELONG TO ANOTHER PROJECT.
+    #
+    # agent_identities.json is COMMITTED, so a fresh clone starts life holding the ORIGINAL
+    # project's engine ids. This file is read BEFORE anything is deployed, to build
+    # LEGAL_A2A_URL / BRAND_STYLE_A2A_URL / … — so without this guard a brand-new project
+    # would deploy engines wired to the ENGINES OF A DIFFERENT PROJECT. Every A2A hop would
+    # then point across the project boundary, get refused by the gateway (no egress grant
+    # there), and the mesh would fail in ways that look like anything BUT the real cause.
+    #
+    # Engine resource names are `projects/<PROJECT_NUMBER>/locations/...`, so compare
+    # against THIS project's number. Foreign ⇒ ignore the file entirely and let the
+    # deploy proceed with no A2A URLs; `collect_agent_identities.py` regenerates it after
+    # the engines exist, and the SECOND deploy pass wires them up (see the two-pass order
+    # in deploy-vibeflix-skill/SKILL.md).
+    _num = _project_number(PROJECT)
+    _foreign = [k for k, v in _loaded.items()
+                if _num and f"projects/{_num}/" not in (v.get("engine") or "")]
+    if _foreign:
+        print(f"⚠️  deploy/agent_identities.json belongs to ANOTHER PROJECT "
+              f"(entries not under projects/{_num}: {', '.join(sorted(_foreign))}).\n"
+              f"    IGNORING it — otherwise this deploy would wire {PROJECT}'s engines to a "
+              f"different project's engines.\n"
+              f"    This is expected on a fresh project. Deploy the engines, then run:\n"
+              f"      PROJECT={PROJECT} REGION={REGION} python deploy/collect_agent_identities.py\n"
+              f"    …and deploy the engines AGAIN so the A2A URLs + TASK_STORE_URL are set.",
+              flush=True)
+    else:
+        identities = _loaded
 
+# These come from CLOUD RUN, not from the identities file — resolve them ALWAYS, even on a
+# fresh project whose identities were just rejected as foreign. (They were briefly nested
+# under `if identities:`, which meant a fresh project silently deployed with NO MCP urls and
+# NO task store.)
+_ENV.setdefault("MCP_BRAND_STYLE_URL", get_run_url("vibeflix-mcp-brand-style"))
+_ENV.setdefault("MCP_LICENSING_URL", get_run_url("vibeflix-mcp-licensing"))
+_ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
+
+# Where the engines keep their A2A tasks (the app, not this replica's memory).
+# get_run_url() appends /mcp for the MCP servers — strip it; we want the app root.
+# EMPTY on the first pass of a fresh project (the app doesn't exist yet) — the engines then
+# fall back to a per-replica store and say so loudly. Pass 2, after the app is up, sets it.
+_ENV.setdefault("TASK_STORE_URL",
+                get_run_url("vibeflix-app").removesuffix("/mcp"))
+
+if identities:
     # A2A hops use the MTLS aiplatform endpoint — the URL the agent endpoints are
     # REGISTERED with in the Agent Registry. The gateway only authorizes the destination
     # it has registered:

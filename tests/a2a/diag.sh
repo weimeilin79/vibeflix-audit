@@ -5,7 +5,14 @@
 #   ./deploy/a2a_diag.sh check_grant <target-display>
 #   ./deploy/a2a_diag.sh errs <display>
 set -uo pipefail
-P="${PROJECT:-pokedemo-test}"; R="${REGION:-us-central1}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  This used to default to a hardcoded project — so forgetting to export PROJECT" >&2
+  echo "  silently deployed to (or read from) SOMEONE ELSE'S project." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+P="${PROJECT}"; R="${REGION:-us-central1}"
 B="https://$R-aiplatform.googleapis.com/v1beta1"
 TOK() { gcloud auth print-access-token; }
 

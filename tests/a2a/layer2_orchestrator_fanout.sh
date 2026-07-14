@@ -2,7 +2,12 @@
 # Layer 2: orchestrator engine → brand_style, vendor_clearance, deal_pricing.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; D="$DIR/diag.sh"
-export PROJECT="${PROJECT:-pokedemo-test}" REGION="${REGION:-us-central1}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+export PROJECT="${PROJECT}" REGION="${REGION:-us-central1}"
 ORCH=$(jq -r '."vibeflix-orchestrator".principal' "$DIR/../../deploy/agent_identities.json")
 echo "═══ 2: grant orchestrator → 3 domain agents ═══"
 for T in vibeflix-brand-style vibeflix-vendor-clearance vibeflix-deal-pricing; do "$D" grant_a2a "$ORCH" "$T"; done

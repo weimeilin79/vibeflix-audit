@@ -9,7 +9,14 @@ Usage: PROJECT=… REGION=… python deploy/collect_agent_identities.py
 import json, os, pathlib
 import vertexai
 
-PROJECT = os.environ.get("PROJECT", "pokedemo-test")
+PROJECT = os.environ.get("PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+if not PROJECT:
+    raise SystemExit(
+        "✗ PROJECT / GOOGLE_CLOUD_PROJECT is not set. Refusing to guess.\n"
+        "  This used to default to a hardcoded project, so forgetting to export it\n"
+        "  silently pointed the script at SOMEONE ELSE'S project.\n"
+        "  Run:  export PROJECT=<your-project> REGION=<your-region>")
+
 REGION = os.environ.get("REGION", "us-central1")
 client = vertexai.Client(project=PROJECT, location=REGION,
                          http_options=dict(api_version="v1beta1"))

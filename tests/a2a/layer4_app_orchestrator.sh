@@ -2,7 +2,12 @@
 # Layer 4: app → orchestrator ENGINE (needs the runner→remote code switch first).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; D="$DIR/diag.sh"
-export PROJECT="${PROJECT:-pokedemo-test}" REGION="${REGION:-us-central1}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+export PROJECT="${PROJECT}" REGION="${REGION:-us-central1}"
 APP_SA="serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com"
 echo "═══ 4b: grant app → orchestrator ═══"; "$D" grant_a2a "$APP_SA" vibeflix-orchestrator
 echo "NOTE: 4a (code: app calls orchestrator engine) must be deployed first."

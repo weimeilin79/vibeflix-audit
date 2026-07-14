@@ -17,7 +17,7 @@ Prereqs (run in a venv that has them):
     gcloud auth application-default login              # ADC for the Vertex + GCS calls
 
 Usage:
-    PROJECT=pokedemo-test REGION=us-central1 BUCKET=vibeflix-artifacts \\
+    PROJECT=<your-project> REGION=us-central1 BUCKET=vibeflix-artifacts \\
         python deploy/setup_legal_rag.py
 """
 
@@ -32,7 +32,14 @@ from dotenv import load_dotenv
 # testing instead of the shell. Real shell env vars still take precedence (override=False).
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-PROJECT = os.environ.get("PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT", "pokedemo-test")
+PROJECT = os.environ.get("PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+if not PROJECT:
+    raise SystemExit(
+        "✗ PROJECT / GOOGLE_CLOUD_PROJECT is not set. Refusing to guess.\n"
+        "  This used to default to a hardcoded project, so forgetting to export it\n"
+        "  silently pointed the script at SOMEONE ELSE'S project.\n"
+        "  Run:  export PROJECT=<your-project> REGION=<your-region>")
+
 # ⚠️ RAG Engine is REGIONAL — use us-central1 (same as Memory Bank), NOT "global".
 REGION = os.environ.get("REGION", "us-central1")
 BUCKET = os.environ.get("BUCKET", "vibeflix-artifacts")

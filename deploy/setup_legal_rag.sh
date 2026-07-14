@@ -7,12 +7,19 @@
 # Wraps deploy/setup_legal_rag.py: ensures the SDK + APIs, then runs it.
 #
 # Usage:
-#   PROJECT=pokedemo-test REGION=us-central1 BUCKET=vibeflix-artifacts \
+#   PROJECT=<your-project> REGION=us-central1 BUCKET=vibeflix-artifacts \
 #     ./deploy/setup_legal_rag.sh
 #
 set -euo pipefail
 
-PROJECT="${PROJECT:-pokedemo-test}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  This used to default to a hardcoded project — so forgetting to export PROJECT" >&2
+  echo "  silently deployed to (or read from) SOMEONE ELSE'S project." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+PROJECT="${PROJECT}"
 REGION="${REGION:-us-central1}"          # RAG Engine is regional, not "global"
 BUCKET="${BUCKET:-vibeflix-artifacts}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

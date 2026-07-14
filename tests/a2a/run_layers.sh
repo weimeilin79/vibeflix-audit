@@ -16,7 +16,14 @@
 #
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
-PROJECT="${PROJECT:-pokedemo-test}"; REGION="${REGION:-us-central1}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  This used to default to a hardcoded project — so forgetting to export PROJECT" >&2
+  echo "  silently deployed to (or read from) SOMEONE ELSE'S project." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+PROJECT="${PROJECT}"; REGION="${REGION:-us-central1}"
 PY="$ROOT/.venv/bin/python"
 IDENT="$ROOT/deploy/agent_identities.json"
 eng() { jq -r --arg k "vibeflix-$1" '.[$k].engine' "$IDENT" | sed 's#.*/##'; }

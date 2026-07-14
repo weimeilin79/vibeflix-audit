@@ -7,7 +7,7 @@ redeploy. List/scalar registries are stored as {"items": [...]}; the MCP servers
 read them via registry_get(..., field="items").
 
 Run:
-  GOOGLE_CLOUD_PROJECT=pokedemo-test FIRESTORE_DATABASE=vibeflix-registry \
+  GOOGLE_CLOUD_PROJECT=<your-project> FIRESTORE_DATABASE=vibeflix-registry \
     python deploy/seed_firestore.py
 """
 
@@ -15,7 +15,14 @@ import os
 
 from google.cloud import firestore
 
-PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "pokedemo-test")
+PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("PROJECT", "")
+if not PROJECT:
+    raise SystemExit(
+        "✗ PROJECT / GOOGLE_CLOUD_PROJECT is not set. Refusing to guess.\n"
+        "  This used to default to a hardcoded project, so forgetting to export it\n"
+        "  silently pointed the script at SOMEONE ELSE'S project.\n"
+        "  Run:  export PROJECT=<your-project> REGION=<your-region>")
+
 DATABASE = os.environ.get("FIRESTORE_DATABASE", "vibeflix-registry")
 
 REGISTRIES = {

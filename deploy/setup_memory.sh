@@ -10,12 +10,19 @@
 # running in the A2A mesh (local / Cloud Run).
 #
 # Usage:
-#   PROJECT=pokedemo-test REGION=us-central1 BUCKET=vibeflix-artifacts \
+#   PROJECT=<your-project> REGION=us-central1 BUCKET=vibeflix-artifacts \
 #     ./deploy/setup_memory.sh
 #
 set -euo pipefail
 
-PROJECT="${PROJECT:-pokedemo-test}"
+if [ -z "${PROJECT:-}" ]; then
+  echo "✗ PROJECT is not set. Refusing to guess." >&2
+  echo "  This used to default to a hardcoded project — so forgetting to export PROJECT" >&2
+  echo "  silently deployed to (or read from) SOMEONE ELSE'S project." >&2
+  echo "  Run:  export PROJECT=<your-project> REGION=<your-region>" >&2
+  exit 1
+fi
+PROJECT="${PROJECT}"
 # ⚠️ Agent Engine + Memory Bank need a REGION, not "global" (the Gemini location).
 REGION="${REGION:-us-central1}"
 BUCKET="${BUCKET:-vibeflix-artifacts}"
