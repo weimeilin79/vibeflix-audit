@@ -38,6 +38,30 @@ Verified end-to-end (all 4 layers) on 2026-07-13. Each of these cost us hours:
    `CallToolRequest` (the model was inventing the check names). See `tests/a2a/README.md`.
 5. **Step 4's grants are not optional and must come AFTER the engines exist** (they key off
    `agent_identities.json`). The mesh fails in confusing, unrelated-looking ways without them.
+6. **⚠️ THE ENGINES ARE DEPLOYED TWICE, AND THE APP GOES IN THE MIDDLE.** The dependency is
+   circular:
+   - `deploy_agents_a2a.py` reads **`TASK_STORE_URL` from the APP's Cloud Run URL** (the app
+     hosts the shared A2A task store);
+   - the **app** needs the **engines'** A2A URLs (from `agent_identities.json`);
+   - `grant_agent_iam.sh` (step 4) needs the **app's URL** to register it as an egress
+     destination (`gcp-vibeflix-app`), or the engines are not *allowed* to reach the store.
+
+   So the real order is:
+
+   ```
+   step 3  engines PASS 1        → creates the agent identities
+   step 3e collect_agent_identities.py
+   step 5  THE APP               → now it has the engines' A2A urls   ← do this BEFORE step 4
+   step 4  gateway + ALL grants  → registers the app for task-store egress
+   step 3  engines PASS 2        → NOW they pick up TASK_STORE_URL
+   ```
+
+   The numbered steps below are written in dependency order for everything *except* this —
+   read the app step (5) before you run the grants (4), then come back and re-run the engine
+   deploy. **Skip pass 2 and it all still "works"**: every engine silently falls back to a
+   **per-replica** in-memory task store, ~87% of task polls 404, and runs get slow and flaky.
+   The tell is `[task-store] … FAILED … falling back to the per-replica store` in the engine
+   logs — and `[taskstore] CREATE …` never appearing in the app's.
 
 ---
 

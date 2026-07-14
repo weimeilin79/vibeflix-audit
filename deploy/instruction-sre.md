@@ -34,22 +34,45 @@ EOF
 
 Verified all 4 layers green on 2026-07-13. Run in this order; each step is expanded below.
 
+⚠️ **The engines are deployed TWICE. That is not a typo — the dependency is circular:**
+- `deploy_agents_a2a.py` reads **`TASK_STORE_URL` from the APP's Cloud Run URL** (the app hosts the shared A2A task store);
+- the **app** needs the **engines'** A2A URLs (from `agent_identities.json`);
+- `grant_agent_iam.sh` needs the **app's** URL to register it as an egress destination so the engines are *allowed* to reach the task store at all.
+
+Skip the second pass and everything still *looks* fine — but every engine silently falls back to a **per-replica** in-memory task store and ~87% of task polls 404 (slow, flaky runs). You'll see `[task-store] … FAILED … falling back to the per-replica store` in the engine logs.
+
 ```bash
-export PROJECT=pokedemo-test REGION=us-central1
+export PROJECT=<your-project> REGION=<your-region>
+cp deploy/.env.example deploy/.env      # then edit: PROJECT, REGION, BUCKET, TASK_STORE_KEY
 
 ./deploy/setup_pubsub.sh && ./deploy/setup_firestore.sh    # 1. foundations + seed data
+./deploy/setup_legal_rag.sh                                # 1b. legal RAG corpus → paste RAG_CORPUS into deploy/.env
 ./deploy/deploy_mcp_cloudrun.sh                            # 2. the 3 MCP servers → Cloud Run
 
-.venv/bin/python -u deploy/deploy_agents_a2a.py            # 3. all 6 engines, ONE process
-PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities.py  # 3e
+.venv/bin/python -u deploy/deploy_agents_a2a.py            # 3. engines PASS 1 — creates the agent identities
+PROJECT=$PROJECT REGION=$REGION .venv/bin/python deploy/collect_agent_identities.py  # 3e → agent_identities.json
 
-./deploy/setup_gateway.sh                                  # 4. registry + gateway + ALL grants
+#    4. THE APP — must exist BEFORE the grants (they register its URL) and before pass 2
+#       (the engines read TASK_STORE_URL from it). --min/--max-instances=1 is LOAD-BEARING:
+#       the task store is a dict in this process; a 2nd instance splits it (and splits the
+#       Pub/Sub mesh subscription, half-drawing the console's workflow graph).
+#       See "Step 5 — Frontend (console app)" below for the full command.
+
+./deploy/setup_gateway.sh                                  # 5. registry + gateway + ALL grants
 #    └─ ends by calling grant_agent_iam.sh: project roles (incl. agentContextEditor),
 #       Google-API egress, ALL-TO-ALL A2A egress, the MCP invoker SA (impersonation),
-#       gcp-iamcredentials registration, and the per-tool CEL allowlist.
+#       gcp-iamcredentials registration, the per-tool CEL allowlist, AND registers the app
+#       as `gcp-vibeflix-app` so the engines may reach the task store.
 
-PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh  # 5. verify all 4 layers
+.venv/bin/python -u deploy/deploy_agents_a2a.py            # 6. engines PASS 2 — NOW they pick up
+#                                                          #    TASK_STORE_URL + the A2A urls
+
+PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh  # 7. verify all 4 layers
 ```
+
+**Then VERIFY — a deploy can exit 0 and still be broken.** Read the state back from all six engines
+(`GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`, `TASK_STORE_URL` set, `A2A_TRACE_PROPAGATION=on`),
+and confirm the app logs `[taskstore] CREATE …` while **no** engine logs a `[task-store] … FAILED` fallback.
 
 Re-apply IAM at any time (idempotent, safe to re-run):
 `PROJECT=$PROJECT REGION=$REGION ./deploy/grant_agent_iam.sh [--dry-run]`
