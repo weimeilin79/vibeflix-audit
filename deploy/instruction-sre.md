@@ -369,8 +369,10 @@ graph LEDs light from the `-app-cloud` subscription, contract lands in history.
 > is OFF by default: on the py3.14 engine base its HTTP exporter crashes
 > (pyOpenSSL "Context has already been used") and egresses over mTLS. To enable:
 > (1) register the -mtls telemetry/logging/cloudtrace egress endpoints (step 4);
-> (2) redeploy engines with `TELEMETRY=on ./deploy/deploy_agents_a2a.py <agent>`,
-> which sets `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` +
+> (2) redeploy the engines — `./deploy/deploy_agents_a2a.py <agent>`. **Tracing is ON by
+> DEFAULT** (only an explicit `TELEMETRY=off` disables it; it used to be opt-in, and a
+> deploy that forgot the flag silently untraced the whole fleet and still exited 0).
+> It sets `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` +
 > `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` (gRPC exporter avoids the pyOpenSSL/HTTP path).
 > ⚠️ gRPC-exporter fix is coded but NOT yet live-verified — confirm traces land.
 

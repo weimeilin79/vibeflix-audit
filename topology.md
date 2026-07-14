@@ -35,10 +35,24 @@ The approved target state for the pokedemo-test deployment. Everything is
 
 | Caller | May call | Enforced by |
 |---|---|---|
-| console app | orchestrator, ui_renderer | gateway **client-to-agent ingress** on those 2 engines (⚠️ ingress governs only `query`/`streamQuery`) |
+| console app | orchestrator, ui_renderer | ⚠️ **NOT the gateway — plain IAM.** See below. |
 | orchestrator | brand_style, vendor_clearance, deal_pricing | egress grants to the 3 agents' registry entries |
 | vendor_clearance | legal | ONE egress grant (endpoint-scoped IAP binding) |
 | everyone else | nothing | no grant = denied |
+
+> ⚠️ **The app→engine hop is NOT governed by the gateway.** This row used to claim
+> "client-to-agent ingress"; that is wrong and the doc misled us for a while. Per Google's
+> Agent Gateway docs, **IAM is not enforced and IAP is not supported during ingress**, and
+> ingress can only govern `query`/`streamQuery` — which these engines do not even expose
+> (`api_mode=a2a_extension` ⇒ only `on_message_send`). What actually authorizes the app is
+> its own **project-level IAM** (`roles/aiplatform.user` + `roles/aiplatform.agentContextEditor`)
+> on a DIRECT A2A call (`vibeflix_common/a2a_engine.py`). The gateway governs **EGRESS only**
+> — agent→agent, agent→MCP, agent→Google API, agent→task store. That is still the whole
+> demo; it just isn't ingress.
+>
+> Also note the console app itself is deployed `--allow-unauthenticated` (the browser has to
+> load it), so **anyone with the URL can run an audit**. Only the task-store endpoints are
+> gated (shared secret). Fine for a demo; not a security boundary.
 
 ## Shared A2A task store (every engine → the app)
 
@@ -140,10 +154,15 @@ These are the non-obvious truths a fresh run must respect — none are in Google
 ## Local development — unaffected
 
 The compose mesh keeps running exactly as today: `RUN_LOCAL` auto-detect keeps
-every hop plain-http, the orchestrator runs **in-process in the app** locally
-(the engine split is cloud-only — the app keeps its ADK `Runner` path when
-local and switches to the remote orchestrator engine when deployed), and no
-gateway/IAM exists locally. The one code prerequisite this adds: the app needs
+every hop plain-http, and no gateway/IAM exists locally.
+
+**The orchestrator is its OWN container locally too** (`orchestrator`, :8006) — it is no
+longer in-process in the app. The app is a **thin client** in both worlds: it calls the
+orchestrator over A2A exactly the way it calls ui_renderer, so what you exercise locally is
+the same topology you deploy. (The in-process ADK `Runner` path survives only as a fallback
+when `ORCHESTRATOR_A2A_URL` is unset.)
+
+The one code prerequisite this adds: the app needs
 that runner-vs-remote-orchestrator switch before step 5 of the cloud runbooks.
 
 ## Token Exchange & Routing Flow (Gateway Egress)

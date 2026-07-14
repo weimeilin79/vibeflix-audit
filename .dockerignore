@@ -22,7 +22,6 @@ venv
 frontend/dist
 
 # Large session log — not needed in any image
-reference.md
 
 # Misc
 *.log

@@ -125,12 +125,35 @@ COMMON_ENV = {
     # console), so without the shared secret the task state would be world-writable.
     "TASK_STORE_URL": _ENV.get("TASK_STORE_URL", ""),
     "TASK_STORE_KEY": _ENV.get("TASK_STORE_KEY", ""),
+    # Propagate W3C traceparent across every A2A hop, so Cloud Trace stitches the mesh into
+    # ONE trace and the console's Agent Platform → Topology page can draw the edges.
+    #
+    # A previous attempt collapsed the callee's traces (68 spans → 2-span fragments) and was
+    # reverted. ROOT CAUSE (found by testing orchestrator→brand_style in isolation): a bare
+    # inject() propagates whatever context is current — INCLUDING AN UNSAMPLED ONE
+    # (flags=00) — and the callee honours that flag and drops nearly all of its own spans.
+    # a2a_engine only injects a context that is BOTH valid AND sampled; otherwise it sends
+    # nothing and the callee starts its own fully-sampled trace.
+    # MEASURED with the guard: one trace, 63 spans across 5 services, 56 agent spans —
+    # RICHER than the 32-agent-span best case before. Nothing collapsed.
+    "A2A_TRACE_PROPAGATION": _ENV.get("A2A_TRACE_PROPAGATION", "on"),
     "WEB_CONCURRENCY": "1",
-    # Engine OTLP telemetry → Cloud Trace / Observability panel. Off by default
-    # because the HTTP exporter crashes on the py3.14 base (pyOpenSSL) and 403s
-    # through the gateway. Enable with TELEMETRY=on, which ALSO forces the gRPC
-    # exporter (bypasses the broken requests/pyOpenSSL path) — needs the mTLS
-    # telemetry egress endpoints registered (setup step) + a rebuild to verify.
+    # Engine OTLP telemetry → Cloud Trace + the console's Observability panel.
+    #
+    # ⚠️ ON BY DEFAULT, AND IT MUST STAY THAT WAY. The traces ARE the demo: every agent has
+    # to be traced, always. This used to be OPT-IN (`TELEMETRY=on`, defaulting to false), and
+    # that default is a trap — a redeploy that merely FORGETS the flag turns tracing off
+    # across the whole fleet, reports success, and exits 0. That happened: all six engines
+    # came back with telemetry=false and every trace vanished, silently. Now you have to ask
+    # for the broken state explicitly (`TELEMETRY=off`), and the safe state is the default.
+    #
+    # (Historic reason it was opt-in: the OTLP *HTTP* exporter crashes on the py3.14 base —
+    # pyOpenSSL "Context has already been used" — and 403s through the gateway. That is why
+    # this block ALSO forces the gRPC exporter, which is the working path.)
+    #
+    # STILL VERIFY AFTER EVERY DEPLOY — do not trust the exit code. Read the flag back:
+    #   GET …/reasoningEngines/<id> → spec.deploymentSpec.env[] →
+    #   GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY == "true"   (for all six)
     **({
         "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
         "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "true",
@@ -153,10 +176,28 @@ COMMON_ENV = {
         # swaps its tracer for a no-op. It does NOT affect the spans we actually want —
         # invocation / invoke_workflow / invoke_agent / call_llm / execute_tool all come
         # from ADK's instrumentation, not A2A's.
-        "OTEL_INSTRUMENTATION_A2A_SDK_ENABLED": "false",
+        # The A2A SDK's OWN spans (a2a.server.request_handlers.*, EventQueue.*).
+        #
+        # These are the ONLY spans that identify an A2A hop — nothing else in the trace says
+        # "orchestrator called brand_style" (our client uses `requests`, which is
+        # uninstrumented, so there is no client span). With them off, the console's
+        # Agent Platform → Topology queries — "agents sending traffic to X", "agents
+        # receiving traffic from X", "MCP servers exchanging traffic with X" — all come back
+        # EMPTY, even though the trace is correctly linked end-to-end.
+        #
+        # They were turned OFF because they swamped the trace (dequeue_event = 44.5% of all
+        # spans). But that flood was mostly a SYMPTOM of two bugs now fixed: EventConsumer
+        # emits one span per 0.5s of WAITING, and on_get_task emitted one per poll — so the
+        # 5-minute runs and the 86.8% 404 storm were what made it enormous. With runs at
+        # ~1m44s and 0% misses, the span count falls with them.
+        # Flip back with A2A_SDK_SPANS=off in deploy/.env if it is still too noisy.
+        "OTEL_INSTRUMENTATION_A2A_SDK_ENABLED":
+            "false" if _ENV.get("A2A_SDK_SPANS", "on").lower() == "off" else "true",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc",
-    } if _ENV.get("TELEMETRY", "").lower() == "on" else {
+    # DEFAULT ON. Only an explicit TELEMETRY=off disables it — forgetting the flag can no
+    # longer silently untrace the fleet.
+    } if _ENV.get("TELEMETRY", "on").lower() != "off" else {
         "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "false",
     }),
 }

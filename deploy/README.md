@@ -1,10 +1,11 @@
 # Deploying the Vibeflix audit mesh
 
-The system is split into **9 independently deployable services**:
+The system is split into **10 independently deployable services**:
 
 | Service | Role | Protocol | Local port |
 |---|---|---|---|
-| `app` | frontend (static) + FastAPI + Sourcing Orchestrator (A2A **client**) | HTTP | 8000 |
+| `app` | frontend (static) + FastAPI — a **thin A2A client** (it calls `orchestrator` exactly the way it calls `ui_renderer`) + the **shared A2A task store** (`/api/taskstore/*`) | HTTP | 8000 |
+| `orchestrator` | Sourcing Orchestrator — an **independent agent** (deterministic Workflow graph). It fans out to the 3 domain agents **under its own agent identity**, so the gateway's A2A egress policies are genuinely in the path. It is NOT a library inside the app. | A2A/HTTP | 8006 |
 | `brand_style` | Brand Style agent (A2A **server**) | A2A/HTTP | 8001 |
 | `vendor_clearance` | Vendor & Licensing Clearance agent (A2A **server**) | A2A/HTTP | 8002 |
 | `deal_pricing` | Deal Pricing agent (A2A **server**) | A2A/HTTP | 8003 |
@@ -18,27 +19,58 @@ Wiring is entirely by environment variable, so the same images run locally
 (compose) or on Cloud Run.
 
 ```
-orchestrator ──A2A──> brand_style      ──HTTP──> mcp_brand_style
-            ──A2A──> vendor_clearance ──HTTP──> mcp_licensing, mcp_market
-                     vendor_clearance ──A2A───> legal ──HTTP──> mcp_licensing
-            ──A2A──> deal_pricing     ──HTTP──> mcp_licensing
-   app      ──A2A──> ui_renderer   (reports → A2UI panels, no MCP)
+   app ──A2A──> orchestrator ──A2A──> brand_style      ──HTTP──> mcp_brand_style
+   app ──A2A──> ui_renderer               (reports → A2UI panels, no MCP)
+                             ──A2A──> vendor_clearance ──HTTP──> mcp_licensing, mcp_market
+                                      vendor_clearance ──A2A───> legal ──HTTP──> mcp_licensing
+                             ──A2A──> deal_pricing     ──HTTP──> mcp_licensing
+
+   every engine ──HTTPS──> app /api/taskstore/*   (the SHARED A2A task store)
 ```
 
 ## Environment contract
 
-**app** (orchestrator / A2A client **+ in-process UI-Render agent**)
-- `BRAND_STYLE_A2A_URL`, `VENDOR_CLEARANCE_A2A_URL`, `DEAL_PRICING_A2A_URL`, `UI_RENDERER_A2A_URL` — base URLs of the agent services.
+**app** (thin A2A client + the shared A2A task store)
+- `ORCHESTRATOR_A2A_URL`, `UI_RENDERER_A2A_URL` — the app is a **thin client**: it calls the orchestrator over A2A exactly as it calls ui_renderer. (`BRAND_STYLE_A2A_URL` etc. remain for the readiness probe / local fallback.)
 - `PORT` — serves UI + `/api/*`.
-- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI=true` — **the app now calls Gemini itself** for the in-process A2UI presenter (`agents/ui_renderer`), so it needs Vertex access. In compose these come from the `x-vertex-env` anchor + the ADC mount; **on Cloud Run the app's runtime service account needs `roles/aiplatform.user`** (it didn't before — the orchestrator alone made no model calls). Optional `PRESENTER_MODEL` (default `gemini-flash-latest`). If Vertex is unreachable, the presenter falls back to a rule-based summary, so the UI still renders.
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI=true` — the app calls Gemini for the A2UI presenter fallback, so it needs Vertex access. On Cloud Run its SA needs `roles/aiplatform.user` **and `roles/aiplatform.agentContextEditor`** (without the latter, `GET /a2a/v1/tasks/{id}` 401s and the slow agents appear to hang forever).
 - `REQUEST_IMAGE_BUCKET` (default `vibeflix-request-image`) — target for `/api/upload`; SA needs write.
-- The UI-Render agent runs **in-process** (no service/port of its own) — its code + skill ship inside the app image (`COPY agents/`).
+- `TASK_STORE_KEY` — shared secret gating `/api/taskstore/*`. The app is deployed
+  `--allow-unauthenticated` (the browser must load the console), so without it the agents'
+  A2A task state would be world-readable and world-writable.
+- ⚠️ **`--min-instances=1 --max-instances=1` is LOAD-BEARING, not cost control.** The task
+  store is a dict in this process: a second app instance splits it and every task poll that
+  lands on the wrong one 404s — the exact bug the store exists to kill. One instance also
+  keeps the Pub/Sub mesh subscription on a single consumer (a subscription is a
+  *competing-consumer* queue — 2+ instances split the telemetry and the console's workflow
+  graph renders only a fraction of its nodes).
 
-**agents** (`brand_style` / `vendor_clearance` / `deal_pricing` / `ui_renderer` / `legal`)
+**agents** (`orchestrator` / `brand_style` / `vendor_clearance` / `deal_pricing` / `ui_renderer` / `legal`)
 - `A2A_AGENT` — which agent this container serves.
-- `A2A_HOST`, `A2A_PROTOCOL`, `PORT` — shape the URL published in the agent card (what the orchestrator calls).
-- `MCP_BRAND_STYLE_URL` / `MCP_LICENSING_URL` / `MCP_MARKET_URL` — only the groups the agent uses (brand_style → brand_style; vendor_clearance → licensing + market).
+- `A2A_HOST`, `A2A_PROTOCOL`, `PORT` — shape the URL published in the agent card.
+- `MCP_BRAND_STYLE_URL` / `MCP_LICENSING_URL` / `MCP_MARKET_URL` — only the groups the agent uses.
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI=true` — Vertex AI.
+- `TASK_STORE_URL` + `TASK_STORE_KEY` — where the engine keeps its A2A tasks (the app). Without
+  these it silently falls back to a **per-replica** in-memory store and task polls 404 (measured
+  86.8% miss rate). See the README's *Shared A2A Task Store*.
+
+**Observability flags** (set in `deploy/.env`, consumed by `deploy/deploy_agents_a2a.py`)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `TELEMETRY` | **`on` (default)** | OTel traces → Cloud Trace + the console's Observability panel. **The traces ARE the demo — every agent is traced, always.** Only an explicit `TELEMETRY=off` disables it. It used to be *opt-in* (defaulting to `false`), which is a trap: a redeploy that merely FORGOT the flag untraced the whole fleet, reported success and exited 0 — that happened, and every trace vanished silently. The default is now the safe state. Also sets `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` (the switch the console reads for prompt/response content) and forces the gRPC exporter (the HTTP one crashes on the py3.14 base). **Still read the flag back from all six engines after a deploy — never trust the exit code.** |
+| `A2A_TRACE_PROPAGATION` | `on` | Propagates the W3C `traceparent` across every A2A hop, so Cloud Trace stitches the mesh into **one** trace and the console's **Agent Platform → Topology** page can draw edges (without it: "No recent trace connections detected"). ⚠️ Only a **valid AND sampled** context is injected — see below. |
+| `A2A_SDK_SPANS` | `off` | The A2A SDK's own spans (`a2a.server.*`). **Deliberately off.** They carry **no attributes** (`"attributes": []` — they name no peer and describe no hop), so they cannot populate any topology query, while `EventQueue.dequeue_event` emits one span per 0.5s of *waiting* per in-flight task. Measured with them on: **504 of 560 spans (90%) were A2A plumbing, `dequeue_event` alone 46%**, burying the agent spans. Tested and reverted. |
+
+> **Why `A2A_TRACE_PROPAGATION` guards on the sampling flag.** A first attempt injected the
+> `traceparent` unconditionally and made tracing far *worse* — per-engine traces collapsed from
+> 68 spans to 2-span fragments — and was reverted as "propagation doesn't work here". **That
+> diagnosis was wrong.** A bare `inject()` propagates whatever context is current, *including an
+> unsampled one* (`…-00`), and the callee honours that flag and drops nearly all of its own
+> spans. The remote parent was never the problem; the sampling bit was. Guarding on
+> *valid + sampled* (`vibeflix_common/a2a_engine.py`) gives, measured on one run: **one trace,
+> 63 spans, 5 services, 56 agent spans** — richer than the 32-agent-span best case when every
+> engine traced itself in isolation.
 
 **mcp servers**
 - `MCP_TRANSPORT=streamable-http`, `HOST`, `PORT` — serves MCP at `/mcp`.

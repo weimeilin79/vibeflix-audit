@@ -121,7 +121,10 @@ engine's own Vertex calls): register + grant aiplatform(+mtls), agentregistry(+m
 telemetry(+mtls), logging(+mtls), cloudtrace, pubsub, **iamcredentials(+mtls)**.
 
 **Engine OTLP telemetry crashes** on the py3.14 base (pyOpenSSL "Context has already
-been used" in the HTTP exporter). Disabled by default; `TELEMETRY=on` re-enables it
+been used" in the HTTP exporter), so the deploy forces the **gRPC** exporter.
+**Tracing is ON by default and must stay that way — the traces ARE the demo.** Only an
+explicit `TELEMETRY=off` disables it. It used to be opt-in, and a redeploy that simply
+forgot the flag untraced all six engines while still exiting 0. Verify after every deploy
 with the gRPC exporter (needs rebuild + verify).
 
 **Console playground cannot drive these engines** — they expose only

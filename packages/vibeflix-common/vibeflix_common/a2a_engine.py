@@ -78,21 +78,25 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     creds.refresh(_gar.Request())
     hdr = _headers()
 
-    # NOTE — trace context is deliberately NOT propagated across the A2A hop.
+    # TRACE CONTEXT IS PROPAGATED — but ONLY when it is valid AND sampled. See below.
     #
-    # Each engine emits its OWN trace, so Cloud Trace shows one rich per-agent tree per
-    # engine (68 spans: invoke_agent → call_llm → generate_content gemini-2.5-flash, plus
-    # the A2A handler internals) rather than a single tree spanning the whole mesh.
+    # HISTORY (so nobody "fixes" this back): a first attempt injected the W3C `traceparent`
+    # unconditionally (`opentelemetry.propagate.inject(hdr)`) and made tracing far WORSE —
+    # the per-engine traces collapsed from 68 spans to 2-span fragments with no agent spans
+    # at all. It was reverted as "propagation doesn't work here". That diagnosis was wrong.
     #
-    # We TRIED injecting the W3C `traceparent` here (opentelemetry.propagate.inject(hdr)).
-    # It made things WORSE, not better: the per-engine traces collapsed from 68 spans to
-    # 2-span fragments with no agent spans at all — the callee's spans appear to attach to
-    # a parent that never gets exported, so the useful detail is scattered/dropped. Reverted.
+    # ROOT CAUSE (found by enabling it on orchestrator→brand_style alone and measuring):
+    # a bare inject() propagates WHATEVER context is current — including an UNSAMPLED one
+    # (`traceparent: …-00`). The callee honours that sampling flag and therefore DROPS
+    # nearly all of its own spans. The parent was never the problem; the sampling bit was.
     #
-    # If you want the single end-to-end tree (it IS the better demo), the receiving half is
-    # already in place (otel.py installs a CompositePropagator with TraceContext +
-    # CloudTrace formats) — but the failure above needs root-causing first. Don't just
-    # re-add inject() and assume.
+    # With the guard (valid + sampled only), measured on one run:
+    #   ONE trace · 63 spans · 5 services (orchestrator, brand_style, vendor_clearance,
+    #   deal_pricing, MCP) · 56 agent spans — RICHER than the 32-agent-span best case when
+    #   every engine traced itself in isolation. Nothing collapsed.
+    # This is also what lets the console's Agent Platform → Topology page draw the mesh:
+    # it builds edges from cross-service trace connections, and without propagation there
+    # are none ("No recent trace connections detected").
 
     # We call the MTLS url (BRAND_STYLE_A2A_URL etc. point there) because the agent
     # endpoints are REGISTERED with it, and the gateway only authorizes the destination it
@@ -104,6 +108,34 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     # Authentication source; ~1982B cert) and we briefly presented it — but a controlled
     # test with the cert disabled passed cleanly (0 × 401/403, downstream engines ran), so
     # the 401 we were chasing was purely the missing `Authorization` header above.
+    # ── OPT-IN W3C trace propagation (A2A_TRACE_PROPAGATION=on) ──────────────────────
+    # Without this every engine emits its OWN trace, so Cloud Trace has no cross-service
+    # edges and the console's Agent Platform → Topology page says
+    # "No recent trace connections detected".
+    #
+    # The last attempt at this collapsed the per-engine traces from 68 spans to 2-span
+    # fragments. THE LIKELY REASON — and the reason for the guard below: a bare
+    # `inject(hdr)` propagates whatever context is current, INCLUDING AN UNSAMPLED ONE
+    # (`flags=00`). The callee honours that flag and drops nearly all of its own spans. So
+    # only propagate a context that is BOTH valid AND sampled; otherwise send nothing and
+    # let the callee start its own (fully sampled) trace, exactly as it does today.
+    # Injected on the POST only — the task-poll GETs are plumbing and would just add noise.
+    if os.environ.get("A2A_TRACE_PROPAGATION", "").lower() == "on":
+        try:
+            from opentelemetry import trace as _otel_trace
+            from opentelemetry.propagate import inject as _otel_inject
+            _ctx = _otel_trace.get_current_span().get_span_context()
+            if _ctx.is_valid and _ctx.trace_flags.sampled:
+                _otel_inject(hdr)
+                print(f"[a2a] traceparent → {base.rsplit('/', 1)[-1]} "
+                      f"trace={format(_ctx.trace_id, '032x')} (sampled)", flush=True)
+            else:
+                print(f"[a2a] NOT propagating: valid={_ctx.is_valid} "
+                      f"sampled={bool(_ctx.trace_flags.sampled)} — the callee keeps its own "
+                      f"trace (an unsampled parent would make it DROP its spans)", flush=True)
+        except Exception as _e:  # noqa: BLE001 — tracing must never break the call
+            print(f"[a2a] traceparent inject failed: {type(_e).__name__}: {_e}", flush=True)
+
     body = {"message": {"role": "ROLE_USER", "messageId": "vibeflix",
                         "content": [{"text": text}]}}
     url = f"{base}/a2a/v1/message:send"
