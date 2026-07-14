@@ -6,7 +6,8 @@ and region are variables throughout. For the command-by-command learning route,
 see [`instruction-dev.md`](instruction-dev.md).
 
 ```
-browser → app (Cloud Run) → 5 agents (Agent Runtime, agent identities)
+browser → app (Cloud Run, thin client + shared A2A task store)
+          → 6 agents (Agent Runtime, one AGENT IDENTITY each; orchestrator is one of them)
                               → Agent Gateway (policies.yaml) → 3 MCPs (Cloud Run)
           foundations underneath: Firestore (seeded) · Pub/Sub · GCS · RAG corpus
 ```
@@ -112,33 +113,18 @@ and confirm the app logs `[taskstore] CREATE …` while **no** engine logs a `[t
 Re-apply IAM at any time (idempotent, safe to re-run):
 `PROJECT=$PROJECT REGION=$REGION ./deploy/grant_agent_iam.sh [--dry-run]`
 
-**Five rules — each of these cost us hours:**
+**The rules that will break a fresh build — full detail in [`GOTCHAS.md`](GOTCHAS.md):**
 
-1. **⛔ NEVER DELETE AN ENGINE.** The engine id is baked into its `principal://`. Redeploy
-   *updates in place* and keeps the id. Delete + recreate ⇒ new principal ⇒ every IAM grant
-   and registry endpoint silently orphaned, while the console still looks correct. If you do
-   delete: re-run `collect_agent_identities.py`, then `grant_agent_iam.sh`, then re-point the
-   registry endpoints.
-2. **Deploy the engines SERIALLY** — `deploy_agents_a2a.py` with no args (one process) is
-   safe. Several processes in parallel race on the vendored `vibeflix_common/` dir and a
-   deploy fails **silently**, leaving that engine on its OLD code.
-3. **⏱️ Wait 2–5 minutes after any registry/IAM change before judging it.** We discarded a
-   *correct* fix twice by testing ~40s in and seeing a 403.
-4. **Verify from the BACKEND's log, never the agent's reply** — an agent whose toolset failed
-   still emits a confident, clean verdict. `run_layers.sh` checks the callee's log for exactly
-   this reason. See `tests/a2a/README.md`.
-5. **Step 4 must run AFTER the engines exist** (the grants key off `agent_identities.json`).
-6. **TWO A2A hosts — the app and the engines do NOT use the same one:**
-
-   | caller | `*_A2A_URL` host | why |
-   |---|---|---|
-   | **engines** (gateway-attached) | `REGION-aiplatform.**mtls**.googleapis.com` | egress goes THROUGH the gateway, which terminates the mTLS leg and only authorizes the destination it REGISTERED (the mtls url) |
-   | **the app** (plain Cloud Run SA) | `REGION-aiplatform.googleapis.com` | goes DIRECT — an mtls host demands a client cert the app doesn't have → **401** |
-
-   Get it wrong and `message:send` appears to work while every `GET /a2a/v1/tasks/{id}` poll
-   401s: the fast agent (brand_style) finishes, vendor_clearance/deal_pricing HANG FOREVER,
-   and the MCP tool LEDs never light. ⚠️ A bearer `GET` of the engine RESOURCE returns 200 on
-   **both** hosts, so that check will mislead you — it's the A2A METHOD calls that mtls rejects.
+| | rule | why it bites |
+|---|---|---|
+| [G1](GOTCHAS.md#g1--never-delete-an-engine) | ⛔ never delete an engine | new id ⇒ new principal ⇒ every grant silently orphaned |
+| [G2](GOTCHAS.md#g2--deploy-the-engines-serially) | deploy engines serially | parallel deploys fail *silently*, leaving OLD code |
+| [G3](GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) | engines deploy **twice**, app in between | skip pass 2 ⇒ per-replica task store, ~87% of polls 404 |
+| [G4](GOTCHAS.md#g4--️-wait-25-minutes-after-any-registryiam-change) | ⏱️ wait 2–5 min after IAM/registry changes | we discarded a *correct* fix twice by judging too early |
+| [G5](GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) | app pinned to exactly 1 instance | 2 instances split the task store **and** the mesh graph |
+| [G6](GOTCHAS.md#g6--tracing-must-be-on-for-every-agent--and-it-used-to-default-off) | tracing on, always | a deploy that *forgot* the flag untraced the fleet and exited 0 |
+| [G7](GOTCHAS.md#g7--verify-from-the-backends-log-never-the-agents-reply) | trust the backend's log, not the agent's reply | agents emit confident verdicts with **zero** tool calls |
+| [G11](GOTCHAS.md#g11--two-a2a-hosts--the-app-and-the-engines-do-not-use-the-same-one) | two A2A hosts (engines=mtls, app=plain) | wrong host ⇒ polls 401, slow agents hang forever |
 
 ---
 
@@ -186,7 +172,10 @@ apply. Until then, grant the agents temporary direct access when you reach step 
 ```bash
 terraform -chdir=deploy/terraform/mcp apply \
   -var project=$PROJECT -var region=$REGION -var deployer=user:$(gcloud config get-value account) \
-  -var 'invoker_members=["serviceAccount:vibeflix-agents@'$PROJECT'.iam.gserviceaccount.com"]'
+  -var 'invoker_members=["serviceAccount:vibeflix-mcp-invoker@'$PROJECT'.iam.gserviceaccount.com"]'
+# NB: the invoker is vibeflix-mcp-invoker — NOT a shared "agents" SA. The engines run as AGENT
+# IDENTITIES (no service account at all) and reach Cloud Run by IMPERSONATING this SA to mint an
+# audience-bound OIDC token. See GOTCHAS.md G9.
 ```
 
 ---
@@ -385,14 +374,11 @@ gcloud builds submit . --config deploy/cloudbuild-app.yaml \
   --substitutions "_IMAGE=$REGION-docker.pkg.dev/$PROJECT/vibeflix/app"
 
 # ⚠️ --min-instances=1 --max-instances=1 IS LOAD-BEARING, NOT A TUNING KNOB.
-#    The app hosts the engines' SHARED A2A TASK STORE (/api/taskstore/*) as a dict in
-#    process. Two app instances split that dict, and every `GET /a2a/v1/tasks/{id}` that
-#    lands on the wrong one 404s — which is the very bug the store exists to kill.
-#    It also keeps the Pub/Sub mesh subscription on ONE consumer: a subscription is a
-#    competing-consumer queue, so 2+ app instances SPLIT the telemetry and the console's
-#    workflow graph renders only a fraction of its nodes.
-# TASK_STORE_KEY gates those endpoints — the app is public (the browser must load the
-#    console), so without it the agents' task state is world-writable. Keep it in deploy/.env.
+#    The app hosts the engines' SHARED A2A TASK STORE and the single Pub/Sub mesh consumer.
+#    Two instances split BOTH → task polls 404 and the console's graph half-draws.
+#    Why: deploy/GOTCHAS.md  G5 (one instance) · G3 (the task store)
+# TASK_STORE_KEY gates those endpoints — the app is public, so they would otherwise be
+#    world-writable. Keep it in deploy/.env.
 gcloud run deploy vibeflix-app \
   --image "$REGION-docker.pkg.dev/$PROJECT/vibeflix/app" \
   --region "$REGION" --service-account "vibeflix-app@$PROJECT.iam.gserviceaccount.com" \
@@ -583,6 +569,6 @@ terraform -chdir=deploy/terraform/mcp destroy -var project=$PROJECT -var region=
 |---|---|
 | `vibeflix-mcp-licensing` | Firestore RW, topic-scoped publish |
 | `vibeflix-mcp-readonly` | Firestore RO, topic-scoped publish |
-| agent identities (or `vibeflix-agents`) | Vertex (Gemini+RAG), topic-scoped publish, asset-bucket read, gateway access per policies.yaml |
+| the 6 **agent identities** (`principal://…/reasoningEngines/<ID>`) — there is **no** shared agents SA | Vertex (Gemini+RAG), topic-scoped publish, asset-bucket read, gateway egress per `policies.yaml`; `tokenCreator` on `vibeflix-mcp-invoker` ([G9](GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)). Grant to the **specific** `principal://` — `principalSet://` matches nothing ([G10](GOTCHAS.md#g10--principalset-grants-do-not-match-agent-identities)). |
 | `vibeflix-app` | Vertex (engine A2A), Firestore RW, upload-bucket admin, own subscription pull, gateway read-only set |
 | gateway SA | **sole** `run.invoker` on the 3 MCP services |

@@ -65,35 +65,24 @@ If you skip pass 2, everything still "works" — but each engine silently falls 
 **per-replica** in-memory task store and ~87% of task polls 404. You will see
 `[task-store] … FAILED … falling back to the per-replica store` in the engine logs.
 
-## Non-negotiable rules (each of these cost hours)
+## Non-negotiable rules
 
-1. **⛔ NEVER DELETE AN ENGINE.** The engine id is baked into its
-   `principal://…/reasoningEngines/<ID>`. Redeploying the same display name **updates in
-   place** and keeps the id. Delete + recreate ⇒ new principal ⇒ **every IAM grant and
-   registry endpoint silently points at a dead principal**, while the console still looks
-   correct. If it happens: re-run `collect_agent_identities.py`, then `grant_agent_iam.sh`,
-   then re-point the registry endpoints.
+**Read [`deploy/GOTCHAS.md`](../deploy/GOTCHAS.md) — it is the single source of truth.** Every rule
+there fails SILENTLY: the deploy exits 0, the console looks correct, and the mesh misbehaves in a
+way that points somewhere else. The ones that will bite a fresh deploy:
 
-2. **Deploy engines SERIALLY.** One process (`deploy_agents_a2a.py` with no args). Parallel
-   processes race on the vendored `vibeflix_common/` dir and a deploy fails **silently**,
-   leaving that engine on its OLD code.
+| | rule |
+|---|---|
+| G1 | ⛔ **never delete an engine** — new id ⇒ new principal ⇒ every grant silently orphaned |
+| G2 | deploy engines **serially** — parallel deploys fail *silently*, leaving OLD code |
+| G3 | the engines deploy **TWICE**, with the app in between (circular dependency) |
+| G4 | ⏱️ **wait 2–5 min** after any registry/IAM change before judging it |
+| G5 | the app runs as **exactly one instance** — correctness, not cost |
+| G6 | **tracing on for every agent** — read the flag back, never trust the exit code |
+| G7 | verify from the **backend's log**, never the agent's reply |
 
-3. **The app MUST be `--min-instances=1 --max-instances=1`.** This is correctness, not cost
-   control. The task store is a dict in the app process — a second instance splits it and
-   rebuilds the very bug the store exists to kill. It also keeps the Pub/Sub mesh
-   subscription on a single consumer (a subscription is a *competing-consumer* queue; 2+
-   instances split the telemetry and the console's workflow graph renders only partially).
-
-4. **⏱️ Wait 2–5 minutes after any registry/IAM change before judging it.** Propagation is
-   not instant. A correct fix was discarded twice for being tested ~40s in and seeing a 403.
-
-5. **NEVER deploy while a run is in flight.** Redeploying an engine wipes its in-flight A2A
-   tasks. Ask the user to confirm nothing is running.
-
-6. **Verify from the BACKEND's log, never the agent's reply.** An agent whose toolset failed
-   to load still emits a confident, clean verdict — brand_style once reported
-   `status:"success"` with a plausible `checks_run` while the MCP had logged **zero**
-   `CallToolRequest`. The model invented the check names.
+Plus: **never deploy while a run is in flight** (it wipes in-flight A2A tasks — ask the user to
+confirm nothing is running).
 
 ## Verify — do not trust exit codes
 
@@ -146,29 +135,20 @@ done
 Then run `PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh` — it proves each of the
 4 layers from the callee's own log, which is the only trustworthy evidence.
 
-## Environment gotchas that will waste your day
+## Environment gotchas
 
-- **`GOOGLE_CLOUD_LOCATION=global`** for the engines. Keep it. Pinning it to the region does
-  NOT work even with the regional hosts registered and granted — the engines still 403.
-  Register/grant the **global** aiplatform hosts.
-- **The Agent Gateway governs HTTP egress only.** It cannot match a **gRPC channel** or a raw
-  **TCP socket** to a registered endpoint. That is why mesh telemetry publishes over Pub/Sub
-  **REST** (the gRPC client is refused with `403 Egress request is not authorized`, and the
-  failure lands on an unread future, so it fails *silently*), and why Cloud SQL / Redis are
-  unusable as a task store.
-- **An AGENT_IDENTITY engine has no service account** behind the metadata server, so
-  `fetch_id_token()` cannot work and the gateway does **not** inject a credential. Cloud Run
-  accepts only an audience-bound OIDC **ID token**, which the engine mints by impersonating
-  `MCP_INVOKER_SA`. Needs three things: the env var, `iam.serviceAccountTokenCreator` on that
-  SA, **and** `iap.egressor` on `gcp-iamcredentials*` (the gateway is default-deny, so even
-  the token-minting call must be allowlisted).
-- **`principalSet://` grants do NOT match agent identities.** They bind without error and
-  match nothing. Always use the specific `principal://`.
-- **Two A2A hosts.** Engines (gateway-attached) must call the **mTLS** aiplatform host — that
-  is what the registry has registered. The app (a plain SA, no client cert) must call the
-  **plain** host. Get it wrong and `message:send` appears to work while every task poll 401s.
-- **The app needs `roles/aiplatform.agentContextEditor`**, not just `aiplatform.user` —
-  without it `GET /a2a/v1/tasks/{id}` 401s and the slow agents appear to hang forever.
+**Do not restate them here — read [`deploy/GOTCHAS.md`](../deploy/GOTCHAS.md).** It is the single
+source of truth, and it explains each rule's *symptom* (which is the part that matters, because
+they all fail silently). The ones that reliably waste a day:
+
+- **G8** the Agent Gateway governs **HTTP egress only** — it cannot match a gRPC channel or a raw
+  TCP socket, which is why Pub/Sub publishes over REST and why Cloud SQL/Redis are unusable.
+- **G9** an AGENT_IDENTITY engine has **no service account** — it must impersonate `MCP_INVOKER_SA`
+  to mint an OIDC token, or every MCP call 401s.
+- **G10** `principalSet://` grants **match nothing** — always the specific `principal://`.
+- **G11** two A2A hosts: engines use **mtls**, the app uses **plain**.
+- **G12** `agentContextEditor` is required by the agents **and** the app.
+- **G13** keep `GOOGLE_CLOUD_LOCATION=global` — pinning it to the region 403s the whole fleet.
 
 ## Reference
 

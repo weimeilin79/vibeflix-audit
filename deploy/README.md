@@ -1,5 +1,9 @@
 # Deploying the Vibeflix audit mesh
 
+> ⚠️ **[`GOTCHAS.md`](GOTCHAS.md) is the single source of truth for the hard-won rules.**
+> This file is the *contract*: what the services are and which env vars wire them.
+
+
 The system is split into **10 independently deployable services**:
 
 | Service | Role | Protocol | Local port |

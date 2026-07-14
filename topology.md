@@ -1,5 +1,11 @@
 # topology.md — cloud security topology (agents, MCP, gateway, IAM)
 
+> Operational rules (never delete an engine, the two A2A hosts, the invoker-SA
+> impersonation, `principalSet` matching nothing) live in
+> **[`deploy/GOTCHAS.md`](deploy/GOTCHAS.md)** — the single source of truth.
+> This file is the *topology*: who may call whom, and what enforces it.
+
+
 The approved target state for the pokedemo-test deployment. Everything is
 **deny-by-default**: a connection exists only if a grant below creates it.
 
@@ -9,7 +15,7 @@ The approved target state for the pokedemo-test deployment. Everything is
                                    │ frontend + FastAPI only       │
                                    │ SA: vibeflix-app              │
                                    └───┬───────────────┬──────────┘
-                        A2A via GATEWAY│INGRESS ✅      │ (client-to-agent mode)
+                    DIRECT A2A (plain IAM │ — NOT the gateway; see the A2A matrix)
                                        ▼               ▼
                              ┌───────────────┐  ┌─────────────┐
                              │ ORCHESTRATOR  │  │ ui_renderer │      6 engines on
@@ -60,27 +66,18 @@ The approved target state for the pokedemo-test deployment. Everything is
 |---|---|---|
 | **all 6 agents** | `vibeflix-app` `/api/taskstore/*` | `gcp-vibeflix-app` registry Service + `roles/iap.egressor` on it (granted by `grant_agent_iam.sh` step 0+2), and `run.invoker` for `vibeflix-mcp-invoker` |
 
-**Why:** Agent Runtime runs each engine as several replicas behind a load balancer with no
-session affinity, and the A2A server's default `InMemoryTaskStore` is a dict **private to
-one replica**. `POST message:send` creates the task on replica *A*; `GET /a2a/v1/tasks/{id}`
-is balanced to replica *B* → `404 Task not found`. Measured: **86.8% of polls missed**
-(1,228 / 1,415). The engines now persist tasks in the app instead
-(`vibeflix_common/task_store.py`, wired via `A2aAgent(task_store_builder=…)`).
+**Why:** the A2A task store used to be in-memory **per replica**, so `GET /a2a/v1/tasks/{id}`
+missed **86.8%** of the time. The engines now persist tasks in the app
+(`vibeflix_common/task_store.py`). Full story + the two load-bearing constraints (one app
+instance; the shared-secret gate):
+[G3](deploy/GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) ·
+[G5](deploy/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) ·
+[G8](deploy/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only).
 
-**Auth is the MCP story reused verbatim:** an AGENT_IDENTITY engine has no SA behind the
-metadata server, so it mints an audience-bound ID token by impersonating `MCP_INVOKER_SA`
-(`cloud_auth.GoogleAuth` → `Authorization`), and the gateway leg carries the access token in
-`Proxy-Authorization`. The destination is HTTPS, which is the *only* reason it works — the
-gateway governs **HTTP** egress and cannot match a gRPC channel or raw TCP socket, which is
-why Cloud SQL/Postgres and Redis are unusable here (and why the Pub/Sub **gRPC** publisher
-had to be rewritten over REST).
-
-**Two load-bearing constraints:**
-- the app runs as **exactly one instance** (`--min-instances=1 --max-instances=1`) — two
-  instances split the dict and rebuild the bug one layer up (and split the Pub/Sub mesh
-  subscription, which is a competing-consumer queue, so the console's graph half-renders);
-- the endpoints are gated by a shared secret (`TASK_STORE_KEY` / `X-Task-Store-Key`) because
-  the app is **public** (`allUsers`) so the browser can load the console.
+**Auth is the MCP story reused verbatim** — an AGENT_IDENTITY engine has no service account, so
+it impersonates `MCP_INVOKER_SA` to mint an audience-bound ID token
+([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)). HTTPS is the
+*only* reason it works at all ([G8](deploy/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)).
 
 ## MCP matrix (through the gateway, per deploy/policies.yaml)
 
@@ -99,18 +96,31 @@ had to be rewritten over REST).
 
 | Identity | Kind | Roles / grants |
 |---|---|---|
-| 6 × agent principals (`principal://…/reasoningEngines/<id>`) | Agent Identity (enabled per engine, v1beta1 `identity_type`) | baseline via `principalSet://…/projects/<PN>`: `roles/aiplatform.expressUser`, `roles/serviceusage.serviceUsageConsumer`, `roles/browser`; topic-scoped `roles/pubsub.publisher` on `vibeflix-mesh-events`; per-agent `roles/iap.egressor` bindings (tool CEL per matrix above; endpoint-scoped for the A2A rows) |
-| `vibeflix-mcp-invoker` SA | plain SA (gateway backend egress; passed at engine attach) | `roles/run.invoker` on the 3 MCP Cloud Run services — **the only invoker** |
-| `vibeflix-mcp-licensing` SA | MCP runtime (licensing service) | `roles/datastore.user` (vendors CRUD), topic-scoped `pubsub.publisher`, `roles/cloudtrace.agent` (OTel spans) |
-| `vibeflix-mcp-readonly` SA | MCP runtime (market + brand-style) | `roles/datastore.viewer`, topic-scoped `pubsub.publisher`, `roles/cloudtrace.agent` (OTel spans) |
-| `vibeflix-app` SA | console app (Cloud Run) | `roles/aiplatform.user` (reach the gateway-governed engines), `roles/datastore.user` (audit history), `roles/storage.objectAdmin` on the upload bucket, `roles/pubsub.publisher` (topic) + `subscriber` on `vibeflix-mesh-events-app-cloud`, `roles/run.invoker` on mcp-licensing (direct read-set) |
-| your user | operator | temporary `run.invoker` for step-2 verification — **remove after 4e works** |
+| 6 × agent principals (`principal://…/reasoningEngines/<id>`) | Agent Identity (set at create, `identity_type=AGENT_IDENTITY`) | ⚠️ **grant to the SPECIFIC `principal://`, never `principalSet://`** — a principalSet binds without error and **matches nothing** ([G10](deploy/GOTCHAS.md#g10--principalset-grants-do-not-match-agent-identities)). Project roles: `aiplatform.user`, `aiplatform.agentDefaultAccess`, **`aiplatform.agentContextEditor`** ([G12](deploy/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget)), `agentregistry.viewer`, `logging.logWriter`, `monitoring.metricWriter`, `browser`; topic-scoped `pubsub.publisher` on `vibeflix-mesh-events`; `iam.serviceAccountTokenCreator` on the MCP invoker SA ([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)); per-agent `iap.egressor` (tool CEL per the matrix above). Audit with `./deploy/verify_deployment.sh 4s`. |
+| `vibeflix-mcp-invoker` SA | plain SA — how an agent identity authenticates to Cloud Run ([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)) | **no project roles.** `roles/run.invoker` on the 3 MCP services **and on `vibeflix-app`** (the shared task store). Each agent principal holds `iam.serviceAccountTokenCreator` on it. |
+| `vibeflix-mcp-licensing` SA | MCP runtime (licensing) | `roles/datastore.user` (vendors CRUD), `roles/cloudtrace.agent`; topic-scoped `pubsub.publisher` on `vibeflix-mesh-events` |
+| `vibeflix-mcp-readonly` SA | MCP runtime (market + brand-style) | `roles/datastore.viewer` (least privilege), `roles/cloudtrace.agent`; topic-scoped `pubsub.publisher` |
+| `vibeflix-app` SA | console app (Cloud Run) | `roles/aiplatform.user`, **`roles/aiplatform.agentContextEditor`** ([G12](deploy/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget) — without it every task poll 401s and the slow agents hang forever), `roles/aiplatform.agentDefaultAccess`, `roles/agentregistry.viewer`, `roles/datastore.user`; topic-scoped `pubsub.publisher` + `pubsub.subscriber` on `vibeflix-mesh-events-app-cloud`; `storage.objectAdmin` on `gs://vibeflix-request-image` |
+| your user | operator | `run.invoker` on the 3 MCP services — still granted, used for step-2 verification |
+
+### ⚠️ Cruft currently in the cluster (documented so it isn't mistaken for design)
+
+Real, verified against `pokedemo-test` today. None of it breaks anything; all of it is
+over-privilege or dead weight that a fresh deploy should NOT reproduce:
+
+| what | why it's there | action |
+|---|---|---|
+| `vibeflix-app` SA holds project-level **`roles/pubsub.editor`** | granted for a per-instance mesh subscription that was **reverted**. The app already has topic-scoped `publisher` + subscription-scoped `subscriber`, which is all it needs. | **remove** — it is unused over-privilege |
+| **`vibeflix-agents` SA** still exists (topic `publisher`, bucket `objectViewer`) | the pre-Agent-Identity shared service account. The engines now run as **agent identities** and never use it. | dead — remove once confirmed unused |
+| the MCP invoker SA has **12** `tokenCreator` members for 6 agents | 6 are orphaned principals of engines deleted in an earlier rebuild ([G1](deploy/GOTCHAS.md#g1--never-delete-an-engine)) | harmless (they match nothing) — evidence of why G1 matters |
+| operator (`user:…`) still holds `run.invoker` on the 3 MCPs | step-2 verification grant | fine to keep for a demo; remove for a locked-down environment |
+
 
 Enforcement layers, outermost first:
 1. **Cloud Run IAM** — only `vibeflix-mcp-invoker` (+ app on licensing) can invoke the MCP services at all.
 2. **Agent Gateway (egress)** — every agent's outbound MCP/A2A call is mTLS-identified, then
 3. **IAP `REQUEST_AUTHZ`** evaluates the `roles/iap.egressor` bindings (CEL on `mcp.toolName`; endpoint-scoped for A2A) — deny-by-default.
-4. **Gateway ingress (client-to-agent)** — the app's calls to orchestrator/ui_renderer are gateway-governed too (demo choice; note the query/streamQuery-only limitation).
+4. ~~Gateway ingress (client-to-agent)~~ — **NOT enforced.** IAM is not applied and IAP is not supported during ingress, and ingress can only govern `query`/`streamQuery`, which these `a2a_extension` engines do not expose. The app→engine hop is authorized by the app's own project IAM on a DIRECT A2A call. The gateway governs **EGRESS only**.
 5. **Registry** — destinations not registered in Agent Registry are blocked outright.
 
 ## Verified deployment facts (learned live, 2026-07-10)

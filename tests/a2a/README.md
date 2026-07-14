@@ -1,5 +1,10 @@
 # Mesh layer tests (cloud) — bottom-up, one hop at a time
 
+> The hard-won rules (why we check the BACKEND's log and never the agent's reply,
+> why tracing must be on, the two-pass deploy) live in **[`deploy/GOTCHAS.md`](../../deploy/GOTCHAS.md)** —
+> the single source of truth. This file only covers the harness.
+
+
     app ──▶ orchestrator engine ──A2A──▶ {brand_style, vendor_clearance, deal_pricing}
     app ──▶ ui_renderer                   vendor_clearance ──A2A──▶ legal
     every agent ──MCP──▶ {mcp-brand-style, mcp-licensing, mcp-market}

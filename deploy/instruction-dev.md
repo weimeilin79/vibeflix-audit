@@ -17,51 +17,25 @@ gcloud auth login && gcloud auth application-default login
 
 ---
 
-## ⚠️ Five rules that will break a fresh build if you ignore them
+## ⚠️ Read [`GOTCHAS.md`](GOTCHAS.md) before you start
 
-Verified end-to-end (all 4 layers) on 2026-07-13. Each of these cost us hours:
+Every rule there cost us hours, and **every one fails SILENTLY** — the deploy exits 0, the console
+looks right, and the mesh misbehaves in a way that points somewhere else. The ones that will break
+a fresh build:
 
-1. **⛔ NEVER DELETE AN ENGINE.** The engine id is baked into its `principal://…/reasoningEngines/<ID>`.
-   Redeploying the same display name *updates in place* and keeps the id (Agent Runtime makes
-   a new immutable **revision**, not a new engine). Delete + recreate ⇒ NEW id ⇒ NEW principal
-   ⇒ every IAM grant and registry endpoint silently points at a dead principal, while the
-   console still looks correct.
-2. **Deploy the engines SERIALLY** (step 3). One process is safe; several in parallel race on
-   the vendored `vibeflix_common/` dir and a deploy fails **silently**, leaving that engine on
-   its OLD code.
-3. **⏱️ Wait 2–5 minutes after any registry/IAM change before you judge it.** Propagation is
-   not instant. We discarded a *correct* fix twice by testing ~40s in, seeing a 403, and
-   concluding it hadn't worked.
-4. **Verify from the BACKEND's log, never the agent's reply.** An agent whose toolset failed
-   to load still emits a confident, clean verdict — brand_style reported `status:"success"`,
-   `findings:[]` and a plausible `checks_run` while the MCP server had logged **zero**
-   `CallToolRequest` (the model was inventing the check names). See `tests/a2a/README.md`.
-5. **Step 4's grants are not optional and must come AFTER the engines exist** (they key off
-   `agent_identities.json`). The mesh fails in confusing, unrelated-looking ways without them.
-6. **⚠️ THE ENGINES ARE DEPLOYED TWICE, AND THE APP GOES IN THE MIDDLE.** The dependency is
-   circular:
-   - `deploy_agents_a2a.py` reads **`TASK_STORE_URL` from the APP's Cloud Run URL** (the app
-     hosts the shared A2A task store);
-   - the **app** needs the **engines'** A2A URLs (from `agent_identities.json`);
-   - `grant_agent_iam.sh` (step 4) needs the **app's URL** to register it as an egress
-     destination (`gcp-vibeflix-app`), or the engines are not *allowed* to reach the store.
+| | rule |
+|---|---|
+| [G1](GOTCHAS.md#g1--never-delete-an-engine) | ⛔ **never delete an engine** — new id ⇒ new principal ⇒ every grant silently orphaned |
+| [G2](GOTCHAS.md#g2--deploy-the-engines-serially) | deploy engines **serially** — parallel deploys fail *silently*, leaving OLD code |
+| [G3](GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) | the engines deploy **TWICE**, with the app in between (the dependency is circular) |
+| [G4](GOTCHAS.md#g4--️-wait-25-minutes-after-any-registryiam-change) | ⏱️ **wait 2–5 min** after any registry/IAM change before judging it |
+| [G5](GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) | the app runs as **exactly one instance** — correctness, not cost |
+| [G6](GOTCHAS.md#g6--tracing-must-be-on-for-every-agent--and-it-used-to-default-off) | **tracing on for every agent** — read the flag back, never trust the exit code |
+| [G7](GOTCHAS.md#g7--verify-from-the-backends-log-never-the-agents-reply) | verify from the **backend's log**, never the agent's reply |
+| [G12](GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget) | `agentContextEditor` is required by the agents **and** the app |
 
-   So the real order is:
-
-   ```
-   step 3  engines PASS 1        → creates the agent identities
-   step 3e collect_agent_identities.py
-   step 5  THE APP               → now it has the engines' A2A urls   ← do this BEFORE step 4
-   step 4  gateway + ALL grants  → registers the app for task-store egress
-   step 3  engines PASS 2        → NOW they pick up TASK_STORE_URL
-   ```
-
-   The numbered steps below are written in dependency order for everything *except* this —
-   read the app step (5) before you run the grants (4), then come back and re-run the engine
-   deploy. **Skip pass 2 and it all still "works"**: every engine silently falls back to a
-   **per-replica** in-memory task store, ~87% of task polls 404, and runs get slow and flaky.
-   The tell is `[task-store] … FAILED … falling back to the per-replica store` in the engine
-   logs — and `[taskstore] CREATE …` never appearing in the app's.
+Step 4's grants are not optional and must run **after** the engines exist (they key off
+`agent_identities.json`).
 
 ---
 
@@ -265,26 +239,31 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $URL/mcp \
 > `roles/iap.egressor` on the `gcp-iamcredentials*` endpoints (the gateway is
 > default-deny, so even the token-minting call needs an allowlist entry).
 
-**3a. Runtime identity + grants** (agents call Gemini + RAG on Vertex, publish
-telemetry, and read the licensed-asset buckets by gs:// reference):
+**3a. Runtime identity — there is NO shared service account.**
 
-```bash
-gcloud iam service-accounts create vibeflix-agents --display-name "Vibeflix agents runtime"
-sleep 30
-gcloud projects add-iam-policy-binding $PROJECT --condition=None \
-  --member serviceAccount:vibeflix-agents@$PROJECT.iam.gserviceaccount.com --role roles/aiplatform.user
-gcloud pubsub topics add-iam-policy-binding vibeflix-mesh-events \
-  --member serviceAccount:vibeflix-agents@$PROJECT.iam.gserviceaccount.com --role roles/pubsub.publisher
-for B in vibeflix-request-image vibeflix-approved-assets; do
-  gcloud storage buckets add-iam-policy-binding gs://$B \
-    --member serviceAccount:vibeflix-agents@$PROJECT.iam.gserviceaccount.com --role roles/storage.objectViewer
-done
-# temporary direct MCP access until the gateway exists (step 4 revokes this):
-for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
-  gcloud run services add-iam-policy-binding $S --region $REGION \
-    --member serviceAccount:vibeflix-agents@$PROJECT.iam.gserviceaccount.com --role roles/run.invoker
-done
-```
+⚠️ Earlier versions of this runbook created a `vibeflix-agents` SA here and granted it
+`aiplatform.user`, topic publish, bucket read and `run.invoker`. **Do not.** Each engine is
+deployed with `identity_type=AGENT_IDENTITY` and executes as its own
+`principal://…/reasoningEngines/<ID>` — it never uses that SA, so every role granted to it is
+dead weight (and it is still sitting in `pokedemo-test` today, doing nothing). The doc then
+contradicted itself a few sections later by saying exactly that.
+
+**All agent permissions go to the PRINCIPALS**, and `deploy/grant_agent_iam.sh` (step 4) does it
+— it cannot run before the engines exist, because the principals do not exist until then. See
+[G9](GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account) (an agent identity has no SA,
+so it impersonates `MCP_INVOKER_SA` to reach Cloud Run) and
+[G10](GOTCHAS.md#g10--principalset-grants-do-not-match-agent-identities) (`principalSet://` binds
+without error and matches **nothing**).
+
+The only service accounts this demo needs:
+
+| SA | used by | why |
+|---|---|---|
+| `vibeflix-mcp-licensing` | the licensing MCP server | Firestore RW |
+| `vibeflix-mcp-readonly` | market + brand-style MCP servers | Firestore RO (least privilege) |
+| `vibeflix-mcp-invoker` | **the engines impersonate it** | mints the audience-bound OIDC token Cloud Run demands ([G9](GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)) |
+| `vibeflix-app` | the console app (Cloud Run) | its own runtime identity |
+
 
 **3b. Deploy each agent via the A2A TEMPLATE — one at a time, in dependency
 order.** `deploy/deploy_agents_a2a.py` wraps each `root_agent` in the SDK's
@@ -855,7 +834,7 @@ done   # all 6 should print vibeflix-gateway
 The plain `adk deploy agent_engine` CLI has no gateway flag yet — gateway
 attachment goes through the engine's config (the same surface the codelab's
 `deploy_agent.py` drives). Until your agents are attached, they keep working
-via their direct `MCP_*_URL` env (grant `vibeflix-agents` `run.invoker` on the
+via their direct `MCP_*_URL` env (the engines impersonate `vibeflix-mcp-invoker`, which holds `run.invoker` on the
 three services if you removed it). Once attached, the flow becomes:
 *agent (its own identity, mTLS) → gateway (IAP policy check per 4c) →
 vibeflix-mcp-invoker OIDC → Cloud Run MCP* — agents hold no per-MCP credentials.
@@ -931,24 +910,17 @@ UI_URL=$BASE/$(eng vibeflix-ui-renderer)
 # 5c. build + deploy
 export AR=$REGION-docker.pkg.dev/$PROJECT/vibeflix   # (re-set; step-2 var may be gone)
 gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app"
-# ⚠️ EXACTLY ONE INSTANCE. This is correctness, not cost control.
+# ⚠️ EXACTLY ONE INSTANCE. Correctness, not cost control.
 #
-# The app hosts the engines' SHARED A2A TASK STORE at /api/taskstore/* — a plain dict in
-# this process. Why it exists: Agent Runtime runs each engine as SEVERAL replicas behind a
-# load balancer, and the A2A server's default task store is in-memory PER REPLICA. So
-# `POST message:send` creates the task on replica [17] while `GET /a2a/v1/tasks/{id}` gets
-# balanced to [19] → `404 Task not found`. Measured: 86.8% of polls missed (1,228/1,415).
-# The engines now keep their tasks here instead — but if the APP runs two instances, the
-# dict splits and you have rebuilt the same bug one layer up.
+# The app hosts the engines' SHARED A2A TASK STORE (/api/taskstore/*) — a dict in this process —
+# and is the single consumer of the Pub/Sub mesh subscription. Two app instances split BOTH:
+# task polls 404 (the very bug the store exists to kill) and the console's workflow graph
+# renders only a fraction of its nodes.
+#   Full story: deploy/GOTCHAS.md → G5 (one instance) · G3 (the task store) · G14 (why 404s lie)
 #
-# One instance ALSO fixes the console's workflow graph: the Pub/Sub mesh subscription is a
-# COMPETING-CONSUMER queue, so each event goes to exactly ONE subscriber. With 2+ app
-# instances the telemetry is split between them and the browser (attached to one) sees only
-# a fraction of the nodes.
-#
-# TASK_STORE_KEY gates those endpoints. The app is --allow-unauthenticated (the browser has
-# to load the console), so without the shared secret anyone could read or tamper with the
-# agents' task state. Cloud Run IAM can't be used: locking it down locks out the frontend.
+# TASK_STORE_KEY gates those endpoints. The app is --allow-unauthenticated (the browser has to
+# load the console), so without the shared secret anyone could read or tamper with the agents'
+# task state. Cloud Run IAM can't be used: locking it down locks out the frontend.
 gcloud run deploy vibeflix-app --image $AR/app --region $REGION \
   --service-account vibeflix-app@$PROJECT.iam.gserviceaccount.com \
   --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
@@ -1036,10 +1008,14 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
 
 ```bash
 gcloud run services delete vibeflix-app --region $REGION
-# delete the 5 reasoning engines (console / vertexai SDK) + gateway/registry entries
+# ⚠️ Deleting the 6 engines is IRREVERSIBLE in effect: the engine id is baked into its
+# principal://, so recreating them mints NEW principals and every IAM grant + registry
+# endpoint silently points at a dead one — while the console still looks correct
+# (GOTCHAS.md G1). Only do this to DECOMMISSION. To ship new code, REDEPLOY: it updates
+# in place and keeps the id.
 for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
   gcloud run services delete $S --region $REGION; done
-for SA in vibeflix-mcp-licensing vibeflix-mcp-readonly vibeflix-agents vibeflix-app; do
+for SA in vibeflix-mcp-licensing vibeflix-mcp-readonly vibeflix-app; do   # no vibeflix-agents: the engines are AGENT IDENTITIES, not an SA
   gcloud iam service-accounts delete $SA@$PROJECT.iam.gserviceaccount.com --quiet; done
 gcloud artifacts repositories delete vibeflix --location $REGION --quiet
 gcloud pubsub subscriptions delete vibeflix-mesh-events-app-cloud
