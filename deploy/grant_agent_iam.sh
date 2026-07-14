@@ -48,6 +48,21 @@ ensure_endpoint() {  # ensure_endpoint <name> <url>
     && echo "    ✓ registered $1" || echo "    ⚠️ could not register $1"
 }
 echo "── 0/4 required GCP endpoints"
+# THE SHARED A2A TASK STORE (the app). Each engine runs SEVERAL replicas and the A2A
+# server's default store is a dict private to ONE of them, so `GET /a2a/v1/tasks/{id}`
+# 404s whenever the load balancer picks a different replica than the POST did (measured:
+# 86.8% of polls). The engines now keep their tasks in the app instead — which makes the
+# app an egress destination like any MCP server: it must be a registered Service AND
+# carry iap.egressor. Registered with a "GCP …" display name so step 2 grants it to every
+# agent automatically. (Resolved live — the Cloud Run URL differs per project.)
+APP_URL="$(gcloud run services describe vibeflix-app --region="$REGION" \
+  --project="$PROJECT" --format='value(status.url)' 2>/dev/null)"
+if [ -n "$APP_URL" ]; then
+  ensure_endpoint gcp-vibeflix-app "$APP_URL"
+else
+  echo "    ⚠️ vibeflix-app not deployed yet — deploy it, then re-run: the engines' task"
+  echo "       store egress cannot be granted until the app has a URL."
+fi
 ensure_endpoint gcp-iamcredentials      https://iamcredentials.googleapis.com
 ensure_endpoint gcp-iamcredentials-mtls https://iamcredentials.mtls.googleapis.com
 # GOOGLE_CLOUD_LOCATION=global ⇒ genai/session egress to the GLOBAL aiplatform host.
@@ -189,8 +204,11 @@ if ! gcloud iam service-accounts describe "$INVOKER_SA" --project="$PROJECT" >/d
     --display-name "Vibeflix MCP invoker (agent-identity ID-token source)"
   sleep 10
 fi
-# the SA must be able to invoke the MCP services …
-for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
+# the SA must be able to invoke the MCP services — and the APP, which now hosts the
+# shared A2A task store (the engines PUT/GET their tasks there over the same
+# ID-token-via-impersonation path they use for MCP). Without run.invoker on the app,
+# every task save 403s and the engines silently fall back to the per-replica store.
+for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style vibeflix-app; do
   run gcloud run services add-iam-policy-binding "$S" --region="$REGION" --project="$PROJECT" \
     --member="serviceAccount:$INVOKER_SA" --role=roles/run.invoker
 done

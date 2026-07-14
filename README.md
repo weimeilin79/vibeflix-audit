@@ -19,33 +19,89 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
 
-### 9-service distributed mesh
+### 10-service distributed mesh
 
-The orchestrator (a deterministic Workflow graph) fans out to the three domain
-agents over **A2A**; each agent talks to its MCP server(s) over **streamable-HTTP**.
-The app also calls **ui_renderer** over A2A to paint the result as A2UI. A standalone
-**`legal` agent** (:8005) sits behind Vendor Clearance — in this demo only vendor_clearance
-hands off to it (any agent could), and it's not in the orchestrator's fan-out. Every box
-is its own container/instance.
+**The orchestrator is an independent agent, not a library inside the app.** The app is a
+*thin client*: it calls `orchestrator` over A2A exactly the way it calls `ui_renderer`, and
+the orchestrator fans out to the three domain agents **under its own agent identity** — so
+the gateway's A2A egress policies are genuinely in the path. Each agent talks to its MCP
+server(s) over **streamable-HTTP**. A standalone **`legal` agent** (:8005) sits behind
+Vendor Clearance — in this demo only vendor_clearance hands off to it (any agent could),
+and it's not in the orchestrator's fan-out. Every box is its own container/instance.
 
 ```
                     ┌─────────── app container (:8000) ───────────┐
   browser ◄──SSE───►│  React (static, streaming A2UI renderer)  +  │
-   (live A2UI)      │  FastAPI /api/*  +  Sourcing Orchestrator    │
-                    │  (A2A CLIENT, deterministic — no LLM)        │
-                    └──┬──────────────┬──────────────┬──────────┬──┘
-                  A2A  │         A2A  │         A2A  │     A2A  │ (paint)
-        ┌──────────────▼─┐ ┌──────────▼───────┐ ┌────▼─────┐ ┌──▼──────────┐
-        │  brand_style   │ │ vendor_clearance │ │ pricing  │ │ ui_renderer │
-        │     :8001      │ │      :8002       │ │  :8003   │ │   :8004     │
-        └──┬─────────────┘ └──┬───────────┬───┘ └──────────┘ │ (A2UI LLM,  │
-   HTTP/MCP│            HTTP/MCP │           │ HTTP/MCP      └─────────────┘
-    ┌──────▼──────┐ ┌────────────▼─┐ ┌───────▼──────┐           
-    │mcp_brand_   │ │mcp_licensing │ │  mcp_market  │           
-    │style  :9004 │ │    :9002     │ │    :9003     │  (streamable-HTTP)
-    └─────────────┘ └──────────────┘ └──────────────┘
+   (live A2UI)      │  FastAPI /api/*     ⟵ THIN CLIENT           │
+                    │  + shared A2A task store (/api/taskstore/*)  │
+                    └──────┬─────────────────────────────┬────────┘
+                       A2A │                         A2A │ (paint)
+                 ┌─────────▼──────────┐            ┌─────▼───────┐
+                 │    orchestrator    │            │ ui_renderer │
+                 │  :8006 (Workflow)  │            │   :8004     │
+                 └──┬───────┬───────┬─┘            │ (A2UI LLM)  │
+               A2A  │  A2A  │  A2A  │              └─────────────┘
+        ┌───────────▼──┐ ┌──▼───────────────┐ ┌────▼─────┐
+        │  brand_style │ │ vendor_clearance │ │ pricing  │
+        │     :8001    │ │      :8002       │ │  :8003   │
+        └──┬───────────┘ └──┬───────────┬───┘ └────┬─────┘
+   HTTP/MCP│        HTTP/MCP │           │ HTTP/MCP │
+    ┌──────▼──────┐ ┌────────▼─────┐ ┌───▼──────────▼┐
+    │mcp_brand_   │ │mcp_licensing │ │  mcp_market   │
+    │style  :9004 │ │    :9002     │ │    :9003      │  (streamable-HTTP)
+    └─────────────┘ └──────────────┘ └───────────────┘
   brand_style → mcp_brand_style · vendor_clearance → mcp_licensing + mcp_market
+                 vendor_clearance ──A2A──► legal (:8005)
 ```
+
+### The shared A2A task store (and why it exists)
+
+**Every A2A call is `POST message:send` then `GET /a2a/v1/tasks/{id}` until the task
+finishes.** In cloud, Agent Runtime runs each engine as **several replicas behind a load
+balancer with no session affinity**, and the A2A server's default `InMemoryTaskStore` is a
+dict **private to one replica**. So the `POST` creates the task on replica *A*, and the
+`GET` is balanced to replica *B*, which has never heard of it:
+
+```
+POST /a2a/v1/message:send   → task created on replica [17]
+GET  /a2a/v1/tasks/{id}     → balanced to [19] → 404 Task not found
+```
+
+Measured on a real run: **1,228 misses / 1,415 polls = 86.8%** — and it's not even a fair
+coin, because the replica that *owns* the task is the one busy executing it, so the balancer
+routes away from precisely the replica you need. Nearly every problem we chased came out of
+this one fact: multi-minute runs that were mostly the client losing coin flips; ~1,900
+"error" spans (26% of **all** spans) that were just 404 polls; the console's chat blocked
+for 7 minutes behind a form-designer task; and `recovery` re-running agents that had never
+failed.
+
+**Fix:** keep the tasks *outside* the replicas. `vertexai`'s `A2aAgent` template accepts a
+`task_store_builder`, so every engine now shares one store hosted by the app
+(`vibeflix_common/task_store.py` → `PUT/GET/DELETE /api/taskstore/{id}`). Any replica can
+now serve any task.
+
+| store | why not |
+|---|---|
+| Cloud SQL / Postgres (the SDK's own `DatabaseTaskStore`) | Postgres is **raw TCP**, and the Agent Gateway governs **HTTP** egress — it cannot match a TCP socket to a registered endpoint. Same wall that refused the Pub/Sub **gRPC** publisher (`403 Egress request is not authorized`) until it was rewritten over REST. |
+| Memorystore / Redis | TCP again, plus a VPC connector the app doesn't have. |
+| Firestore | HTTPS, so it *would* pass the gateway — but A2A saves the task on **every event**, and Firestore's sustained write limit is ~1/sec **on the same document**. |
+| **the app (chosen)** | Plain HTTPS to a Cloud Run service — the engines already reach Cloud Run this way (it's how they call the MCP servers), so the auth story is already solved. |
+
+**⚠️ Two constraints that are load-bearing, not tuning knobs:**
+
+1. **The app must run as exactly one instance** (`--min-instances=1 --max-instances=1`). The
+   store is a dict in the app process; two app instances would split-brain it and recreate
+   the identical bug one layer up. (Bonus: one instance also fixes the mesh graph, since the
+   Pub/Sub telemetry subscription is a *competing-consumer* queue — with 2+ app instances the
+   events get split and the graph renders only partially.)
+2. **The endpoints carry a shared secret** (`TASK_STORE_KEY`, `X-Task-Store-Key`). The app is
+   **public** (`allUsers`/`run.invoker`, so the browser can load the console), so without it
+   the agents' task state would be world-readable and world-writable. Cloud Run IAM can't be
+   used here — locking the service down would lock out the frontend.
+
+Nothing in the store needs to survive a restart: it's demo state, not a system of record. If
+the app is unreachable, `RemoteTaskStore` logs loudly and falls back to the per-replica
+store — i.e. exactly as broken as before, never worse.
 
 Plus a standalone **`legal` agent (:8005)** — **in this demo only `vendor_clearance` hands
 off to it (any agent could)**. It clears + executes the licensing contract for a

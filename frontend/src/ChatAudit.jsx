@@ -460,6 +460,21 @@ export default function ChatAudit() {
   const [components, setComponents] = useState([]);
   // MCP tool inventory ({ licensing: [tool, ...], ... }) for the graph's tool rows.
   const [mcpTools, setMcpTools] = useState({});
+  // Every LED row key the graph knows about (`<chipLabel>/<tool>` and `<…>/<tool>.<step>`).
+  // The mesh handler logs an incoming LED key against this set, so "the event arrived but
+  // no row matches it" is DISTINGUISHABLE from "the event never arrived".
+  const ledKeysRef = useRef(new Set());
+  useEffect(() => {
+    const keys = new Set();
+    Object.entries(mcpTools || {}).forEach(([label, v]) => {
+      (v.tools || []).forEach((t) => {
+        keys.add(`${label}/${t}`);
+        ((v.steps || {})[t] || []).forEach((st) => keys.add(`${label}/${t}.${st}`));
+      });
+    });
+    ledKeysRef.current = keys;
+    if (keys.size) console.debug('[vibeflix] LED rows:', [...keys].join(', '));
+  }, [mcpTools]);
   // Tool activity LEDs: key `<mcp>/<tool>` → 'on' | 'blink' | undefined (off).
   // Driven by the Pub/Sub live-telemetry bridge (window.vibeflixToolLight below).
   const [toolLights, setToolLights] = useState({});
@@ -480,25 +495,33 @@ export default function ChatAudit() {
     // Live mesh telemetry (Pub/Sub → app bridge → SSE): tool events drive the LEDs —
     // blink while the tool runs, linger solid green for a beat on completion so even
     // fast calls are visible. EventSource auto-reconnects.
+    // BUILD STAMP — the single fastest way to tell whether the browser is running the
+    // bundle we just shipped or a cached one. If this line is absent from the console,
+    // the page is stale and NOTHING else we conclude from the UI is trustworthy.
+    console.info('[vibeflix] console build: led-diag-1 · mesh filter = run_id-only');
     const timers = {};
+    const litAt = { current: {} };   // key → ts of `started`, so an instant tool still blinks
     const es = new EventSource(`${API_BASE}/api/mesh/events`);
     es.onmessage = (ev) => {
       let e; try { e = JSON.parse(ev.data); } catch { return; }
 
       // ── Run scoping ──────────────────────────────────────────────────────────
-      // The mesh bus is shared: every console receives every event from every run,
-      // and events outlive their run (late delivery, Pub/Sub redelivery, a second
-      // tab). Both rules below exist because the graph was drawing nodes from runs
-      // that had already finished.
-      //   1. Stamped event (agents/orchestrator): it belongs to a run — render it
-      //      only if that run is the one on screen. This is what kills the reported
-      //      bug: a stale event always carries its OWN, different, id.
-      //   2. Unstamped event (the MCP servers — they serve a tool call and have no
-      //      idea which audit it belongs to): fall back to "only while THIS tab has
-      //      a run in flight". Their LEDs are transient, so that is enough.
-      if (e.run_id) {
-        if (e.run_id !== runIdRef.current) return;
-      } else if (!runActiveRef.current) return;
+      // The mesh bus is shared: every console receives every event from every run, and
+      // events outlive their run (late delivery, Pub/Sub redelivery, a second tab). A
+      // STAMPED event belongs to a known run, so render it only if that run is the one
+      // on screen — this is what stops a finished audit repainting the current graph
+      // (a stale event always carries its OWN, different, id).
+      //
+      // UNSTAMPED events (the MCP servers — they serve a tool call and have no idea
+      // which audit it belongs to) are let through. Do NOT also gate them on "this tab
+      // has a run in flight": that is exactly what made the tool LEDs stop lighting up.
+      // They cost nothing when stale — a LED self-extinguishes (1.6s solid / 15s
+      // watchdog) — and the graph, which is what run scoping is FOR, is built only from
+      // stamped orchestrator events anyway.
+      if (e.run_id && e.run_id !== runIdRef.current) {
+        console.debug('[mesh] DROP (other run)', e.run_id, '≠', runIdRef.current, e.source, e.node || e.tool);
+        return;
+      }
 
       // The legal hand-off announces itself (node: "legal") the moment it starts —
       // materialize/update the graph node immediately instead of waiting for
@@ -533,20 +556,42 @@ export default function ChatAudit() {
         }));
         return;
       }
-      if (!e.tool) return;
+      if (!e.tool) { console.debug('[mesh] ignored (no tool, not an orchestrator node)', e); return; }
       const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
+      // ⚑ LED DIAGNOSTIC. The LED only lights if this key matches a ROW key the graph
+      // built from /api/mcp/tools (`<chipLabel>/<tool>`). Log both so a mismatch — or a
+      // missing row — is visible instead of silently doing nothing.
+      const known = ledKeysRef.current;
+      console.debug(`[mesh] LED ${key} = ${e.event}`,
+        known.size ? (known.has(key) ? '✓ row exists' : `✗ NO ROW — known keys: ${[...known].join(', ')}`)
+                   : '(no rows yet — /api/mcp/tools not loaded or graph empty)');
+      // ── MAKE THE LED VISIBLE ─────────────────────────────────────────────────────
+      // These MCP tools run in MILLISECONDS, so `started` and `completed` land in the
+      // same tick: React coalesced them into one render and the LED went blink→solid→off
+      // in ~1.6s. It was firing correctly the whole time — you just could not SEE it.
+      // So: hold the blink for a minimum, THEN linger solid. An instant tool now reads as
+      // roughly BLINK_MIN + LINGER of unmistakable green.
+      const BLINK_MIN = 900;    // a tool that returns instantly still visibly blinks
+      const LINGER = 2600;      // then sits solid green long enough to register
+      const WATCHDOG = 15000;   // a blink ALWAYS self-extinguishes (see below)
       clearTimeout(timers[key]);
       if (e.event === 'started') {
+        litAt.current[key] = Date.now();
         setToolLights((m) => ({ ...m, [key]: 'blink' }));
         // WATCHDOG. Pub/Sub does NOT guarantee ordering: `completed` can be delivered
         // BEFORE `started`. Without this, the late `started` re-lights a tool that has
         // already finished and nothing ever clears it — the LED stays on forever.
-        // A blinking LED therefore always self-extinguishes.
         timers[key] = setTimeout(
-          () => setToolLights((m) => ({ ...m, [key]: undefined })), 15000);
-      } else {  // completed / failed → solid, then off
-        setToolLights((m) => ({ ...m, [key]: 'on' }));
-        timers[key] = setTimeout(() => setToolLights((m) => ({ ...m, [key]: undefined })), 1600);
+          () => setToolLights((m) => ({ ...m, [key]: undefined })), WATCHDOG);
+      } else {  // completed / failed → hold the blink briefly, then solid, then off
+        const elapsed = Date.now() - (litAt.current[key] || 0);
+        const hold = Math.max(0, BLINK_MIN - elapsed);
+        setToolLights((m) => ({ ...m, [key]: m[key] === 'blink' ? 'blink' : 'on' }));
+        timers[key] = setTimeout(() => {
+          setToolLights((m) => ({ ...m, [key]: 'on' }));
+          timers[key] = setTimeout(
+            () => setToolLights((m) => ({ ...m, [key]: undefined })), LINGER);
+        }, hold);
       }
     };
     return () => { es.close(); Object.values(timers).forEach(clearTimeout); };

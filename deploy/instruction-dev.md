@@ -882,14 +882,41 @@ UI_URL=$BASE/$(eng vibeflix-ui-renderer)
 # 5c. build + deploy
 export AR=$REGION-docker.pkg.dev/$PROJECT/vibeflix   # (re-set; step-2 var may be gone)
 gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app"
+# ⚠️ EXACTLY ONE INSTANCE. This is correctness, not cost control.
+#
+# The app hosts the engines' SHARED A2A TASK STORE at /api/taskstore/* — a plain dict in
+# this process. Why it exists: Agent Runtime runs each engine as SEVERAL replicas behind a
+# load balancer, and the A2A server's default task store is in-memory PER REPLICA. So
+# `POST message:send` creates the task on replica [17] while `GET /a2a/v1/tasks/{id}` gets
+# balanced to [19] → `404 Task not found`. Measured: 86.8% of polls missed (1,228/1,415).
+# The engines now keep their tasks here instead — but if the APP runs two instances, the
+# dict splits and you have rebuilt the same bug one layer up.
+#
+# One instance ALSO fixes the console's workflow graph: the Pub/Sub mesh subscription is a
+# COMPETING-CONSUMER queue, so each event goes to exactly ONE subscriber. With 2+ app
+# instances the telemetry is split between them and the browser (attached to one) sees only
+# a fraction of the nodes.
+#
+# TASK_STORE_KEY gates those endpoints. The app is --allow-unauthenticated (the browser has
+# to load the console), so without the shared secret anyone could read or tamper with the
+# agents' task state. Cloud Run IAM can't be used: locking it down locks out the frontend.
 gcloud run deploy vibeflix-app --image $AR/app --region $REGION \
   --service-account vibeflix-app@$PROJECT.iam.gserviceaccount.com \
-  --memory 1Gi --max-instances 2 --allow-unauthenticated \
+  --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
   --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,\
 FIRESTORE_DATABASE=vibeflix-registry,PUBSUB_TOPIC=vibeflix-mesh-events,PUBSUB_SUBSCRIPTION=vibeflix-mesh-events-app-cloud,\
 REQUEST_IMAGE_BUCKET=vibeflix-request-image,AUDIT_HISTORY_DIR=/tmp,\
+TASK_STORE_KEY=$(grep '^TASK_STORE_KEY=' deploy/.env | cut -d= -f2),\
+ORCHESTRATOR_A2A_URL=$ORCH_URL,\
 BRAND_STYLE_A2A_URL=$BRAND_URL,VENDOR_CLEARANCE_A2A_URL=$VENDOR_URL,DEAL_PRICING_A2A_URL=$PRICING_URL,UI_RENDERER_A2A_URL=$UI_URL,\
 MCP_LICENSING_URL=$MCP_LICENSING_URL,MCP_MARKET_URL=$MCP_MARKET_URL,MCP_BRAND_STYLE_URL=$MCP_BRAND_STYLE_URL"
+
+# ORDER MATTERS: deploy the app BEFORE the engines. grant_agent_iam.sh registers the app's
+# URL as the `gcp-vibeflix-app` registry Service and grants every agent iap.egressor on it —
+# it cannot do that until the app has a URL, and the engines read it as TASK_STORE_URL.
+# Get it wrong and the engines just log:
+#   [task-store] save(...) FAILED … falling back to the per-replica store
+# …which is not fatal (they degrade to the old behaviour) but you are back to the 404 storm.
 
 echo "console: $(gcloud run services describe vibeflix-app --region $REGION --format 'value(status.url)')"
 ```

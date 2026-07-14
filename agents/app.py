@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "orchestrator", ".env"))
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1196,6 +1196,76 @@ def health():
     return {"message": "ADK 2.0 Agent Mesh Backend is online."}
 
 
+# ---- Shared A2A task store (see vibeflix_common/task_store.py) ---------------
+# Agent Runtime runs each engine as SEVERAL replicas behind a load balancer, and the A2A
+# server's default task store is a dict PRIVATE TO ONE REPLICA. So `POST message:send`
+# created a task on replica [17] while `GET /tasks/{id}` was balanced to [19]/[22], which
+# had never heard of it → `404 Task not found` on 86.8% of polls (measured). That single
+# fact produced the slow runs, the ~1,900 error spans, the 7-minute blocked chat, and the
+# phantom `recovery` re-runs. The engines now keep their tasks HERE instead, so any
+# replica can serve any task.
+#
+# ⚠️ THIS ONLY WORKS BECAUSE THE APP RUNS AS EXACTLY ONE INSTANCE
+# (`--min-instances=1 --max-instances=1`). Two app instances would split this dict and
+# recreate the identical bug one layer up. That pinning is load-bearing, not a tuning knob.
+#
+# Demo state, deliberately not durable: a restart drops in-flight tasks, which is no worse
+# than the per-replica store it replaces.
+#
+# 🔒 THIS SERVICE IS PUBLIC (`allUsers` holds run.invoker, so the browser can load the
+# console). These endpoints therefore need their own gate, or anyone on the internet could
+# read and tamper with the agents' A2A task state. TASK_STORE_KEY is a shared secret held
+# only by the app and the engines. Deliberately NOT Cloud Run IAM: locking the service down
+# would also lock out the frontend.
+_TASKS: dict[str, str] = {}
+# Every id ever written. A GET miss then means one of two VERY different things, and
+# without this set they are indistinguishable in the logs:
+#   • id never written  → the poll simply BEAT the first save (a benign creation race,
+#                         which the client resolves in ~50ms of fast probing);
+#   • id written, gone  → something deleted it, which would be a real bug.
+_TASKS_EVER: set[str] = set()
+_TASK_KEY = os.environ.get("TASK_STORE_KEY", "")
+
+
+def _task_auth(key: str | None) -> None:
+    if _TASK_KEY and key != _TASK_KEY:
+        raise HTTPException(status_code=403, detail="bad task-store key")
+
+
+@app.put("/api/taskstore/{task_id}")
+async def taskstore_put(task_id: str, body: dict,
+                        x_task_store_key: str | None = Header(default=None)):
+    _task_auth(x_task_store_key)
+    first = task_id not in _TASKS_EVER
+    _TASKS[task_id] = body["json"]
+    _TASKS_EVER.add(task_id)
+    if first:
+        print(f"[taskstore] CREATE {task_id} (live={len(_TASKS)})", flush=True)
+    return {"ok": True, "tasks": len(_TASKS)}
+
+
+@app.get("/api/taskstore/{task_id}")
+async def taskstore_get(task_id: str,
+                        x_task_store_key: str | None = Header(default=None)):
+    _task_auth(x_task_store_key)
+    j = _TASKS.get(task_id)
+    if j is None:
+        # WHY did it miss? This is the whole point of _TASKS_EVER.
+        why = ("was written then DELETED — REAL BUG" if task_id in _TASKS_EVER
+               else "never written yet — benign creation race (poll beat the first save)")
+        print(f"[taskstore] MISS {task_id} — {why} (live={len(_TASKS)})", flush=True)
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"json": j}
+
+
+@app.delete("/api/taskstore/{task_id}")
+async def taskstore_delete(task_id: str,
+                           x_task_store_key: str | None = Header(default=None)):
+    _task_auth(x_task_store_key)
+    _TASKS.pop(task_id, None)
+    return {"ok": True}
+
+
 # MCP tool inventory for the Workflow graph (tool rows with activity LEDs).
 # Short names match the graph's chip labels (env name minus MCP_/_URL, lowercased).
 _MCP_SERVER_ENVS = {
@@ -1240,7 +1310,12 @@ def _start_mesh_bridge(loop) -> bool:
             # The console keys tool LEDs as `<mcp>/<tool>` (source minus the `mcp_`
             # prefix) and graph nodes by agent id. Log what actually arrives so a dark
             # LED can be told apart from an event that never fired.
-            print(f"[mesh] source={data.get('source')} node={data.get('node')} "
+            # run_id is printed because it is the field the console FILTERS on: an empty
+            # one silently falls back to "render while a run is active", which looks
+            # correct and is not. Without it in the log there is no way to tell a
+            # correctly-scoped event from an unscoped one.
+            print(f"[mesh] run={data.get('run_id') or '—'} "
+                  f"source={data.get('source')} node={data.get('node')} "
                   f"tool={data.get('tool')} event={data.get('event')} "
                   f"→ led_key={(data.get('source') or '').removeprefix('mcp_')}/{data.get('tool')}"
                   f" subs={len(_MESH_QUEUES)}", flush=True)

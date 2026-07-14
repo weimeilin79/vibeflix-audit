@@ -38,21 +38,45 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     import os
 
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    creds.refresh(_gar.Request())
 
-    # TWO different parties need to authenticate this one request:
-    #   Proxy-Authorization → the Agent Gateway (egress authorization, agent identity)
-    #   Authorization       → the TARGET engine's aiplatform endpoint
-    # This used to send ONLY Proxy-Authorization inside an engine, so Google's endpoint
-    # saw no credential at all and answered 401 — which we spent a long time mistaking
-    # for a missing client certificate.
-    hdr = {
-        "Authorization": f"Bearer {creds.token}",
-        "Content-Type": "application/json",
-        "Connection": "close",
-    }
-    if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
-        hdr["Proxy-Authorization"] = f"Bearer {creds.token}"
+    # ⚠️ THE TOKEN EXPIRES MID-POLL ON LONG RUNS — REFRESH IT, DON'T MINT IT ONCE.
+    #
+    # This used to mint ONE token here and reuse it for the whole poll loop (which can run
+    # for many minutes — a legal escalation is 8+ model calls). On Cloud Run the metadata
+    # server returns a CACHED token carrying only its REMAINING lifetime, which can be a
+    # couple of minutes rather than the full hour, so the header goes stale in flight and
+    # the endpoint answers 401. `raise_for_status()` then killed the whole A2A call and the
+    # console showed:
+    #     HTTPError: 401 Client Error: Unauthorized for url: …/a2a/v1/tasks/{id}
+    # It looked like an IAM problem for hours; it never was. The long paths (a legal run,
+    # or a 7-minute ui_renderer poll) were simply the ones that outlived their token.
+    def _headers() -> dict:
+        """Fresh credential every time — cheap when the token is still valid (the library
+        only hits the metadata server when it is close to expiry)."""
+        if not creds.valid or creds.expiry is None:
+            creds.refresh(_gar.Request())
+        # TWO different parties need to authenticate this one request:
+        #   Proxy-Authorization → the Agent Gateway (egress authorization, agent identity)
+        #   Authorization       → the TARGET engine's aiplatform endpoint
+        # This used to send ONLY Proxy-Authorization inside an engine, so Google's endpoint
+        # saw no credential at all and answered 401 — which we spent a long time mistaking
+        # for a missing client certificate.
+        h = {
+            "Authorization": f"Bearer {creds.token}",
+            "Content-Type": "application/json",
+            "Connection": "close",
+        }
+        if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+            h["Proxy-Authorization"] = f"Bearer {creds.token}"
+        return h
+
+    def _refresh() -> dict:
+        """Force a new token (used when the target says 401 — i.e. ours just expired)."""
+        creds.refresh(_gar.Request())
+        return _headers()
+
+    creds.refresh(_gar.Request())
+    hdr = _headers()
 
     # NOTE — trace context is deliberately NOT propagated across the A2A hop.
     #
@@ -98,9 +122,50 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     state = (task.get("status") or {}).get("state")
     deadline = timeout
     _RUNNING = ("TASK_STATE_SUBMITTED", "TASK_STATE_WORKING", None)
+
+    # ── Polling: a 404 means "wrong replica", NOT "not ready" ────────────────────────
+    # The engine runs ~6 replicas and its A2A task store is IN-MEMORY PER REPLICA. The
+    # POST created the task on ONE replica; this GET is load-balanced independently, so
+    # ~5 times in 6 it asks a replica that has never heard of the task and gets a 404.
+    # Measured: 1,228 misses / 1,415 polls = 86.8% (predicted 5/6 = 83.3%).
+    #
+    # The old loop SLEPT on a miss — sleep(2) here plus sleep(5) at the top of the loop,
+    # so every miss burned 7s. That was ~64% of each agent's runtime (deal_pricing: 147s
+    # of a 230s run), it produced the ~1,900 "error" spans that swamped Cloud Trace, and
+    # it left the console's chat blocked for 7 MINUTES behind a form-designer task.
+    #
+    # A miss is not a reason to wait — RE-ISSUING the GET re-rolls the load balancer, so
+    # just probe again immediately: with R replicas, P(missing M in a row) = ((R-1)/R)^M,
+    # which at R=6 is ~2.6% after 20 probes and takes ~1s instead of 140s.
+    #
+    # And a 404 is AMBIGUOUS: it also means "this task is GONE" (its replica was replaced
+    # — e.g. the engine was redeployed mid-run, which wipes the in-memory store). The old
+    # loop could not tell the two apart and assumed "retry forever", so a destroyed task
+    # HUNG until the 900–1800s timeout instead of failing. Consecutive misses are now
+    # bounded: probe fast, then slowly, then declare the task gone with a real error.
+    #
+    # ⚠️ A 404 NEVER PROVES THE TASK IS GONE once we have seen it alive. The misses are
+    # NOT independent coin flips: the replica that owns the task is the one BUSY EXECUTING
+    # it (WEB_CONCURRENCY=1 — a single worker per replica), so the load balancer routes
+    # away from precisely the replica we need. Measured on a healthy run: the first GET
+    # hit the owning replica [17] and returned 200, and then 73 consecutive GETs landed on
+    # [19]/[22] and 404'd — while the orchestrator carried on working (recovery →
+    # compile_ui → generate_report). An earlier version of this loop concluded "task gone"
+    # after 60s of misses and ABANDONED that healthy run. Never again:
+    #   • seen_ok (we ever got a 200)  → the task EXISTS. Poll to the deadline, never quit.
+    #   • never seen it at all         → it may genuinely not exist (its replica was
+    #                                     replaced, e.g. the engine was redeployed mid-run);
+    #                                     only THEN give up early, with a clear error.
+    _FAST_PROBES = 20      # ~1s — resolves an honest round-robin miss
+    _FAST_PAUSE = 0.05
+    _SLOW_PAUSE = 1.0      # then back off; ~1 req/s is gentle and keeps re-rolling the LB
+    _UNSEEN_GRACE = 60.0   # give-up budget — ONLY while the task has never been seen
+    miss_since = None      # monotonic ts of the first miss in the current streak
+    misses = 0
+    seen_ok = False        # have we EVER successfully read this task?
+    auth_retries = 0       # 401/403 → our token expired mid-poll; refresh and carry on
+
     while tid and state in _RUNNING and deadline > 0:
-        _time.sleep(5); deadline -= 5
-        
         # Manually follow redirects for GET to keep auth headers
         url = f"{base}/a2a/v1/tasks/{tid}"
         params = {"history_length": 50}
@@ -112,19 +177,47 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
                 params = None  # query parameters are already in the redirect URL
                 continue
             break
-            
-        # 404 = task not yet visible on THIS engine replica (in-memory per-instance
-        # task store, requests round-robin); keep polling — it lands on the owning
-        # replica within a few tries. 400 during a run is the platform surfacing an
-        # in-progress execution error; keep polling until the task reaches a
-        # terminal state (FAILED), which we then report — don't silently drop it.
-        if g.status_code in (400, 404):
-            _time.sleep(2)
-            deadline -= 2
+
+        # 401/403 = OUR TOKEN EXPIRED, not a permissions problem. The metadata server hands
+        # out a cached token with only its remaining lifetime, so a long poll (a legal
+        # escalation runs many minutes) outlives it. Mint a new one and keep polling —
+        # letting this raise used to kill the whole audit with a bogus "Unauthorized".
+        if g.status_code in (401, 403) and auth_retries < 5:
+            auth_retries += 1
+            hdr = _refresh()
+            _time.sleep(1); deadline -= 1
             continue
+
+        # 400 during a run is the platform surfacing an in-progress execution error;
+        # treat it like a miss and keep polling until the task reaches a terminal state
+        # (FAILED), which we then report — don't silently drop it.
+        if g.status_code in (400, 404):
+            now = _time.monotonic()
+            if miss_since is None:
+                miss_since, misses = now, 0
+            misses += 1
+            # Give up ONLY if this task has NEVER been read successfully. If we have seen
+            # it even once, it EXISTS and is running on a replica we simply cannot get
+            # routed to — keep polling until the caller's own timeout. Quitting here on a
+            # live task is exactly the bug this replaced: it abandoned healthy runs and,
+            # inside the orchestrator, made `recovery` re-run agents that were still fine.
+            if not seen_ok and now - miss_since > _UNSEEN_GRACE:
+                return (f"[A2A engine execution FAILED] task {tid} was never readable on any "
+                        f"replica in {_UNSEEN_GRACE:.0f}s ({misses} consecutive "
+                        f"{g.status_code}s) — it was never observed alive, so the replica "
+                        f"that created it is most likely gone (engine redeployed/restarted).")
+            pause = _FAST_PAUSE if misses <= _FAST_PROBES else _SLOW_PAUSE
+            _time.sleep(pause); deadline -= pause
+            continue
+
+        miss_since, misses = None, 0        # found the owning replica
+        seen_ok = True                      # …and it's alive: never declare it gone again
         g.raise_for_status()
         task = g.json()
         state = (task.get("status") or {}).get("state")
+        if state in _RUNNING:
+            # Genuinely still working — THIS is the only case that deserves a wait.
+            _time.sleep(5); deadline -= 5
     if state == "TASK_STATE_FAILED":
         return f"[A2A engine execution FAILED] {_status_error(task) or '(no detail)'}"
     return _extract_reply(task)

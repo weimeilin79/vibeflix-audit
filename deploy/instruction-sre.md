@@ -326,17 +326,34 @@ agents-cli publish gemini-enterprise --registration-type a2a \
 gcloud builds submit . --config deploy/cloudbuild-app.yaml \
   --substitutions "_IMAGE=$REGION-docker.pkg.dev/$PROJECT/vibeflix/app"
 
+# ⚠️ --min-instances=1 --max-instances=1 IS LOAD-BEARING, NOT A TUNING KNOB.
+#    The app hosts the engines' SHARED A2A TASK STORE (/api/taskstore/*) as a dict in
+#    process. Two app instances split that dict, and every `GET /a2a/v1/tasks/{id}` that
+#    lands on the wrong one 404s — which is the very bug the store exists to kill.
+#    It also keeps the Pub/Sub mesh subscription on ONE consumer: a subscription is a
+#    competing-consumer queue, so 2+ app instances SPLIT the telemetry and the console's
+#    workflow graph renders only a fraction of its nodes.
+# TASK_STORE_KEY gates those endpoints — the app is public (the browser must load the
+#    console), so without it the agents' task state is world-writable. Keep it in deploy/.env.
 gcloud run deploy vibeflix-app \
   --image "$REGION-docker.pkg.dev/$PROJECT/vibeflix/app" \
   --region "$REGION" --service-account "vibeflix-app@$PROJECT.iam.gserviceaccount.com" \
-  --memory 1Gi --min-instances 0 --max-instances 2 --allow-unauthenticated \
+  --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
   --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,\
 FIRESTORE_DATABASE=vibeflix-registry,PUBSUB_TOPIC=vibeflix-mesh-events,PUBSUB_SUBSCRIPTION=vibeflix-mesh-events-app-cloud,\
-REQUEST_IMAGE_BUCKET=vibeflix-request-image,\
+REQUEST_IMAGE_BUCKET=vibeflix-request-image,TASK_STORE_KEY=$(grep '^TASK_STORE_KEY=' deploy/.env | cut -d= -f2),\
 BRAND_STYLE_A2A_URL=<engine url>,VENDOR_CLEARANCE_A2A_URL=<engine url>,DEAL_PRICING_A2A_URL=<engine url>,UI_RENDERER_A2A_URL=<engine url>,\
+ORCHESTRATOR_A2A_URL=<engine url>,\
 MCP_LICENSING_URL=<licensing run.app URL>/mcp,MCP_MARKET_URL=<market run.app URL>/mcp,MCP_BRAND_STYLE_URL=<brand-style run.app URL>/mcp"
 # (the app uses the DIRECT service URLs — it cannot ride the gateway's mTLS/PSC surface)
 ```
+
+**Deploy the app BEFORE the engines.** `deploy/grant_agent_iam.sh` registers the app's URL as
+the `gcp-vibeflix-app` registry Service and grants every agent `roles/iap.egressor` on it —
+it cannot do that until the app has a URL. The engines then pick it up as `TASK_STORE_URL`.
+If you deploy them in the wrong order the engines simply log
+`[task-store] … FAILED … falling back to the per-replica store` and you are back to the
+404 storm.
 
 (`--allow-unauthenticated` for the demo console; front with IAP for real use.)
 

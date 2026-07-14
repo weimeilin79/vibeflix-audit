@@ -60,7 +60,12 @@ if identities_path.exists():
     _ENV.setdefault("MCP_BRAND_STYLE_URL", get_run_url("vibeflix-mcp-brand-style"))
     _ENV.setdefault("MCP_LICENSING_URL", get_run_url("vibeflix-mcp-licensing"))
     _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
-    
+
+    # Where the engines keep their A2A tasks (the app, not this replica's memory).
+    # get_run_url() appends /mcp for the MCP servers — strip it; we want the app root.
+    _ENV.setdefault("TASK_STORE_URL",
+                    get_run_url("vibeflix-app").removesuffix("/mcp"))
+
     # A2A hops use the MTLS aiplatform endpoint — the URL the agent endpoints are
     # REGISTERED with in the Agent Registry. The gateway only authorizes the destination
     # it has registered:
@@ -114,6 +119,12 @@ COMMON_ENV = {
     # default-deny, so even the token-minting call must be allowlisted).
     "MCP_INVOKER_SA": _ENV.get(
         "MCP_INVOKER_SA", f"vibeflix-mcp-invoker@{PROJECT}.iam.gserviceaccount.com"),
+    # The shared A2A task store (the app). Reached exactly like an MCP server: registered
+    # in the Agent Registry + iap.egressor, with an ID token minted via MCP_INVOKER_SA.
+    # TASK_STORE_KEY gates those endpoints — the app is PUBLIC (the browser must load the
+    # console), so without the shared secret the task state would be world-writable.
+    "TASK_STORE_URL": _ENV.get("TASK_STORE_URL", ""),
+    "TASK_STORE_KEY": _ENV.get("TASK_STORE_KEY", ""),
     "WEB_CONCURRENCY": "1",
     # Engine OTLP telemetry → Cloud Trace / Observability panel. Off by default
     # because the HTTP exporter crashes on the py3.14 base (pyOpenSSL) and 403s
@@ -130,6 +141,19 @@ COMMON_ENV = {
         # ⚠️ This LOGS PROMPTS AND MODEL OUTPUT. Fine for the demo; for a real tenant with
         # customer data, use NO_CONTENT (or `false`) and keep content out of telemetry.
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+        # SILENCE THE A2A SDK's OWN SPANS — they drowned the trace.
+        # a2a decorates EventQueue with @trace_class, so EVERY method call gets a span,
+        # and EventConsumer.consume_all() polls dequeue_event() on a 0.5s timeout for as
+        # long as a task runs. Result: one span per half-second of waiting, per in-flight
+        # task. Measured on one fleet-wide sample: dequeue_event = 3,228 spans (44.5%) and
+        # on_get_task = 2,246 (31%) — ~75% of ALL spans were A2A plumbing waiting on
+        # itself, and the agent spans were invisible underneath. (The 404-heavy on_get_task
+        # spans also accounted for the ~1,890 "errors" = 26% of spans.)
+        # This kill switch is the SDK's own (a2a/utils/telemetry.py: ENABLED_ENV_VAR) and
+        # swaps its tracer for a no-op. It does NOT affect the spans we actually want —
+        # invocation / invoke_workflow / invoke_agent / call_llm / execute_tool all come
+        # from ADK's instrumentation, not A2A's.
+        "OTEL_INSTRUMENTATION_A2A_SDK_ENABLED": "false",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc",
     } if _ENV.get("TELEMETRY", "").lower() == "on" else {
@@ -201,6 +225,14 @@ def make_executor_builder(agent_name: str):
         from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
         return A2aAgentExecutor(runner=make_runner_builder(agent_name))
     return build_executor
+
+
+def make_task_store_builder():
+    """The engine's A2A tasks live in the APP, not in this replica's memory."""
+    def build_task_store():
+        from vibeflix_common.task_store import RemoteTaskStore
+        return RemoteTaskStore()   # reads TASK_STORE_URL (in COMMON_ENV)
+    return build_task_store
 
 
 def agent_card(name: str, desc: str):
@@ -320,8 +352,13 @@ def main():
         # engine loads (see build_runner) — the pickled closure is unreliable.
         env = {**COMMON_ENV, "VIBEFLIX_AGENT_NAME": name,
                **{k: _ENV[k] for k in spec["env"]}}
+        # task_store_builder: WITHOUT it the A2aAgent template falls back to
+        # InMemoryTaskStore — a dict private to each replica — and `GET /a2a/v1/tasks/{id}`
+        # 404s whenever the load balancer picks a replica other than the one that created
+        # the task (measured: 86.8% of polls). See vibeflix_common/task_store.py.
         app = A2aAgent(agent_card=agent_card(name, spec["desc"]),
-                       agent_executor_builder=make_executor_builder(name))
+                       agent_executor_builder=make_executor_builder(name),
+                       task_store_builder=make_task_store_builder())
         config = {
             "display_name": display,
             "description": spec["desc"],

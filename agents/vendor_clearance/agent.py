@@ -163,13 +163,20 @@ vendor_liaison = LlmAgent(
         "reasonable default from the vendor's data (e.g. infer a royalty tier from its "
         "size/territories). Answer in plain text — no JSON."
     ),
+    # Plain MCP toolset — NOT wrapped in a SkillToolset.
+    #
+    # It used to be `SkillToolset(skills=[], additional_tools=[mcp_toolset(...)])`, which
+    # silently made these tools UNREACHABLE. A SkillToolset exposes only its four meta-tools
+    # to the model (list_skills / load_skill / load_skill_resource / run_skill_script);
+    # `additional_tools` are what a SKILL'S SCRIPT may call, not what the model may call. With
+    # `skills=[]` there was no script to reach them, so the instruction above ("look the vendor
+    # up with `get_vendor`") could only ever fail:
+    #     ValueError: Tool 'get_vendor' not found.
+    #     Available tools: list_skills, load_skill, load_skill_resource, run_skill_script
+    # …which killed the whole legal_clearance node the moment legal asked its first question.
+    # (clearance_reasoner gets away with the same wrapper only because it DOES load a skill.)
     tools=[
-        skill_toolset.SkillToolset(
-            skills=[],
-            additional_tools=[
-                mcp_toolset("mcp_licensing", tool_filter=["get_vendor", "get_contract", "find_vendors"]),
-            ],
-        ),
+        mcp_toolset("mcp_licensing", tool_filter=["get_vendor", "get_contract", "find_vendors"]),
     ],
 )
 

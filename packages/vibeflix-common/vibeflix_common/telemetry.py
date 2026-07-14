@@ -45,16 +45,20 @@ def get_run_id() -> str:
     return _RUN_ID.get("")
 
 
-def _node_run_id(args) -> str:
+def _node_run_id(args, kwargs=None) -> str:
     """The run id for a node, preferring the workflow Context over the ContextVar.
 
-    WHY not just the ContextVar: a sync node runs via asyncio.to_thread, which copies
-    the context — a set_run_id() inside it is lost when the node returns. `ctx.state`
-    is the workflow's own durable store, so it survives across nodes, tasks and (on
-    Agent Runtime) across the resume of a suspended workflow. The ContextVar is the
-    fallback for nodes that never see a Context.
+    WHY not just the ContextVar: a ContextVar only flows PARENT→CHILD at task creation.
+    The orchestrator's `ingest` sets it, but every other node runs in a SIBLING task, so
+    the value never reaches them — they all reported an empty run. `ctx.state` is the
+    workflow's own durable store: it survives across nodes, tasks, and the resume of a
+    suspended workflow. The ContextVar is only a fallback for nodes with no Context.
+
+    MUST scan kwargs too: ADK invokes nodes with KEYWORD arguments, so scanning `args`
+    alone found no Context and silently fell through to the (empty) ContextVar — the
+    agent nodes shipped with run_id="" and the console could not scope them.
     """
-    for a in args:
+    for a in (*args, *(kwargs or {}).values()):
         get = getattr(getattr(a, "state", None), "get", None)
         if callable(get):
             try:
@@ -182,56 +186,56 @@ def instrument_node(source: str, node_name: str | None = None):
         if inspect.isasyncgenfunction(fn):
             @functools.wraps(fn)
             async def wrapped(*args, **kwargs):
-                rid = _node_run_id(args)
+                rid = _node_run_id(args, kwargs)
                 emit_event(source, "started", node=name, run_id=rid)
                 try:
                     async for ev in fn(*args, **kwargs):
                         yield ev
                 except Exception as e:
-                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args, kwargs),
                                detail=f"{name}: {type(e).__name__}")
                     raise
                 # Re-read: the node may have just WRITTEN run_id into ctx.state (the
                 # orchestrator's `ingest` does exactly that), so `completed` can be
                 # scoped even when `started` fired before the id was known.
-                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args, kwargs))
         elif inspect.isgeneratorfunction(fn):
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
-                rid = _node_run_id(args)
+                rid = _node_run_id(args, kwargs)
                 emit_event(source, "started", node=name, run_id=rid)
                 try:
                     yield from fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args, kwargs),
                                detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args, kwargs))
         elif inspect.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def wrapped(*args, **kwargs):
-                rid = _node_run_id(args)
+                rid = _node_run_id(args, kwargs)
                 emit_event(source, "started", node=name, run_id=rid)
                 try:
                     result = await fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args, kwargs),
                                detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args, kwargs))
                 return result
         else:
             @functools.wraps(fn)
             def wrapped(*args, **kwargs):
-                rid = _node_run_id(args)
+                rid = _node_run_id(args, kwargs)
                 emit_event(source, "started", node=name, run_id=rid)
                 try:
                     result = fn(*args, **kwargs)
                 except Exception as e:
-                    emit_event(source, "failed", node=name, run_id=_node_run_id(args),
+                    emit_event(source, "failed", node=name, run_id=_node_run_id(args, kwargs),
                                detail=f"{name}: {type(e).__name__}")
                     raise
-                emit_event(source, "completed", node=name, run_id=_node_run_id(args))
+                emit_event(source, "completed", node=name, run_id=_node_run_id(args, kwargs))
                 return result
 
         return wrapped

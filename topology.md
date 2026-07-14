@@ -40,6 +40,34 @@ The approved target state for the pokedemo-test deployment. Everything is
 | vendor_clearance | legal | ONE egress grant (endpoint-scoped IAP binding) |
 | everyone else | nothing | no grant = denied |
 
+## Shared A2A task store (every engine → the app)
+
+| Caller | May call | Enforced by |
+|---|---|---|
+| **all 6 agents** | `vibeflix-app` `/api/taskstore/*` | `gcp-vibeflix-app` registry Service + `roles/iap.egressor` on it (granted by `grant_agent_iam.sh` step 0+2), and `run.invoker` for `vibeflix-mcp-invoker` |
+
+**Why:** Agent Runtime runs each engine as several replicas behind a load balancer with no
+session affinity, and the A2A server's default `InMemoryTaskStore` is a dict **private to
+one replica**. `POST message:send` creates the task on replica *A*; `GET /a2a/v1/tasks/{id}`
+is balanced to replica *B* → `404 Task not found`. Measured: **86.8% of polls missed**
+(1,228 / 1,415). The engines now persist tasks in the app instead
+(`vibeflix_common/task_store.py`, wired via `A2aAgent(task_store_builder=…)`).
+
+**Auth is the MCP story reused verbatim:** an AGENT_IDENTITY engine has no SA behind the
+metadata server, so it mints an audience-bound ID token by impersonating `MCP_INVOKER_SA`
+(`cloud_auth.GoogleAuth` → `Authorization`), and the gateway leg carries the access token in
+`Proxy-Authorization`. The destination is HTTPS, which is the *only* reason it works — the
+gateway governs **HTTP** egress and cannot match a gRPC channel or raw TCP socket, which is
+why Cloud SQL/Postgres and Redis are unusable here (and why the Pub/Sub **gRPC** publisher
+had to be rewritten over REST).
+
+**Two load-bearing constraints:**
+- the app runs as **exactly one instance** (`--min-instances=1 --max-instances=1`) — two
+  instances split the dict and rebuild the bug one layer up (and split the Pub/Sub mesh
+  subscription, which is a competing-consumer queue, so the console's graph half-renders);
+- the endpoints are gated by a shared secret (`TASK_STORE_KEY` / `X-Task-Store-Key`) because
+  the app is **public** (`allUsers`) so the browser can load the console.
+
 ## MCP matrix (through the gateway, per deploy/policies.yaml)
 
 | Caller | Server | Tools |
