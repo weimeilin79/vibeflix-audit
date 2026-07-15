@@ -47,6 +47,14 @@ Step 4's grants are not optional and must run **after** the engines exist (they 
 > silently fell back to a per-replica task store.
 
 ```bash
+# 0. Python environment FIRST — one venv, all deps, run every python step through it.
+#    (py3.14 pip is fragile — prefer uv or a 3.12 venv; skipping this makes you hunt for
+#    the right library mid-deploy.)
+python3 -m venv .venv && source .venv/bin/activate    # or: uv venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install -r agents/requirements.txt -r deploy/requirements-legal-rag.txt
+pip install -e packages/vibeflix-common
+
 # 1-0. Enable EVERY API the walkthrough touches (one shot, idempotent):
 gcloud services enable --project=$PROJECT \
   firestore.googleapis.com pubsub.googleapis.com storage.googleapis.com \
@@ -54,8 +62,14 @@ gcloud services enable --project=$PROJECT \
   aiplatform.googleapis.com \
   agentregistry.googleapis.com networkservices.googleapis.com \
   networksecurity.googleapis.com iap.googleapis.com \
-  observability.googleapis.com apphub.googleapis.com \
-  cloudtrace.googleapis.com telemetry.googleapis.com
+  iamcredentials.googleapis.com cloudresourcemanager.googleapis.com \
+  observability.googleapis.com apphub.googleapis.com apptopology.googleapis.com \
+  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com
+# ⚠️ Do NOT trim — each bites on a FRESH project:
+#   apptopology          → the Agent Platform → Topology page is blank / prompts "enable services" without it.
+#   cloudresourcemanager → the RAG SDK's bucket-ownership check (project-id→number) fails PermissionDenied.
+#   iamcredentials       → engines impersonate MCP_INVOKER_SA to mint MCP ID tokens; off ⇒ MCP 403.
+#   iap                  → the governed gateway's egress authorization (roles/iap.egressor).
 
 # 1a. Firestore — a DEDICATED named db (not "(default)")
 gcloud firestore databases create --database=vibeflix-registry \

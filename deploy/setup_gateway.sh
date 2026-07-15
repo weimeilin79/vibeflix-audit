@@ -37,15 +37,19 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
       --interfaces="url=$URL,protocolBinding=JSONRPC" \
       || echo "  (vibeflix-mcp-$S may already be registered — continuing)"
   done
-  # The 5 AGENTS are registry entries too (A2A policies + console list + gateway
-  # destinations all key off these; unregistered destinations are blocked).
+  # ALL 6 AGENTS are registry entries too (A2A policies + console list + gateway
+  # destinations all key off these; unregistered destinations are blocked). The
+  # ORCHESTRATOR must be here as well — the app calls it over A2A, and grant_agent_iam.sh
+  # binds egress on EVERY agent endpoint (all-to-all); omit it and its endpoint never
+  # exists, so those grants are silently skipped and the mesh 403s. (Fresh-project trap:
+  # this loop used to list only the 5 domain agents.)
   # Interface URLs must be UNIQUE — each agent registers with its own engine path
   # (from agent_identities.json, produced by step 3 / enable_agent_identity.py).
   if [ ! -s "$HERE/agent_identities.json" ]; then
     echo "  ⚠️ skipping AGENT registration: deploy/agent_identities.json missing —"
     echo "     deploy the agents (step 3) first, then re-run: ./deploy/setup_gateway.sh registry"
   else
-  for A in brand-style vendor-clearance deal-pricing legal ui-renderer; do
+  for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
     ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' "$HERE/agent_identities.json")
     gcloud alpha agent-registry services create "vibeflix-$A-agent" \
       --project "$PROJECT" --location "$REGION" \

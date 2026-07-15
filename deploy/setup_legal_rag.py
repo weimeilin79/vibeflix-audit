@@ -77,6 +77,29 @@ def main() -> None:
         sys.exit("[legal-rag] missing SDK. Run: pip install -r deploy/requirements-legal-rag.txt")
     client = agentplatform.Client(project=PROJECT, location=REGION)
 
+    # Put the project's RAG managed-DB into SERVERLESS mode BEFORE creating the corpus.
+    # A FRESH project defaults to SPANNER mode, which is capacity-restricted in some
+    # regions (e.g. us-central1) → corpus creation fails `400 INVALID_ARGUMENT`. This is a
+    # PROJECT-level config, separate from the corpus's vector backend below. Best-effort +
+    # idempotent; if it can't be set, corpus creation will surface the real error.
+    try:
+        import json as _json, urllib.request
+        import google.auth, google.auth.transport.requests as _grt
+        _creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        _creds.refresh(_grt.Request())
+        _req = urllib.request.Request(
+            f"https://{REGION}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT}"
+            f"/locations/{REGION}/ragEngineConfig?updateMask=rag_managed_db_config",
+            method="PATCH",
+            data=_json.dumps({"ragManagedDbConfig": {"serverless": {}}}).encode(),
+            headers={"Authorization": f"Bearer {_creds.token}", "Content-Type": "application/json"})
+        urllib.request.urlopen(_req, timeout=90).read()
+        print("[legal-rag] ragEngineConfig → serverless (avoids the Spanner capacity limit on new projects)")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[legal-rag] ⚠️ could not set serverless RAG mode ({type(_e).__name__}: {_e}). "
+              f"If corpus creation 400s on Spanner capacity, PATCH …/ragEngineConfig with "
+              f'{{"ragManagedDbConfig": {{"serverless": {{}}}}}} manually.')
+
     # 3) reuse-or-create the corpus. IMPORTANT: use the TYPED
     #    RagManagedVertexVectorSearch object — an empty dict {} is silently ignored and
     #    falls back to RagManagedDb (which defaults to the Spanner mode that's

@@ -68,6 +68,23 @@ ensure_endpoint gcp-iamcredentials-mtls https://iamcredentials.mtls.googleapis.c
 # GOOGLE_CLOUD_LOCATION=global ⇒ genai/session egress to the GLOBAL aiplatform host.
 ensure_endpoint gcp-aiplatform-global   https://aiplatform.googleapis.com
 ensure_endpoint gcp-aiplatform-mtls-glb https://aiplatform.mtls.googleapis.com
+# …BUT the global flag does NOT cover the session service. Even with
+# GOOGLE_CLOUD_LOCATION=global, VertexAiSessionService egresses to the engine's OWN
+# REGIONAL host — https://REGION-aiplatform.mtls.googleapis.com/…/reasoningEngines/<id>/
+# sessions/… — so the REGIONAL endpoints must be registered too. Miss gcp-aiplatform-mtls
+# and EVERY run 403s in _prepare_session ("Egress request is not authorized") before a
+# line of agent code runs. (This was the fresh-project trap: only the global hosts were
+# registered here, so the regional session egress was silently unregistered → 403.)
+# Trace/telemetry/logging use the regional hosts likewise (Topology + traces are empty
+# without them). Registering is enough — the step-2 grant loop auto-grants every gcp-*.
+ensure_endpoint gcp-aiplatform          "https://$REGION-aiplatform.googleapis.com"
+ensure_endpoint gcp-aiplatform-mtls     "https://$REGION-aiplatform.mtls.googleapis.com"
+ensure_endpoint gcp-telemetry           https://telemetry.googleapis.com
+ensure_endpoint gcp-telemetry-mtls      https://telemetry.mtls.googleapis.com
+ensure_endpoint gcp-cloudtrace          https://cloudtrace.googleapis.com
+ensure_endpoint gcp-cloudtrace-mtls     https://cloudtrace.mtls.googleapis.com
+ensure_endpoint gcp-logging             https://logging.googleapis.com
+ensure_endpoint gcp-logging-mtls        https://logging.mtls.googleapis.com
 # PUB/SUB — BOTH hosts. A gateway-attached engine egresses over mTLS, so registering only
 # https://pubsub.googleapis.com is NOT enough: the agents' mesh-telemetry publish is
 # refused with `403 Egress request is not authorized … unregistered in the Agent Registry`,

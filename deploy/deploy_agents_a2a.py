@@ -128,10 +128,16 @@ if identities:
     # a2a_engine.py now sends Authorization (for the target) + Proxy-Authorization (for
     # the gateway) + the client cert.
     _A2A = f"https://{REGION}-aiplatform.mtls.googleapis.com/v1beta1"
-    _ENV.setdefault("LEGAL_A2A_URL", f"{_A2A}/{identities['vibeflix-legal']['engine']}")
-    _ENV.setdefault("BRAND_STYLE_A2A_URL", f"{_A2A}/{identities['vibeflix-brand-style']['engine']}")
-    _ENV.setdefault("VENDOR_CLEARANCE_A2A_URL", f"{_A2A}/{identities['vibeflix-vendor-clearance']['engine']}")
-    _ENV.setdefault("DEAL_PRICING_A2A_URL", f"{_A2A}/{identities['vibeflix-deal-pricing']['engine']}")
+    # Guard EACH key. On a PARTIAL identities file (collect_agent_identities.py ran before
+    # every engine existed — e.g. deploying agents one at a time) a bare
+    # identities['vibeflix-legal'] raises KeyError and aborts the whole deploy. Set only the
+    # URLs whose engine is already known; a later pass fills in the rest.
+    for _var, _key in (("LEGAL_A2A_URL", "vibeflix-legal"),
+                       ("BRAND_STYLE_A2A_URL", "vibeflix-brand-style"),
+                       ("VENDOR_CLEARANCE_A2A_URL", "vibeflix-vendor-clearance"),
+                       ("DEAL_PRICING_A2A_URL", "vibeflix-deal-pricing")):
+        if identities.get(_key, {}).get("engine"):
+            _ENV.setdefault(_var, f"{_A2A}/{identities[_key]['engine']}")
 
 STAGING = f"gs://{PROJECT}-vibeflix-agent-staging"
 
@@ -481,6 +487,12 @@ def main():
         # engine loads (see build_runner) — the pickled closure is unreliable.
         env = {**COMMON_ENV, "VIBEFLIX_AGENT_NAME": name,
                **{k: _ENV[k] for k in spec["env"]}}
+        # Vertex REJECTS empty-string env values (400 INVALID_ARGUMENT: "…env[N].value;
+        # Required field is not set"). On a fresh project's FIRST pass, TASK_STORE_URL and
+        # the A2A URLs are "" (the app + peer engines don't exist yet). Drop the empties —
+        # the agent reads them with os.environ.get(k, <default>) and falls back cleanly
+        # (per-replica store, no A2A); pass 2 re-deploys with the real values set.
+        env = {k: v for k, v in env.items() if v != ""}
         # task_store_builder: WITHOUT it the A2aAgent template falls back to
         # InMemoryTaskStore — a dict private to each replica — and `GET /a2a/v1/tasks/{id}`
         # 404s whenever the load balancer picks a replica other than the one that created

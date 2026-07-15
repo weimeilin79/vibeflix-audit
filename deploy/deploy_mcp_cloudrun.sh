@@ -31,6 +31,13 @@ echo "[mcp-deploy] project=$PROJECT region=$REGION deployer=$DEPLOYER"
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
   cloudbuild.googleapis.com --project "$PROJECT" >/dev/null
 
+# The builds push to $REGION-docker.pkg.dev/$PROJECT/vibeflix — but nothing created that
+# Artifact Registry repo, so a FRESH project failed the first build with
+# `name unknown: Repository "vibeflix" not found`. Create it here (idempotent).
+gcloud artifacts repositories create vibeflix --repository-format=docker \
+  --location="$REGION" --project="$PROJECT" --description="Vibeflix container images" \
+  >/dev/null 2>&1 || true
+
 if [ "${1:-}" != "--no-build" ]; then
   echo "[mcp-deploy] building images (parallel Cloud Build)…"
   for G in mcp_licensing mcp_market mcp_brand_style; do

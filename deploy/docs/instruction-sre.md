@@ -128,6 +128,22 @@ Re-apply IAM at any time (idempotent, safe to re-run):
 
 ---
 
+## Step 0 — Python environment (do this FIRST)
+
+Create ONE virtual env, install every dependency the deploy touches, and run **all** the
+python/deploy commands below through it. Skipping this sends you hunting for the right
+library mid-deploy. (py3.14's pip is fragile — prefer `uv`, or a 3.12 venv.)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate     # or: uv venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install -r agents/requirements.txt
+pip install -r deploy/requirements-legal-rag.txt
+pip install -e packages/vibeflix-common
+# From here on, EVERY python step (deploy_agents_a2a.py, seed_firestore.py,
+# setup_legal_rag.py, collect_agent_identities.py, …) runs with this venv active.
+```
+
 ## Step 1 — Foundations: Pub/Sub, database, seed
 
 ```bash
@@ -136,7 +152,15 @@ gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.google
   storage.googleapis.com run.googleapis.com artifactregistry.googleapis.com \
   cloudbuild.googleapis.com aiplatform.googleapis.com agentregistry.googleapis.com \
   networkservices.googleapis.com networksecurity.googleapis.com iap.googleapis.com \
-  observability.googleapis.com apphub.googleapis.com cloudtrace.googleapis.com telemetry.googleapis.com
+  iamcredentials.googleapis.com cloudresourcemanager.googleapis.com \
+  observability.googleapis.com apphub.googleapis.com apptopology.googleapis.com \
+  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com
+# ⚠️ Do NOT trim this list. Each one bites on a FRESH project:
+#   apptopology       — the Agent Platform → Topology page ("enable services" prompt) is blank without it.
+#   cloudresourcemanager — the RAG SDK's bucket-ownership check (project-id→number) fails PermissionDenied.
+#   iamcredentials    — engines impersonate MCP_INVOKER_SA to mint MCP ID tokens; off ⇒ MCP 403.
+#   iap               — the governed gateway's egress authorization (roles/iap.egressor).
+#   telemetry/cloudtrace/monitoring — traces + the topology edges; off ⇒ empty topology.
 
 ./deploy/setup_firestore.sh      # creates the vibeflix-registry db + SEEDS it:
                                  #   registries (brand/legal/market policy),
@@ -513,6 +537,7 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
    | symptom | actual cause |
    |---|---|
    | `403 Egress request is not authorized`, seemingly at random | `GOOGLE_CLOUD_LOCATION=global` → egress to the unregistered GLOBAL aiplatform host (see 3) |
+   | `403 Egress request is not authorized` on **every** run, in `_prepare_session` (`vertex_ai_session_service.get_session`) | The **regional** `gcp-aiplatform-mtls` endpoint isn't registered. The session service ALWAYS egresses to `REGION-aiplatform.mtls.googleapis.com` even with `LOCATION=global`. `grant_agent_iam.sh` now registers the regional aiplatform/telemetry/cloudtrace/logging endpoints — re-run it. (This is the fresh-project 403; it is NOT the orchestrator-registration issue, which only affects A2A *to* the orchestrator.) |
    | MCP `401`, `Failed to get tools from toolset` | agent identity can't mint an ID token — impersonation not wired (see above) |
    | MCP `401 "the access token could not be verified"`, **intermittent**, only under the concurrent fan-out — impersonation IS wired and other calls succeed | ADK's `MCPSessionManager._get_mtls_transport` builds an mTLS transport (gated on `GOOGLE_API_USE_CLIENT_CERTIFICATE != "false"`, which we keep on for the session service's cert-bound tokens) that authenticates MCP with the agent's **ACCESS token** and **REPLACES our `httpx_client_factory`** — so our ID token never gets sent. Cloud Run remote-verifies access tokens and that flakes under load. Fix: `_disable_adk_mcp_mtls()` in `mcp_clients.py` monkeypatches `_get_mtls_transport → None` at import, so ADK falls back to our factory (ID token). Session bound tokens are untouched (different code path). Confirm: `[mcp] ADK mtls transport DISABLED` + `[mcp-auth]` firing for MCP + zero `could not be verified`. Do NOT flip `USE_CLIENT_CERTIFICATE=false` globally (re-breaks the session fuse) and do NOT make the MCP an mTLS endpoint (Cloud Run IAM checks the bearer token regardless — wrong layer) |
    | `Failed to create MCP session: unhandled errors in a TaskGroup`, **intermittent**, MCP logs show `200 OK` | NOT auth — a **TimeoutError**. `StreamableHTTPConnectionParams.timeout` defaults to **5s** and ADK applies it to the whole `list_tools()` handshake. A cold agent-identity connection must first mint an impersonated ID token (2 round trips, themselves gateway-governed) and blows the budget. Fix: `timeout=60` + `prewarm_id_token()` at import (both in `mcp_clients.py`). The TaskGroup swallows the cause — always dig out the real sub-exception before assuming auth |
