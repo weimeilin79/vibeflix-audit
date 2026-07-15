@@ -10,6 +10,7 @@
 * **Agent Gateway Dependency**: The deployment scripts had a circular dependency expecting the gateway to exist during Pass 1 engine creation. We resolved this by building the gateway early in the process.
 * **JSON Contamination**: Logging outputs in `cloud_auth.py` contaminated tool spec JSON files redirected during registration. We redirected these logs to `sys.stderr` so that tool specs generate cleanly.
 * **KeyErrors & Vertex Validation Errors**: Fixed crashes in `deploy_agents_a2a.py` due to missing agent keys in the first pass and added env var filtering to prevent Vertex AI 400 BadRequest validation errors on empty strings.
+* **Missing Cloud Trace API**: Navigating to the Vertex AI Agent Topology tab requires enabling the Cloud Trace API (`cloudtrace.googleapis.com`) to visualize trace edges.
 
 ---
 
@@ -92,3 +93,26 @@
   ```bash
   ./deploy/setup_gateway.sh gateway
   ```
+
+---
+
+## 9. 403 Forbidden on A2A Engine Execution (Egress Not Authorized)
+* **Symptom:** Running the mesh results in: `Error: Orchestrator returned no audit result: [A2A engine execution FAILED] 403 Forbidden. {'message': 'Egress request is not authorized.', 'status': 'Forbidden'}`
+* **Initial Assumption:** We initially assumed this was caused by reverting the codebase file patches in `cloud_auth.py` (which change prevent-token-sharing and other settings).
+* **Root Cause:** Due to a missing `orchestrator` in `setup_gateway.sh`'s registry loop on the first pass, the `vibeflix-orchestrator-agent` was not registered when the policy setup script ran. As a result, the A2A egress policy bindings for the orchestrator principal were skipped entirely.
+* **Resolution:** Re-run the policies script after ensuring all engines are registered:
+  ```bash
+  ./deploy/setup_gateway.sh policies
+  ```
+
+---
+
+## 10. Missing Cloud Trace API for Vertex AI Agent Topology
+* **Symptom:** Navigating to the "Topology" tab in the Vertex AI Agent Platform console prompts the user to enable a required API.
+* **Root Cause:** The reasoning engines and services export OTel spans to Cloud Trace, which the Topology console reads to reconstruct the interactive edge map. The Cloud Trace API is not enabled by default in the project API list under Step 1.
+* **Resolution:** Enable the Cloud Trace API:
+  ```bash
+  gcloud services enable cloudtrace.googleapis.com --project=vibeflix-test-1
+  ```
+
+
