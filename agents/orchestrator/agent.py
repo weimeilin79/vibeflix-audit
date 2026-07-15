@@ -41,6 +41,7 @@ from google.adk.events.event import Event
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC
 # (no-op when unset) — lets the Workflow graph show the mesh working in real time.
 from vibeflix_common.telemetry import instrument_node, set_run_id
+from vibeflix_common.models import gemini
 from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url
 
 # Load the orchestrator's Vertex AI / project configuration from its local .env.
@@ -149,7 +150,7 @@ _DISPATCH_SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" /
 
 workflow_dispatcher = LlmAgent(
     name="workflow_dispatcher",
-    model="gemini-2.5-flash",
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Decides which compliance workflows the orchestrator should run for a request.",
     instruction=_DISPATCH_SKILL.instructions,
     output_schema=DispatchDecision,
@@ -181,7 +182,7 @@ _NOTE_TOOLS.append(_lm.load_memory_tool if hasattr(_lm, "load_memory_tool") else
 
 note_responder = LlmAgent(
     name="note_responder",
-    model="gemini-2.5-flash",
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Answers the operator's free-text note/question about an audit, or acks added context.",
     instruction=(
         "You are the Sourcing Orchestrator, replying to the operator's free-text note that "

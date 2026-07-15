@@ -34,6 +34,7 @@ from google.adk.agents.context import Context
 from google.adk.events.event import Event
 
 from vibeflix_common.mcp_clients import mcp_toolset
+from vibeflix_common.models import gemini
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
 # when unset) — lets the Workflow graph show the mesh working in real time.
 from vibeflix_common.cloud_auth import maybe_auth, resolve_a2a_rpc_url, run_local
@@ -111,7 +112,7 @@ class ClearanceReport(BaseModel):
 # The clearance REASONER — conversational (no output_schema → no malformed finalizer).
 clearance_reasoner = LlmAgent(
     name="clearance_reasoner",
-    model="gemini-2.5-flash",
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Reasons the vendor/character/territory/category clearance and vendor admin.",
     instruction=(
         "You are the Vendor & Licensing Clearance reasoner for the Vibeflix pipeline. The "
@@ -152,7 +153,7 @@ clearance_reasoner = LlmAgent(
 # and forth (Flow A) without ever leaving this service.
 vendor_liaison = LlmAgent(
     name="vendor_liaison",
-    model="gemini-2.5-flash",
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Answers the legal agent's questions about a vendor from the licensing registry.",
     instruction=(
         "The legal clearance agent has asked a question about a vendor while drafting a "

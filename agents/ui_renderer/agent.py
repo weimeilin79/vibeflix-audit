@@ -20,6 +20,7 @@ import pathlib
 from pydantic import BaseModel, Field
 from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
+from vibeflix_common.models import gemini
 
 _SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" / "render-a2ui")
 
@@ -62,7 +63,7 @@ class Presentation(BaseModel):
 
 presenter_agent = LlmAgent(
     name="a2ui_presenter",
-    model="gemini-2.5-flash",
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Renders any set of compliance-workflow reports into A2UI panels.",
     instruction=_SKILL.instructions,
     output_schema=Presentation,
