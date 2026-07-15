@@ -192,6 +192,14 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     _FAST_PAUSE = 0.05
     _SLOW_PAUSE = 1.0      # then back off; ~1 req/s is gentle and keeps re-rolling the LB
     _UNSEEN_GRACE = 60.0   # give-up budget — ONLY while the task has never been seen
+    # Pause between polls of a task that is genuinely still WORKING. This was 5s, but a
+    # trace of a healthy run showed 61% of the wall-clock (73.6s of 121s) is idle — the
+    # orchestrator sleeping AFTER a sub-agent has already finished, repeated across ~6–8
+    # sequential A2A hops. The shared RemoteTaskStore made every poll a 200 (measured
+    # 49/49; the old 404 storm that justified a long sleep is gone), so polling ~1/s is
+    # cheap and reclaims most of that idle time. Keep ≥ ~0.5s so a burst of hops can't
+    # hammer the app store.
+    _WORK_PAUSE = 1.0
     miss_since = None      # monotonic ts of the first miss in the current streak
     misses = 0
     seen_ok = False        # have we EVER successfully read this task?
@@ -249,7 +257,7 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
         state = (task.get("status") or {}).get("state")
         if state in _RUNNING:
             # Genuinely still working — THIS is the only case that deserves a wait.
-            _time.sleep(5); deadline -= 5
+            _time.sleep(_WORK_PAUSE); deadline -= _WORK_PAUSE
     if state == "TASK_STATE_FAILED":
         return f"[A2A engine execution FAILED] {_status_error(task) or '(no detail)'}"
     return _extract_reply(task)

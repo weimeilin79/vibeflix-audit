@@ -576,6 +576,7 @@ export default function ChatAudit() {
       const WATCHDOG = 15000;   // a blink ALWAYS self-extinguishes (see below)
       clearTimeout(timers[key]);
       if (e.event === 'started') {
+        mark('first MCP call (LED)');
         litAt.current[key] = Date.now();
         setToolLights((m) => ({ ...m, [key]: 'blink' }));
         // WATCHDOG. Pub/Sub does NOT guarantee ordering: `completed` can be delivered
@@ -623,6 +624,21 @@ export default function ChatAudit() {
   const pmRef = useRef(null);       // A2UI processMessages, set by <A2UIBridge>
   const runSeq = useRef(0);         // monotonic run id → per-run surface id
   const runTokenRef = useRef(null); // prior-audit token → incremental re-run
+  // ── Client-perceived latency timeline ────────────────────────────────────────────
+  // Logs each user-visible milestone's offset from submit to the browser console
+  // (filter: "[timing]"). Complements the backend Cloud Trace: it captures the
+  // SSE-delivery + React-render time the server-side spans can't see, and lets us see
+  // wall-clock the way the USER experiences it (submit → agents appear → first MCP LED
+  // → response rendered).
+  const perfRef = useRef({ t0: 0, seen: {} });
+  const mark = (label) => {
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const p = perfRef.current;
+    if (label === 'submit') { p.t0 = now; p.seen = {}; console.info('[timing] ───── submit (t0) ─────'); return; }
+    if (!p.t0 || p.seen[label]) return;         // record only the FIRST occurrence
+    p.seen[label] = now;
+    console.info(`[timing] ${label.padEnd(28)} +${((now - p.t0) / 1000).toFixed(2)}s`);
+  };
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, phase]);
 
   const push = (m) => setMessages((prev) => [...prev, m]);
@@ -631,6 +647,7 @@ export default function ChatAudit() {
   // live renderer via pmRef. Each run paints its OWN surface (`audit-<n>`) as a new
   // transcript entry, so a re-run appends below instead of overwriting the last.
   const runStream = async (request, fallbackPhase) => {
+    mark('submit');
     setBusy(true); setPhase('running'); setFields(null);
     // Arm the mesh filter for a NEW run: drop the previous run's id immediately (its
     // in-flight events are now stale) and accept unstamped MCP tool events again.
@@ -662,12 +679,14 @@ export default function ChatAudit() {
           if (!dataLine) continue;
           let d; try { d = JSON.parse(dataLine.slice(6)); } catch { continue; }
           if (d.event === 'run') {
+            mark('run acknowledged (1st byte)');
             // The id the orchestrator will stamp on this run's mesh events.
             runIdRef.current = d.run_id;
           } else if (d.a2ui) {
             pmRef.current?.([retarget(d.a2ui, surfaceId)]);
           } else if (d.event === 'graph') {
             if (d.op === 'plan') {
+              mark('agents appeared (plan)');
               setGraph((g) => {
                 const next = { ...(g || {}), orchestrator: (g?.orchestrator) || { id: 'orchestrator', label: 'Orchestrator', status: 'running' } };
                 for (const n of d.nodes) {
@@ -687,6 +706,8 @@ export default function ChatAudit() {
           } else if (d.event === 'note_response') {
             push({ role: 'agent', text: d.text });
           } else if (d.event === 'done') {
+            mark('response received (done)');
+            if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(() => mark('rendered (paint)'));
             if (d.run_token) runTokenRef.current = d.run_token;
             // The sourcing decision changed the effective volume (cap/split) — sync
             // the form to the REAL number so re-submits don't re-trip the cap gate.
