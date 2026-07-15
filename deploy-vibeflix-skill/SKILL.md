@@ -67,7 +67,7 @@ If you skip pass 2, everything still "works" — but each engine silently falls 
 
 ## Non-negotiable rules
 
-**Read [`deploy/GOTCHAS.md`](../deploy/GOTCHAS.md) — it is the single source of truth.** Every rule
+**Read [`deploy/docs/GOTCHAS.md`](../deploy/docs/GOTCHAS.md) — it is the single source of truth.** Every rule
 there fails SILENTLY: the deploy exits 0, the console looks correct, and the mesh misbehaves in a
 way that points somewhere else. The ones that will bite a fresh deploy:
 
@@ -137,7 +137,7 @@ Then run `PROJECT=$PROJECT REGION=$REGION ./tests/a2a/run_layers.sh` — it prov
 
 ## Environment gotchas
 
-**Do not restate them here — read [`deploy/GOTCHAS.md`](../deploy/GOTCHAS.md).** It is the single
+**Do not restate them here — read [`deploy/docs/GOTCHAS.md`](../deploy/docs/GOTCHAS.md).** It is the single
 source of truth, and it explains each rule's *symptom* (which is the part that matters, because
 they all fail silently). The ones that reliably waste a day:
 
@@ -152,9 +152,9 @@ they all fail silently). The ones that reliably waste a day:
 
 ## Reference
 
-- `deploy/instruction-sre.md` — the automated route (Terraform + scripts). Follow this.
-- `deploy/instruction-dev.md` — the same end state, command by command, nothing hidden.
-- `deploy/README.md` — service table, env contract, observability flags.
+- `deploy/docs/instruction-sre.md` — the automated route (Terraform + scripts). Follow this.
+- `deploy/docs/instruction-dev.md` — the same end state, command by command, nothing hidden.
+- `deploy/docs/README.md` — service table, env contract, observability flags.
 - `topology.md` — who may call whom, and what actually enforces it (the gateway governs
   **egress only** — the app→engine hop is plain IAM, not gateway ingress).
 - `tests/a2a/README.md` — the 4-layer verification harness and its testing traps.

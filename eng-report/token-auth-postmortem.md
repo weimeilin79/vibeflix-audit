@@ -60,7 +60,7 @@ presented as an ordinary bearer to a plain-IAM Cloud Run MCP, it is refused. So 
 `false`. That gave me a plain, **shareable** access token Cloud Run would accept, and the MCP calls started
 going through. Problem solved — or so it looked.
 
-> ⚠️ **The chronology engineering needs:** I did not simply forget to set a flag. I *deliberately turned the
+> ⚠️ **The chronology engineering needs:** I *deliberately turned the
 > default off* to unblock MCP. The 60-minute fuse below is the direct, delayed consequence of that one change
 > — which is exactly why nothing looked wrong until an hour of runtime had passed.
 
@@ -141,7 +141,7 @@ engine.
 
 The reason the correct path needs custom code at all: an Agent-Identity engine **cannot sign an OIDC ID token
 itself** — there is no service account for the metadata server to sign with, so `fetch_id_token()` can't
-work. I bootstrap one by impersonating a real service account, `MCP_INVOKER_SA`.
+work. I bootstrap one by impersonating a real service account, `MCP_INVOKER_SA`. (Trick I learn from a codelab linked from the documentation https://codelabs.developers.google.com/cloudnet-agent-gateway)
 
 ```mermaid
 flowchart TB
@@ -211,4 +211,4 @@ concerns, the workarounds in this report are load-bearing.
 
 *vibeflix-audit · token & auth postmortem · both root causes fixed and verified in production ·
 workarounds live in `packages/vibeflix-common/vibeflix_common/`: `mcp_clients.py` · `cloud_auth.py` ·
-`a2a_engine.py`. See also `deploy/instruction-sre.md`.*
+`a2a_engine.py`. See also `deploy/docs/instruction-sre.md`.*

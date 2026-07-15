@@ -56,7 +56,7 @@ try:
     ae = agent_engines.create()          # empty instance = managed memory/session backend
 except Exception as e:                     # SDK versions vary — fall back to REST (see README)
     sys.exit(f"agent_engines.create() failed: {e}\n"
-             "Use the REST fallback in deploy/README.md if your SDK differs.")
+             "Use the REST fallback in deploy/docs/README.md if your SDK differs.")
 
 rid = ae.resource_name.split("/")[-1]
 print("\n=== Agent Engine created ===")

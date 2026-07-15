@@ -1,7 +1,7 @@
 # Mesh layer tests (cloud) — bottom-up, one hop at a time
 
 > The hard-won rules (why we check the BACKEND's log and never the agent's reply,
-> why tracing must be on, the two-pass deploy) live in **[`deploy/GOTCHAS.md`](../../deploy/GOTCHAS.md)** —
+> why tracing must be on, the two-pass deploy) live in **[`deploy/docs/GOTCHAS.md`](../../deploy/docs/GOTCHAS.md)** —
 > the single source of truth. This file only covers the harness.
 
 
@@ -98,7 +98,7 @@ app/orchestrator populate. With no state it invents values: we asked for categor
 `Backpacks-135850` and it cheerfully reported on `Apparel`. Drive it through **layer 3**
 (orchestrator + JSON payload) — that's the production path and the only reliable one.
 
-## Prerequisites (see `deploy/instruction-dev.md`)
+## Prerequisites (see `deploy/docs/instruction-dev.md`)
 
 1. engines deployed with `identity_type=AGENT_IDENTITY` + `agent_gateway_config`;
 2. `MCP_INVOKER_SA` set on every engine, each agent principal holding

@@ -2,7 +2,7 @@
 
 > Operational rules (never delete an engine, the two A2A hosts, the invoker-SA
 > impersonation, `principalSet` matching nothing) live in
-> **[`deploy/GOTCHAS.md`](deploy/GOTCHAS.md)** — the single source of truth.
+> **[`deploy/docs/GOTCHAS.md`](deploy/docs/GOTCHAS.md)** — the single source of truth.
 > This file is the *topology*: who may call whom, and what enforces it.
 
 
@@ -70,14 +70,14 @@ The approved target state for the pokedemo-test deployment. Everything is
 missed **86.8%** of the time. The engines now persist tasks in the app
 (`vibeflix_common/task_store.py`). Full story + the two load-bearing constraints (one app
 instance; the shared-secret gate):
-[G3](deploy/GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) ·
-[G5](deploy/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) ·
-[G8](deploy/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only).
+[G3](deploy/docs/GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) ·
+[G5](deploy/docs/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) ·
+[G8](deploy/docs/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only).
 
 **Auth is the MCP story reused verbatim** — an AGENT_IDENTITY engine has no service account, so
 it impersonates `MCP_INVOKER_SA` to mint an audience-bound ID token
-([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)). HTTPS is the
-*only* reason it works at all ([G8](deploy/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)).
+([G9](deploy/docs/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)). HTTPS is the
+*only* reason it works at all ([G8](deploy/docs/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)).
 
 ## MCP matrix (through the gateway, per deploy/policies.yaml)
 
@@ -96,11 +96,11 @@ it impersonates `MCP_INVOKER_SA` to mint an audience-bound ID token
 
 | Identity | Kind | Roles / grants |
 |---|---|---|
-| 6 × agent principals (`principal://…/reasoningEngines/<id>`) | Agent Identity (set at create, `identity_type=AGENT_IDENTITY`) | ⚠️ **grant to the SPECIFIC `principal://`, never `principalSet://`** — a principalSet binds without error and **matches nothing** ([G10](deploy/GOTCHAS.md#g10--principalset-grants-do-not-match-agent-identities)). Project roles: `aiplatform.user`, `aiplatform.agentDefaultAccess`, **`aiplatform.agentContextEditor`** ([G12](deploy/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget)), `agentregistry.viewer`, `logging.logWriter`, `monitoring.metricWriter`, `browser`; topic-scoped `pubsub.publisher` on `vibeflix-mesh-events`; `iam.serviceAccountTokenCreator` on the MCP invoker SA ([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)); per-agent `iap.egressor` (tool CEL per the matrix above). Audit with `./deploy/verify_deployment.sh 4s`. |
-| `vibeflix-mcp-invoker` SA | plain SA — how an agent identity authenticates to Cloud Run ([G9](deploy/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)) | **no project roles.** `roles/run.invoker` on the 3 MCP services **and on `vibeflix-app`** (the shared task store). Each agent principal holds `iam.serviceAccountTokenCreator` on it. |
+| 6 × agent principals (`principal://…/reasoningEngines/<id>`) | Agent Identity (set at create, `identity_type=AGENT_IDENTITY`) | ⚠️ **grant to the SPECIFIC `principal://`, never `principalSet://`** — a principalSet binds without error and **matches nothing** ([G10](deploy/docs/GOTCHAS.md#g10--principalset-grants-do-not-match-agent-identities)). Project roles: `aiplatform.user`, `aiplatform.agentDefaultAccess`, **`aiplatform.agentContextEditor`** ([G12](deploy/docs/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget)), `agentregistry.viewer`, `logging.logWriter`, `monitoring.metricWriter`, `browser`; topic-scoped `pubsub.publisher` on `vibeflix-mesh-events`; `iam.serviceAccountTokenCreator` on the MCP invoker SA ([G9](deploy/docs/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)); per-agent `iap.egressor` (tool CEL per the matrix above). Audit with `./deploy/verify_deployment.sh 4s`. |
+| `vibeflix-mcp-invoker` SA | plain SA — how an agent identity authenticates to Cloud Run ([G9](deploy/docs/GOTCHAS.md#g9--an-agent_identity-engine-has-no-service-account)) | **no project roles.** `roles/run.invoker` on the 3 MCP services **and on `vibeflix-app`** (the shared task store). Each agent principal holds `iam.serviceAccountTokenCreator` on it. |
 | `vibeflix-mcp-licensing` SA | MCP runtime (licensing) | `roles/datastore.user` (vendors CRUD), `roles/cloudtrace.agent`; topic-scoped `pubsub.publisher` on `vibeflix-mesh-events` |
 | `vibeflix-mcp-readonly` SA | MCP runtime (market + brand-style) | `roles/datastore.viewer` (least privilege), `roles/cloudtrace.agent`; topic-scoped `pubsub.publisher` |
-| `vibeflix-app` SA | console app (Cloud Run) | `roles/aiplatform.user`, **`roles/aiplatform.agentContextEditor`** ([G12](deploy/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget) — without it every task poll 401s and the slow agents hang forever), `roles/aiplatform.agentDefaultAccess`, `roles/agentregistry.viewer`, `roles/datastore.user`; topic-scoped `pubsub.publisher` + `pubsub.subscriber` on `vibeflix-mesh-events-app-cloud`; `storage.objectAdmin` on `gs://vibeflix-request-image` |
+| `vibeflix-app` SA | console app (Cloud Run) | `roles/aiplatform.user`, **`roles/aiplatform.agentContextEditor`** ([G12](deploy/docs/GOTCHAS.md#g12--rolesaiplatformagentcontexteditor-is-required--and-easy-to-forget) — without it every task poll 401s and the slow agents hang forever), `roles/aiplatform.agentDefaultAccess`, `roles/agentregistry.viewer`, `roles/datastore.user`; topic-scoped `pubsub.publisher` + `pubsub.subscriber` on `vibeflix-mesh-events-app-cloud`; `storage.objectAdmin` on `gs://vibeflix-request-image` |
 | your user | operator | `run.invoker` on the 3 MCP services — still granted, used for step-2 verification |
 
 ### ⚠️ Cruft currently in the cluster (documented so it isn't mistaken for design)

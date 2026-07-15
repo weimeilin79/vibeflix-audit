@@ -4,11 +4,11 @@ A modern, multi-agent workspace utilizing Google **ADK 2.0** for agent orchestra
 
 ---
 
-> 🚀 **Deploying this?** Read **[`deploy/GOTCHAS.md`](deploy/GOTCHAS.md)** first — the single
+> 🚀 **Deploying this?** Read **[`deploy/docs/GOTCHAS.md`](deploy/docs/GOTCHAS.md)** first — the single
 > source of truth for the rules that will otherwise cost you a day. Every one of them fails
 > *silently*: the deploy exits 0, the console looks right, and the mesh misbehaves in a way
-> that points somewhere else. Then follow [`deploy/instruction-sre.md`](deploy/instruction-sre.md)
-> (automated) or [`deploy/instruction-dev.md`](deploy/instruction-dev.md) (command by command),
+> that points somewhere else. Then follow [`deploy/docs/instruction-sre.md`](deploy/docs/instruction-sre.md)
+> (automated) or [`deploy/docs/instruction-dev.md`](deploy/docs/instruction-dev.md) (command by command),
 > and verify each step with `./deploy/verify_deployment.sh <step>`.
 
 ## 🏗️ Architecture Design
@@ -27,7 +27,7 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
 4. **Shared A2A Task Store**: every A2A call is `POST message:send` then `GET /a2a/v1/tasks/{id}` polled to completion — so the *task* is the unit of state the whole mesh runs on. Agent Runtime scales each engine to several replicas behind a load balancer with **no session affinity**, and the A2A server's default store is a dict **private to one replica**: the `POST` lands on replica *A*, the `GET` is balanced to *B*, and you get `404 Task not found` on **86.8% of polls** (measured: 1,228 / 1,415). That one fact was the hidden cause of most of what looked broken elsewhere — slow runs, ~1,900 "error" spans, a chat blocked for 7 minutes, and `recovery` re-running agents that had never failed. So the engines keep their tasks **outside** the replicas, in a store hosted by the app (`vibeflix_common/task_store.py` → `/api/taskstore/{id}`, wired via `A2aAgent(task_store_builder=…)`). Any replica can now serve any task: misses → **0**, a full audit **5m01s → 1m44s**.
 
-   Why *behind the app* and not a database: the Agent Gateway governs **HTTP** egress and cannot match a gRPC channel or a raw TCP socket, which rules out Cloud SQL/Postgres and Redis outright ([G8](deploy/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)). Two constraints are **load-bearing, not tuning knobs**: the app runs as exactly **one instance** ([G5](deploy/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1)) and the endpoints are gated by a shared secret (`TASK_STORE_KEY`) because the app is deliberately public. Nothing here is durable — it's demo state, and an unreachable app degrades back to per-replica memory with a loud warning rather than failing the run.
+   Why *behind the app* and not a database: the Agent Gateway governs **HTTP** egress and cannot match a gRPC channel or a raw TCP socket, which rules out Cloud SQL/Postgres and Redis outright ([G8](deploy/docs/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)). Two constraints are **load-bearing, not tuning knobs**: the app runs as exactly **one instance** ([G5](deploy/docs/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1)) and the endpoints are gated by a shared secret (`TASK_STORE_KEY`) because the app is deliberately public. Nothing here is durable — it's demo state, and an unreachable app degrades back to per-replica memory with a loud warning rather than failing the run.
 
 ### 10-service distributed mesh
 
@@ -133,7 +133,7 @@ structured **`graph` events** that drive a **live workflow graph in the right pa
 legal fires — each node lighting up with its status (running · cleared · blocked ·
 needs-input · failed). See **[FLOW.md](FLOW.md) §7**.
 
-See **[deploy/README.md](deploy/README.md)** for the env contract and Cloud Run / Agent Engine deployment.
+See **[deploy/docs/README.md](deploy/docs/README.md)** for the env contract and Cloud Run / Agent Engine deployment.
 
 ---
 
@@ -639,7 +639,7 @@ The `/api/audit/resume` endpoint (`{session_id, values}`) still backs the
 non-streaming collect loop.
 
 > ADK 2.0 (pre-GA, Python ≥ 3.11) is pinned with the `[a2a]` extra; images
-> install it with `--pre`. See **[deploy/README.md](deploy/README.md)** for the
+> install it with `--pre`. See **[deploy/docs/README.md](deploy/docs/README.md)** for the
 > environment contract and **Cloud Run / Agent Engine** deployment.
 
 ---
@@ -647,7 +647,7 @@ non-streaming collect loop.
 ## ☁️ Deploying to Google Cloud
 
 Cloud rollout is phased; everything lives in **`deploy/`** (scripts + Terraform)
-with the full guide in **[`deploy/README.md`](deploy/README.md)**.
+with the full guide in **[`deploy/docs/README.md`](deploy/docs/README.md)**.
 
 **Phase 1 — MCP servers → Cloud Run** (done, repeatable):
 
@@ -658,7 +658,7 @@ PROJECT=pokedemo-test REGION=us-central1 ./deploy/deploy_mcp_cloudrun.sh
 
 Builds the 3 images with Cloud Build and applies `deploy/terraform/mcp/`
 (IAM-gated Cloud Run services + least-privilege runtime service accounts).
-See deploy/README.md § "Cloud phase 1" for prerequisites, verification, and teardown.
+See deploy/docs/README.md § "Cloud phase 1" for prerequisites, verification, and teardown.
 
 Next phases: agents → Agent Runtime, registry + Agent Gateway.
 

@@ -8,10 +8,10 @@ Other docs **link here**. Do not restate a rule in another file: we tried that, 
 drifted until they contradicted each other and, in one case, actively lied (a handoff doc still
 claiming `TELEMETRY=off` long after tracing was mandatory).
 
-Referenced by: [`README.md`](../README.md) · [`topology.md`](../topology.md) ·
+Referenced by: [`README.md`](../../README.md) · [`topology.md`](../../topology.md) ·
 [`deploy/README.md`](README.md) · [`instruction-sre.md`](instruction-sre.md) ·
-[`instruction-dev.md`](instruction-dev.md) · [`tests/a2a/README.md`](../tests/a2a/README.md) ·
-[`deploy-vibeflix-skill/SKILL.md`](../deploy-vibeflix-skill/SKILL.md)
+[`instruction-dev.md`](instruction-dev.md) · [`tests/a2a/README.md`](../../tests/a2a/README.md) ·
+[`deploy-vibeflix-skill/SKILL.md`](../../deploy-vibeflix-skill/SKILL.md)
 
 ---
 

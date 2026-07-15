@@ -283,7 +283,7 @@ Surfaces per the [Agent Gateway codelab](https://codelabs.developers.google.com/
    + service agent SA from the describe output.
 3. **Policies** — an IAP authz extension imported (`iapPolicyVersion: "V1"`),
    bound to the gateway via an `AuthzPolicy` (REQUEST_AUTHZ, REST), then ALL
-   per-caller tool grants applied from [`deploy/policies.yaml`](policies.yaml)
+   per-caller tool grants applied from [`deploy/policies.yaml`](../policies.yaml)
    in one shot:
 
    ```bash
@@ -376,7 +376,7 @@ gcloud builds submit . --config deploy/cloudbuild-app.yaml \
 # ⚠️ --min-instances=1 --max-instances=1 IS LOAD-BEARING, NOT A TUNING KNOB.
 #    The app hosts the engines' SHARED A2A TASK STORE and the single Pub/Sub mesh consumer.
 #    Two instances split BOTH → task polls 404 and the console's graph half-draws.
-#    Why: deploy/GOTCHAS.md  G5 (one instance) · G3 (the task store)
+#    Why: deploy/docs/GOTCHAS.md  G5 (one instance) · G3 (the task store)
 # TASK_STORE_KEY gates those endpoints — the app is public, so they would otherwise be
 #    world-writable. Keep it in deploy/.env.
 gcloud run deploy vibeflix-app \

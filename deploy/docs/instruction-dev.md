@@ -485,7 +485,7 @@ gcloud alpha network-services agent-gateways describe vibeflix-gateway \
 **4c. Policies — IAP authz extension + per-agent egress grants.** Access
 control is IAP: attach a `REQUEST_AUTHZ` extension to the gateway, then grant
 each agent identity `roles/iap.egressor` scoped by CEL conditions —
-[`deploy/policies.yaml`](policies.yaml) is the row-by-row mapping, identities
+[`deploy/policies.yaml`](../policies.yaml) is the row-by-row mapping, identities
 come from `deploy/agent_identities.json`:
 
 ```bash
@@ -542,7 +542,7 @@ page (associated with that server). ⚠️ `--resource-type=agent-registry` is a
 preview surface; if your gcloud rejects it, re-run with `--project-scope`
 (enforces identically, but NOT shown in the console).
 
-Fastest route — apply every [`deploy/policies.yaml`](policies.yaml) row at once:
+Fastest route — apply every [`deploy/policies.yaml`](../policies.yaml) row at once:
 
 ```bash
 ./deploy/grant_mcp_egress.sh --dry-run        # preview
@@ -916,7 +916,7 @@ gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMA
 # and is the single consumer of the Pub/Sub mesh subscription. Two app instances split BOTH:
 # task polls 404 (the very bug the store exists to kill) and the console's workflow graph
 # renders only a fraction of its nodes.
-#   Full story: deploy/GOTCHAS.md → G5 (one instance) · G3 (the task store) · G14 (why 404s lie)
+#   Full story: deploy/docs/GOTCHAS.md → G5 (one instance) · G3 (the task store) · G14 (why 404s lie)
 #
 # TASK_STORE_KEY gates those endpoints. The app is --allow-unauthenticated (the browser has to
 # load the console), so without the shared secret anyone could read or tamper with the agents'
