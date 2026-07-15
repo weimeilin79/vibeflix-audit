@@ -556,7 +556,32 @@ export default function ChatAudit() {
         }));
         return;
       }
-      if (!e.tool) { console.debug('[mesh] ignored (no tool, not an orchestrator node)', e); return; }
+      // Draw the agent's box LIVE from its OWN mesh feed, so it appears the moment the
+      // agent starts working — not at the +58s end-of-run plan. In cloud the orchestrator
+      // returns its result all at once, so `source: 'orchestrator'` node events don't
+      // stream; the boxes used to materialize only from the trailing plan, which made the
+      // tool LEDs light ~30s BEFORE their boxes appeared. Agent activity reaches us as the
+      // agent's own sub-node events (source: 'deal_pricing' | 'vendor_clearance') or its
+      // DEDICATED MCP's LED (source: 'mcp_brand_style' — brand_style is its only consumer).
+      // Shared MCPs (licensing/market) serve multiple agents, so they can't attribute a box.
+      const AGENT_OF = {
+        brand_style: 'brand_style_compliance_agent',
+        mcp_brand_style: 'brand_style_compliance_agent',
+        vendor_clearance: 'vendor_clearance_agent',
+        deal_pricing: 'deal_pricing_agent',
+      };
+      const box = AGENT_OF[e.source];
+      if (box) {
+        setGraph((g) => {
+          const cur = g?.[box];
+          // Never downgrade a box the plan/aggregate already resolved to a terminal state.
+          if (cur && ['completed', 'done', 'blocked', 'failed'].includes(cur.status)) return g || {};
+          const label = box.replace(/_agent$/, '').replace(/_compliance$/, '')
+            .replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+          return { ...(g || {}), [box]: { ...(cur || { id: box, label, parent: 'orchestrator' }), status: 'running' } };
+        });
+      }
+      if (!e.tool) { console.debug('[mesh] agent-node (drew box, no LED)', e.source, e.node); return; }
       const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
       // ⚑ LED DIAGNOSTIC. The LED only lights if this key matches a ROW key the graph
       // built from /api/mcp/tools (`<chipLabel>/<tool>`). Log both so a mismatch — or a
