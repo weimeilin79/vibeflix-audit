@@ -309,6 +309,23 @@ class GoogleAuth(httpx.Auth):
         else:
             # Local fallback (laptop running cloud services):
             request.headers["Authorization"] = f"Bearer {token_for(url)}"
+        # Propagate the W3C traceparent so the callee (MCP server / app task store) joins
+        # THIS engine's trace — that is what lets the console's Agent Platform → Topology
+        # page draw the agent→MCP edge (it "builds edges from cross-service trace
+        # connections"; without it: "No recent trace connections detected"). The MCP servers
+        # are OTel-instrumented (instrument_fastmcp) and will honour the parent. Mirrors
+        # a2a_engine.py: gated on the SAME A2A_TRACE_PROPAGATION flag, and only when the
+        # current context is valid AND sampled — a bare inject of an UNSAMPLED context makes
+        # the callee drop its own spans (measured there: 68-span traces collapsed to 2).
+        if os.environ.get("A2A_TRACE_PROPAGATION", "").lower() == "on":
+            try:
+                from opentelemetry import trace as _ot
+                from opentelemetry.propagate import inject as _inject
+                _sc = _ot.get_current_span().get_span_context()
+                if _sc.is_valid and _sc.trace_flags.sampled:
+                    _inject(request.headers)
+            except Exception:  # noqa: BLE001 — tracing must never break the request
+                pass
         yield request
 
 
