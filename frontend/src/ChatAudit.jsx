@@ -262,6 +262,10 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   const root = nodes.find((n) => !n.parent);
   const l1 = nodes.filter((n) => root && n.parent === root.id);
   const l2 = nodes.filter((n) => n.parent && (!root || n.parent !== root.id));
+  // Agent boxes grow to fit their workflow-step rows (deal_pricing → evaluate/reconcile/…).
+  const nodeH = (n) => NH + ((n.steps?.length || 0) ? (n.steps.length * ROW_H + 6) : 0);
+  const heights = {}; nodes.forEach((n) => { heights[n.id] = nodeH(n); });
+  const maxL1H = Math.max(NH, ...l1.map((n) => heights[n.id]));
   const l1Y = 116;
   const pos = {};
   if (root) pos[root.id] = { x: (W - NW) / 2, y: 14 };
@@ -288,7 +292,7 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   const serverList = Object.values(servers).sort((a, b) => consumerX(a) - consumerX(b));
   const k = serverList.length;
   const SBW = k ? Math.min(NW, (W - 16 * (k - 1) - 16) / k) : NW;
-  const mcpY = l1Y + NH + 46;
+  const mcpY = l1Y + maxL1H + 46;
   serverList.forEach((s, i) => {
     s.x = Math.max(8, (W - (k * SBW + (k - 1) * 16)) / 2) + i * (SBW + 16);
     s.h = BOX_HDR + s.rows * ROW_H + BOX_PAD;
@@ -302,7 +306,7 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
 
   const edge = (a, b, dashed) => {
     const pa = pos[a], pb = pos[b]; if (!pa || !pb) return null;
-    const x1 = pa.x + NW / 2, y1 = pa.y + NH, x2 = pb.x + NW / 2, y2 = pb.y, my = (y1 + y2) / 2;
+    const x1 = pa.x + NW / 2, y1 = pa.y + (heights[a] || NH), x2 = pb.x + NW / 2, y2 = pb.y, my = (y1 + y2) / 2;
     return <path key={`${a}-${b}`} d={`M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`}
       fill="none" stroke="var(--glass-border, #444)" strokeWidth="2" strokeDasharray={dashed ? '5 5' : undefined} />;
   };
@@ -313,7 +317,7 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   const mcpEdge = (nodeId, s, idx) => {
     const pa = pos[nodeId]; if (!pa) return null;
     const below = pa.y > mcpY;
-    const x1 = pa.x + NW / 2, y1 = below ? pa.y : pa.y + NH;
+    const x1 = pa.x + NW / 2, y1 = below ? pa.y : pa.y + (heights[nodeId] || NH);
     const spread = SBW / (s.consumers.length + 1);
     const x2 = s.x + spread * (idx + 1), y2 = below ? mcpY + Math.max(40, s.h) : mcpY;
     const my = (y1 + y2) / 2;
@@ -384,15 +388,40 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
     // Unknown status (a new agent's vocabulary) → neutral style but show the REAL
     // status text, never a misleading 'queued'.
     const s = WF_STATUS[n.status] || { ...WF_STATUS.pending, label: n.status || 'queued' };
+    const h = heights[n.id] || NH;
+    const steps = n.steps || [];
     return (
       <g className={n.status === 'running' ? 'wf-running' : ''}>
-        <rect x={p.x} y={p.y} width={NW} height={NH} rx="11" fill={s.fill} stroke={s.border}
+        <rect x={p.x} y={p.y} width={NW} height={h} rx="11" fill={s.fill} stroke={s.border}
           strokeWidth={n.status === 'running' ? 2.6 : 1.6} strokeDasharray={n.status === 'reused' ? '5 4' : undefined} />
         <circle cx={p.x + 18} cy={p.y + 20} r="5.5" fill={s.dot} />
         {/* Node fills are dark in BOTH themes (status colors), so the title is a
             fixed light color — theme-aware text would go black-on-dark in light mode. */}
         <text x={p.x + NW / 2} y={p.y + 26} textAnchor="middle" fontSize="16" fontWeight="700" fill="#e8eaed">{n.label}</text>
         <text x={p.x + NW / 2} y={p.y + 46} textAnchor="middle" fontSize="12" fill={s.dot}>{s.label}</text>
+        {/* Agent WORKFLOW STEPS — one lit row each, mirroring the MCP server boxes. Keyed
+            `<agentNode>/<step>` into the SAME toolLights map, so pulseLed drives them. */}
+        {steps.length > 0 && (
+          <line x1={p.x + 12} y1={p.y + NH - 6} x2={p.x + NW - 12} y2={p.y + NH - 6}
+            stroke="rgba(232,234,237,0.22)" strokeWidth="0.8" />
+        )}
+        {steps.map((st, j) => {
+          const key = `${n.id}/${st}`;
+          const mode = (toolLights || {})[key];
+          const lit = mode === 'on' || mode === 'blink';
+          const ty = p.y + NH + 5 + j * ROW_H;
+          const txt = st.replace(/_/g, ' ');
+          return (
+            <g key={key} data-led={key}>
+              <circle className={mode === 'blink' ? 'wf-led-blink' : ''} cx={p.x + 18} cy={ty} r="3.6"
+                fill={lit ? '#3ddc84' : 'rgba(232,234,237,0.28)'} />
+              <text x={p.x + 30} y={ty + 4} fontSize="11.5" fontWeight={lit ? 700 : 400}
+                fill={lit ? '#e8eaed' : 'rgba(232,234,237,0.62)'}>
+                {txt.length > 30 ? txt.slice(0, 29) + '…' : txt}
+              </text>
+            </g>
+          );
+        })}
       </g>
     );
   };
@@ -501,6 +530,28 @@ export default function ChatAudit() {
     console.info('[vibeflix] console build: led-diag-1 · mesh filter = run_id-only');
     const timers = {};
     const litAt = { current: {} };   // key → ts of `started`, so an instant tool still blinks
+    // MCP tools AND agent workflow steps run in MILLISECONDS, so started+completed land in
+    // the same tick. Hold the blink a minimum, then linger solid so even an instant call is
+    // visible. Shared by both LED families (keys `<mcp>/<tool>` and `<agent>/<step>`).
+    const BLINK_MIN = 1200, LINGER = 7000, WATCHDOG = 20000;
+    const pulseLed = (key, event) => {
+      clearTimeout(timers[key]);
+      if (event === 'started') {
+        litAt.current[key] = Date.now();
+        setToolLights((m) => ({ ...m, [key]: 'blink' }));
+        // WATCHDOG: Pub/Sub isn't ordered — a late `started` after `completed` would
+        // otherwise leave the LED stuck on. Always self-extinguish.
+        timers[key] = setTimeout(() => setToolLights((m) => ({ ...m, [key]: undefined })), WATCHDOG);
+      } else {  // completed / failed → hold the blink briefly, then solid, then off
+        const elapsed = Date.now() - (litAt.current[key] || 0);
+        const hold = Math.max(0, BLINK_MIN - elapsed);
+        setToolLights((m) => ({ ...m, [key]: m[key] === 'blink' ? 'blink' : 'on' }));
+        timers[key] = setTimeout(() => {
+          setToolLights((m) => ({ ...m, [key]: 'on' }));
+          timers[key] = setTimeout(() => setToolLights((m) => ({ ...m, [key]: undefined })), LINGER);
+        }, hold);
+      }
+    };
     const es = new EventSource(`${API_BASE}/api/mesh/events`);
     es.onmessage = (ev) => {
       let e; try { e = JSON.parse(ev.data); } catch { return; }
@@ -584,14 +635,22 @@ export default function ChatAudit() {
       };
       const box = AGENT_OF[e.source];
       if (box) {
+        // A real-agent sub-node event (no tool, e.g. deal_pricing/evaluate) is a WORKFLOW
+        // STEP — list it as a row inside the agent box and light it like an MCP tool. The
+        // mcp_brand_style events carry a tool, so they're NOT steps (they fall through to
+        // the LED-tool branch below).
+        const step = (!e.tool && e.node && e.node !== e.source) ? e.node : null;
         setGraph((g) => {
-          const cur = g?.[box];
-          // Never downgrade a box the plan/aggregate already resolved to a terminal state.
-          if (cur && ['completed', 'done', 'blocked', 'failed'].includes(cur.status)) return g || {};
           const label = box.replace(/_agent$/, '').replace(/_compliance$/, '')
             .replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-          return { ...(g || {}), [box]: { ...(cur || { id: box, label, parent: 'orchestrator' }), status: 'running' } };
+          const cur = g?.[box] || { id: box, label, parent: 'orchestrator', steps: [] };
+          const steps = step && !(cur.steps || []).includes(step)
+            ? [...(cur.steps || []), step] : (cur.steps || []);
+          // Record the step even on a resolved box, but never DOWNGRADE its status.
+          const terminal = ['completed', 'done', 'blocked', 'failed'].includes(cur.status);
+          return { ...(g || {}), [box]: { ...cur, steps, status: terminal ? cur.status : 'running' } };
         });
+        if (step) pulseLed(`${box}/${step}`, e.event);
       }
       if (!e.tool) { console.debug(box ? `[mesh] drew agent box → ${box}` : '[mesh] ignored (no tool)', e.source, e.node); return; }
       const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
@@ -602,36 +661,9 @@ export default function ChatAudit() {
       console.debug(`[mesh] LED ${key} = ${e.event}`,
         known.size ? (known.has(key) ? '✓ row exists' : `✗ NO ROW — known keys: ${[...known].join(', ')}`)
                    : '(no rows yet — /api/mcp/tools not loaded or graph empty)');
-      // ── MAKE THE LED VISIBLE ─────────────────────────────────────────────────────
-      // These MCP tools run in MILLISECONDS, so `started` and `completed` land in the
-      // same tick: React coalesced them into one render and the LED went blink→solid→off
-      // in ~1.6s. It was firing correctly the whole time — you just could not SEE it.
-      // So: hold the blink for a minimum, THEN linger solid. An instant tool now reads as
-      // roughly BLINK_MIN + LINGER of unmistakable green.
-      const BLINK_MIN = 1200;   // a tool that returns instantly still visibly blinks
-      const LINGER = 7000;      // then sits SOLID green ~7s after it ends — long enough to
-                                // actually see a millisecond-fast MCP call (was 2.6s, too quick)
-      const WATCHDOG = 20000;   // a blink ALWAYS self-extinguishes (must exceed BLINK_MIN+LINGER)
-      clearTimeout(timers[key]);
-      if (e.event === 'started') {
-        mark('first MCP call (LED)');
-        litAt.current[key] = Date.now();
-        setToolLights((m) => ({ ...m, [key]: 'blink' }));
-        // WATCHDOG. Pub/Sub does NOT guarantee ordering: `completed` can be delivered
-        // BEFORE `started`. Without this, the late `started` re-lights a tool that has
-        // already finished and nothing ever clears it — the LED stays on forever.
-        timers[key] = setTimeout(
-          () => setToolLights((m) => ({ ...m, [key]: undefined })), WATCHDOG);
-      } else {  // completed / failed → hold the blink briefly, then solid, then off
-        const elapsed = Date.now() - (litAt.current[key] || 0);
-        const hold = Math.max(0, BLINK_MIN - elapsed);
-        setToolLights((m) => ({ ...m, [key]: m[key] === 'blink' ? 'blink' : 'on' }));
-        timers[key] = setTimeout(() => {
-          setToolLights((m) => ({ ...m, [key]: 'on' }));
-          timers[key] = setTimeout(
-            () => setToolLights((m) => ({ ...m, [key]: undefined })), LINGER);
-        }, hold);
-      }
+      // Light the MCP-tool LED (same blink→linger behavior as agent steps, via pulseLed).
+      if (e.event === 'started') mark('first MCP call (LED)');
+      pulseLed(key, e.event);
     };
     return () => { es.close(); Object.values(timers).forEach(clearTimeout); };
   }, []);
@@ -730,7 +762,9 @@ export default function ChatAudit() {
                 for (const n of d.nodes) {
                   const prev = next[n.id];
                   // run → running; not run → keep whatever state it was left in (don't relabel "reused").
-                  next[n.id] = { id: n.id, label: n.label, parent: 'orchestrator',
+                  // Spread `prev` FIRST so the live workflow-step rows we accumulated from the
+                  // mesh feed survive the plan (which would otherwise replace the node and wipe them).
+                  next[n.id] = { ...prev, id: n.id, label: n.label, parent: 'orchestrator',
                     status: n.run ? 'running' : (prev?.status || 'pending') };
                 }
                 return next;
