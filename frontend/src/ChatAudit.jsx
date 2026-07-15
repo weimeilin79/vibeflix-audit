@@ -545,6 +545,13 @@ export default function ChatAudit() {
       // builds itself from the mesh feed instead. Same mechanism the legal node above
       // already used.
       if (e.node && !e.tool && e.source === 'orchestrator') {
+        // Only AGENT nodes (…_agent) are drawn as boxes. The orchestrator also emits
+        // events for its INTERNAL phases — ingest, dispatch, recovery, compile_ui,
+        // generate_report, contract_finalize, finalize — which are plumbing, not agents,
+        // and must NOT clutter the graph. (They started rendering once we set
+        // parent:'orchestrator' on orchestrator-sourced nodes; before that they were
+        // parent-less and invisible.)
+        if (!e.node.endsWith('_agent')) return;
         const status = e.event === 'started' ? 'running'
           : e.event === 'failed' ? 'failed'
           : (e.status || 'completed');
@@ -552,7 +559,12 @@ export default function ChatAudit() {
           .replace(/\b\w/g, (c) => c.toUpperCase());
         setGraph((g) => ({
           ...(g || {}),
-          [e.node]: { ...(g?.[e.node] || { id: e.node, label }), status },
+          // parent:'orchestrator' is REQUIRED — the layout only renders a box as a level-1
+          // node when node.parent === root.id (the parent-less orchestrator). Without it the
+          // node exists in state but draws nowhere. Bit us when an agent (e.g. brand_style)
+          // ran WITHOUT calling its MCP, so its box came only from this orchestrator event
+          // and silently vanished.
+          [e.node]: { ...(g?.[e.node] || { id: e.node, label, parent: 'orchestrator' }), status },
         }));
         return;
       }
@@ -581,7 +593,7 @@ export default function ChatAudit() {
           return { ...(g || {}), [box]: { ...(cur || { id: box, label, parent: 'orchestrator' }), status: 'running' } };
         });
       }
-      if (!e.tool) { console.debug('[mesh] agent-node (drew box, no LED)', e.source, e.node); return; }
+      if (!e.tool) { console.debug(box ? `[mesh] drew agent box → ${box}` : '[mesh] ignored (no tool)', e.source, e.node); return; }
       const key = `${(e.source || '').replace(/^mcp_/, '')}/${e.tool}`;
       // ⚑ LED DIAGNOSTIC. The LED only lights if this key matches a ROW key the graph
       // built from /api/mcp/tools (`<chipLabel>/<tool>`). Log both so a mismatch — or a
@@ -596,9 +608,10 @@ export default function ChatAudit() {
       // in ~1.6s. It was firing correctly the whole time — you just could not SEE it.
       // So: hold the blink for a minimum, THEN linger solid. An instant tool now reads as
       // roughly BLINK_MIN + LINGER of unmistakable green.
-      const BLINK_MIN = 900;    // a tool that returns instantly still visibly blinks
-      const LINGER = 2600;      // then sits solid green long enough to register
-      const WATCHDOG = 15000;   // a blink ALWAYS self-extinguishes (see below)
+      const BLINK_MIN = 1200;   // a tool that returns instantly still visibly blinks
+      const LINGER = 7000;      // then sits SOLID green ~7s after it ends — long enough to
+                                // actually see a millisecond-fast MCP call (was 2.6s, too quick)
+      const WATCHDOG = 20000;   // a blink ALWAYS self-extinguishes (must exceed BLINK_MIN+LINGER)
       clearTimeout(timers[key]);
       if (e.event === 'started') {
         mark('first MCP call (LED)');
