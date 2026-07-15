@@ -162,6 +162,10 @@ gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.google
 #   iap               — the governed gateway's egress authorization (roles/iap.egressor).
 #   telemetry/cloudtrace/monitoring — traces + the topology edges; off ⇒ empty topology.
 
+./deploy/setup_buckets.sh        # creates $PROJECT-request-image + $PROJECT-approved-assets
+                                 #   (GCS names are GLOBAL — the plain vibeflix-* names are
+                                 #   taken; script uses project-prefixed defaults) and seeds
+                                 #   the default mockup. PIN the two names it prints into .env.
 ./deploy/setup_firestore.sh      # creates the vibeflix-registry db + SEEDS it:
                                  #   registries (brand/legal/market policy),
                                  #   vendors (CRUD store), audit_history smoke test
@@ -212,7 +216,12 @@ asset-bucket read; app: Vertex, Firestore, upload bucket, its own subscription:
 
 ```bash
 terraform -chdir=deploy/terraform/agents init
-terraform -chdir=deploy/terraform/agents apply -var project=$PROJECT -var region=$REGION
+terraform -chdir=deploy/terraform/agents apply -var project=$PROJECT -var region=$REGION \
+  -var "upload_bucket=${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}" \
+  -var "asset_buckets=[\"${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}\",\"${APPROVED_ASSETS_BUCKET:-$PROJECT-approved-assets}\"]"
+# ⚠️ Pass the bucket vars — the module GRANTS iam on these buckets (it does not create
+# them), and its defaults are the plain vibeflix-* names, which don't exist on a fresh
+# project. setup_buckets.sh (Step 1) created the PROJECT-PREFIXED ones; point terraform there.
 ```
 
 **3b. Deploy each agent via the A2A TEMPLATE — one at a time, in dependency order.**
@@ -395,7 +404,7 @@ agents-cli publish gemini-enterprise --registration-type a2a \
 
 ```bash
 gcloud builds submit . --config deploy/cloudbuild-app.yaml \
-  --substitutions "_IMAGE=$REGION-docker.pkg.dev/$PROJECT/vibeflix/app"
+  --substitutions "_IMAGE=$REGION-docker.pkg.dev/$PROJECT/vibeflix/app,_DEFAULT_IMAGE=gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png"
 
 # ⚠️ --min-instances=1 --max-instances=1 IS LOAD-BEARING, NOT A TUNING KNOB.
 #    The app hosts the engines' SHARED A2A TASK STORE and the single Pub/Sub mesh consumer.
@@ -409,7 +418,7 @@ gcloud run deploy vibeflix-app \
   --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
   --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,\
 FIRESTORE_DATABASE=vibeflix-registry,PUBSUB_TOPIC=vibeflix-mesh-events,PUBSUB_SUBSCRIPTION=vibeflix-mesh-events-app-cloud,\
-REQUEST_IMAGE_BUCKET=vibeflix-request-image,TASK_STORE_KEY=$(grep '^TASK_STORE_KEY=' deploy/.env | cut -d= -f2),\
+REQUEST_IMAGE_BUCKET=${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image},TASK_STORE_KEY=$(grep '^TASK_STORE_KEY=' deploy/.env | cut -d= -f2),\
 BRAND_STYLE_A2A_URL=<engine url>,VENDOR_CLEARANCE_A2A_URL=<engine url>,DEAL_PRICING_A2A_URL=<engine url>,UI_RENDERER_A2A_URL=<engine url>,\
 ORCHESTRATOR_A2A_URL=<engine url>,\
 MCP_LICENSING_URL=<licensing run.app URL>/mcp,MCP_MARKET_URL=<market run.app URL>/mcp,MCP_BRAND_STYLE_URL=<brand-style run.app URL>/mcp"

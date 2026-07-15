@@ -13,7 +13,12 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 const MARKETS = ['North America', 'Europe', 'Asia-Pacific', 'Latin America', 'Middle East & Africa'];
 
 // Default mockup (grogu) — uploaded to the request-image bucket during setup.
-const DEFAULT_IMAGE = 'gs://vibeflix-request-image/vendor_request_refine.png';
+// Build-time configurable: the Docker build passes VITE_DEFAULT_IMAGE (the project's
+// request-image bucket) via cloudbuild-app.yaml's _DEFAULT_IMAGE substitution, so a fresh
+// project's bundle points at ITS bucket. Falls back to the pokedemo-test bucket for local
+// dev / an un-parameterized build.
+const DEFAULT_IMAGE = import.meta.env.VITE_DEFAULT_IMAGE
+  || 'gs://vibeflix-request-image/vendor_request_refine.png';
 
 // Guided examples for new users. Each fills the whole form (from FLOW.md §6, seed
 // registry) and previews the workflow path as a diagram. Scenarios that pause mid-run

@@ -1,9 +1,15 @@
 # Cloud Build config for the console app image (frontend + FastAPI + orchestrator).
 #   gcloud builds submit . --config deploy/cloudbuild-app.yaml \
-#     --substitutions "_IMAGE=<region>-docker.pkg.dev/<proj>/vibeflix/app"
+#     --substitutions "_IMAGE=<region>-docker.pkg.dev/<proj>/vibeflix/app,\
+# _DEFAULT_IMAGE=gs://<project>-request-image/vendor_request_refine.png"
+# _DEFAULT_IMAGE bakes the project's default mockup into the frontend bundle (Vite
+# VITE_DEFAULT_IMAGE). Omit it and the app falls back to the pokedemo-test bucket.
 steps:
   - name: gcr.io/cloud-builders/docker
-    args: [build, -f, deploy/Dockerfile.app, -t, "${_IMAGE}", .]
+    args: [build, -f, deploy/Dockerfile.app, -t, "${_IMAGE}",
+           "--build-arg", "VITE_DEFAULT_IMAGE=${_DEFAULT_IMAGE}", "."]
+substitutions:
+  _DEFAULT_IMAGE: ""
 images:
   - ${_IMAGE}
 options:

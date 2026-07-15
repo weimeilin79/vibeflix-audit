@@ -6,10 +6,14 @@
 # ---- Stage 1: build the React frontend ----
 FROM node:20-slim AS frontend
 WORKDIR /build
+# Build-time default mockup image, baked into the bundle by Vite (VITE_* env var). Empty ⇒
+# the app's JS fallback (the pokedemo-test bucket) is used. Set per-project via the
+# _DEFAULT_IMAGE Cloud Build substitution (see cloudbuild-app.yaml).
+ARG VITE_DEFAULT_IMAGE=""
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --registry=https://registry.npmjs.org/
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_DEFAULT_IMAGE="$VITE_DEFAULT_IMAGE" npm run build
 
 # ---- Stage 2: FastAPI + orchestrator ----
 FROM python:3.12-slim AS app

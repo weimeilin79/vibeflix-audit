@@ -87,6 +87,11 @@ gcloud pubsub subscriptions create vibeflix-mesh-events-app-cloud \
   --message-retention-duration 10m --expiration-period never
 # (local dev uses its own subscription, vibeflix-mesh-events-app — see setup_pubsub.sh)
 
+# 1c-bis. GCS asset buckets — nothing else creates them, and GCS names are GLOBAL (the
+#         plain vibeflix-* names are taken), so this uses project-prefixed defaults.
+./deploy/setup_buckets.sh            # creates $PROJECT-request-image + $PROJECT-approved-assets
+                                     # and seeds the default mockup. PIN the names it prints into .env.
+
 # 1d. Legal RAG corpus (the legal agent has no doc volume in the cloud)
 ./deploy/setup_legal_rag.sh          # note the printed RAG_CORPUS resource name
 ```
@@ -923,7 +928,7 @@ UI_URL=$BASE/$(eng vibeflix-ui-renderer)
 
 # 5c. build + deploy
 export AR=$REGION-docker.pkg.dev/$PROJECT/vibeflix   # (re-set; step-2 var may be gone)
-gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app"
+gcloud builds submit . --config deploy/cloudbuild-app.yaml --substitutions "_IMAGE=$AR/app,_DEFAULT_IMAGE=gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png"
 # ⚠️ EXACTLY ONE INSTANCE. Correctness, not cost control.
 #
 # The app hosts the engines' SHARED A2A TASK STORE (/api/taskstore/*) — a dict in this process —
@@ -940,7 +945,7 @@ gcloud run deploy vibeflix-app --image $AR/app --region $REGION \
   --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
   --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,\
 FIRESTORE_DATABASE=vibeflix-registry,PUBSUB_TOPIC=vibeflix-mesh-events,PUBSUB_SUBSCRIPTION=vibeflix-mesh-events-app-cloud,\
-REQUEST_IMAGE_BUCKET=vibeflix-request-image,AUDIT_HISTORY_DIR=/tmp,\
+REQUEST_IMAGE_BUCKET=${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image},AUDIT_HISTORY_DIR=/tmp,\
 TASK_STORE_KEY=$(grep '^TASK_STORE_KEY=' deploy/.env | cut -d= -f2),\
 ORCHESTRATOR_A2A_URL=$ORCH_URL,\
 BRAND_STYLE_A2A_URL=$BRAND_URL,VENDOR_CLEARANCE_A2A_URL=$VENDOR_URL,DEAL_PRICING_A2A_URL=$PRICING_URL,UI_RENDERER_A2A_URL=$UI_URL,\

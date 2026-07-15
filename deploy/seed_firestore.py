@@ -39,10 +39,14 @@ REGISTRIES = {
             "hoodie", "jacket", "backpack", "lunchbox", "water bottle", "phone case",
             "tablet case", "laptop sleeve",
         ]},
+        # Asset buckets are PROJECT-PREFIXED by default (GCS names are global — the plain
+        # vibeflix-* names are taken). Derive from the same env vars setup_buckets.sh /
+        # the app use, so brand_style's asset-source gate approves the project's real
+        # upload bucket. Pinned in deploy/.env (pokedemo-test keeps its unprefixed names).
         "approved_sources": {"items": [
-            "gs://vibeflix-approved-assets/",
+            f"gs://{os.environ.get('APPROVED_ASSETS_BUCKET', f'{PROJECT}-approved-assets')}/",
             "gs://vibeflix-licensing/",
-            "gs://vibeflix-request-image/",
+            f"gs://{os.environ.get('REQUEST_IMAGE_BUCKET', f'{PROJECT}-request-image')}/",
             "https://assets.vibeflix.com/",
         ]},
     },

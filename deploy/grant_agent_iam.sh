@@ -85,6 +85,15 @@ ensure_endpoint gcp-cloudtrace          https://cloudtrace.googleapis.com
 ensure_endpoint gcp-cloudtrace-mtls     https://cloudtrace.mtls.googleapis.com
 ensure_endpoint gcp-logging             https://logging.googleapis.com
 ensure_endpoint gcp-logging-mtls        https://logging.mtls.googleapis.com
+ensure_endpoint gcp-telemetry-regional  "https://$REGION-telemetry.googleapis.com"
+# The engines resolve A2A peers through the REGIONAL Agent Registry (registry_client.py →
+# AgentRegistry(location=$REGION)), and the registry itself is a gateway-governed egress
+# destination — so its hosts MUST be registered too, or the orchestrator's peer lookup
+# 403s and the fan-out never happens. (Both regional + global; mtls for gateway egress.)
+ensure_endpoint gcp-agentregistry            "https://$REGION-agentregistry.googleapis.com"
+ensure_endpoint gcp-agentregistry-mtls       "https://$REGION-agentregistry.mtls.googleapis.com"
+ensure_endpoint gcp-agentregistry-global     https://agentregistry.googleapis.com
+ensure_endpoint gcp-agentregistry-mtls-global https://agentregistry.mtls.googleapis.com
 # PUB/SUB — BOTH hosts. A gateway-attached engine egresses over mTLS, so registering only
 # https://pubsub.googleapis.com is NOT enough: the agents' mesh-telemetry publish is
 # refused with `403 Egress request is not authorized … unregistered in the Agent Registry`,
