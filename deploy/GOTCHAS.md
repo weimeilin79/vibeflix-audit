@@ -25,8 +25,6 @@ same display name **updates in place** and keeps the id (Agent Runtime makes a n
 points at a dead principal — while the console still looks correct.**
 
 Recovery: `collect_agent_identities.py` → `grant_agent_iam.sh` → re-point the registry endpoints.
-*(Evidence it happened: the MCP invoker SA still carries 12 `tokenCreator` members for 6 agents —
-six are orphaned principals of engines that no longer exist.)*
 
 ## G2 · Deploy the engines SERIALLY
 
@@ -156,6 +154,56 @@ balancer routes away from precisely the one you need. Misses are not independent
 An earlier "optimisation" concluded *task gone* after 60s of misses and **abandoned healthy runs**
 (and made `recovery` re-run agents that had never failed). The rule: **once a task has been read
 successfully even once, it exists — never declare it gone.** Fixed properly by G3's shared store.
+
+## G15 · The token EXPIRES mid-poll — refresh it, don't mint it once
+
+On Cloud Run the metadata server hands back a **cached** token carrying only its *remaining*
+lifetime — which can be **minutes, not an hour**. A long A2A poll (a legal escalation runs many
+minutes) therefore **outlives a credential minted once at the start**, and the endpoint answers
+`401`.
+
+If the poll loop treats that 401 as fatal, it kills the whole audit and the console shows:
+
+```
+HTTPError: 401 Client Error: Unauthorized for url: …/a2a/v1/tasks/{id}
+```
+
+**It looks exactly like an IAM problem, and it is not.** We chased it as one for hours. The long
+paths — a legal run, or a 7-minute `ui_renderer` poll — are simply the ones that outlive their
+token. `a2a_engine._send_sync` now re-mints the credential per request and treats `401/403` as
+**refresh-and-retry**, not fatal.
+
+## G16 · Local vs cloud is AUTO-DETECTED — `RUN_LOCAL` is only an override
+
+| `RUN_LOCAL` | behaviour |
+|---|---|
+| **unset (normal)** | **auto-detect** — on GCP (`K_SERVICE`, or the metadata server, which only resolves inside GCP) → credentials **ON**; anywhere else → plain HTTP |
+| `true` / `1` / `yes` | force local (no auth) **even on GCP** |
+| `false` / `0` / `no` | force cloud auth **even off GCP** (laptop → cloud MCPs) |
+
+Deployed code needs no `RUN_LOCAL` at all: **being on GCP is what turns auth on.** (An older doc
+claimed a "local-safe default" — wrong, and it's the kind of claim that sends you looking in the
+wrong place.)
+
+---
+
+## How a single hop authenticates — TWO headers, TWO parties
+
+Inside a gateway-attached engine, one call carries **two** credentials:
+
+| header | read by | contains |
+|---|---|---|
+| `Proxy-Authorization` | **the Agent Gateway** — authorizes the *egress* | the engine's access token (its agent identity) |
+| `Authorization` | **the destination** — authenticates you *to it* | Cloud Run / the app → an audience-bound **ID token** ([G9](#g9--an-agent_identity-engine-has-no-service-account)); a Google API → the access token |
+
+> ⚠️ **The gateway authorizes egress. It never signs your request to the backend.** Believing
+> otherwise cost days. It also gives you a distance signal:
+> **403** = the gateway refused (the call never left) · **401** = the gateway allowed it and the
+> **target** refused you.
+
+Sending only `Proxy-Authorization` was a real bug: Google's endpoint saw no credential and
+answered 401 — which we long mistook for a missing client certificate. (There is none: a
+controlled test with `cert=None` produced zero 401/403. The cert plumbing was deleted.)
 
 ---
 

@@ -157,9 +157,47 @@ COMMON_ENV = {
     # to the region.
     "GOOGLE_CLOUD_LOCATION": "global",
     "PUBSUB_TOPIC": _ENV.get("PUBSUB_TOPIC", "vibeflix-mesh-events"),
-    "GOOGLE_API_USE_CLIENT_CERTIFICATE": "false",
-    "GOOGLE_API_USE_MTLS_ENDPOINT": "never",
-    "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
+    # ⚠️ THESE THREE ARE WHAT KEEP THE ENGINE'S CREDENTIAL ALIVE. They used to be
+    # "false"/"never"/"false" — leftovers from a test that concluded "no client certificate
+    # is needed" (true for the A2A hop) and deleted the cert plumbing. That test missed the
+    # real job of the certificate: an AGENT_IDENTITY token is CERTIFICATE-BOUND, and the
+    # cert is the ONLY way to mint a FRESH one.
+    #
+    # google-auth (compute_engine/_metadata.get_service_account_token) does it for us:
+    #     cert = _agent_identity_utils.get_and_parse_agent_identity_certificate()
+    #     if cert and should_request_bound_token(cert):
+    #         params["bindCertificateFingerprint"] = fingerprint   # → a FRESH bound token
+    # …but it returns None — and skips the whole path — when
+    #   GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES == "false"  (explicit opt-out)
+    #   GOOGLE_API_USE_CLIENT_CERTIFICATE                       == "false"  (mTLS opt-out)
+    # With those off, google-auth asks for an UNBOUND token, and the metadata server hands
+    # back the platform's SHARED, PRE-MINTED token whose expiry is FROZEN at replica boot.
+    # Refreshing re-fetches the same dead token (measured: 6 × identical SHA-256 fingerprint,
+    # identical server_expiry), so ~60 min after a replica boots EVERY call 401s
+    # ("Error code 1000") — sessions first, because _prepare_session runs before agent code,
+    # then MCP (its impersonation is bootstrapped from the same token) and A2A.
+    # Measured fuse: 59m56s / 60m52s / 61m26s / 63m47s from each replica's own boot.
+    #
+    # Only ONE flag is needed, and it must NOT be the heavy hammer. google-auth requests a
+    # certificate-BOUND token (compute_engine/_metadata) when:
+    #   • PREVENT_AGENT_TOKEN_SHARING != "false"  (opt-in; library default is already "true")
+    #   • USE_CLIENT_CERTIFICATE      != "false"  (the gate only BLOCKS on explicit "false";
+    #                                              UNSET → None → does NOT block — verified in
+    #                                              _agent_identity_utils.should_request_bound_token)
+    #   • USE_MTLS_ENDPOINT is "auto" (library default) so the bound token rides mTLS
+    # The old bug was setting all three to false/never/false (opted OUT → unbound, frozen,
+    # platform-cached token → 60-min fuse). The FIRST fix over-corrected to true/auto/true —
+    # and `USE_CLIENT_CERTIFICATE=true` FORCE-mTLS'd *every* client in the process, including
+    # Agent Runtime's managed OTLP-HTTP telemetry exporter, which then crashed on the py3.14
+    # pyOpenSSL bug ("Context has already been used to create a Connection"). That crash is
+    # telemetry-only (OTel swallows it) but it's noise we caused.
+    # So: keep the opt-in EXPLICIT, and DO NOT set the other two — let them default. Bound
+    # tokens still mint (gate needs USE_CLIENT_CERTIFICATE only ≠ "false"); the telemetry
+    # exporter is no longer force-mTLS'd. The *.mtls.googleapis.com hosts must stay registered
+    # + granted (grant_agent_iam.sh) since the bound token still rides mTLS to aiplatform.
+    # VERIFY after deploy: [token] verdict=NEW-TOKEN (fp CHANGES, server_expiry MOVES) AND no
+    # "Context has already been used" in the logs.
+    "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "true",
     # An AGENT_IDENTITY engine has NO service account behind the metadata server,
     # so fetch_id_token() can't work — yet the Cloud Run MCPs require an
     # audience-bound OIDC ID token. The engine impersonates this SA to mint one

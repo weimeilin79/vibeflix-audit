@@ -53,6 +53,7 @@ the app is unreachable. Worst case we are exactly as broken as we were before �
 worse — and the failure is logged loudly instead of silently corrupting a run.
 """
 
+import asyncio
 import os
 
 import httpx
@@ -62,6 +63,17 @@ from a2a.types import Task
 from vibeflix_common.cloud_auth import maybe_auth
 
 _URL_ENV = "TASK_STORE_URL"
+
+# A2A TaskState values that END the task. A dropped write of one of THESE is the only
+# fatal one: the completed task then lives ONLY in this replica's local store, and the
+# caller's poll — load-balanced to another replica — reads the app's stale, still-working
+# task and hangs forever. (Intermediate `working` writes are safe to lose.)
+_TERMINAL = ("completed", "failed", "canceled", "rejected")
+
+
+def _task_state(task: Task) -> str:
+    st = getattr(getattr(task, "status", None), "state", None)
+    return str(getattr(st, "value", st) or "?").lower()
 
 
 class RemoteTaskStore(TaskStore):
@@ -102,13 +114,38 @@ class RemoteTaskStore(TaskStore):
         await self._local.save(task, context)
         if not self._base:
             return
-        try:
-            async with self._client() as c:
-                r = await c.put(f"{self._base}/api/taskstore/{task.id}",
-                                json={"json": task.model_dump_json()})
-                r.raise_for_status()
-        except Exception as e:  # noqa: BLE001 — telemetry/store must never kill the task
-            self._warn("save", task.id, e)
+        state = _task_state(task)
+        terminal = any(t in state for t in _TERMINAL)
+        # Terminal writes are the ones that hang the caller if lost, so they are logged
+        # LOUDLY (success and failure, never silenced) and RETRIED. The stream of
+        # intermediate `working` writes stays best-effort (retry adds latency for no gain).
+        attempts = 5 if terminal else 1
+        last_exc = None
+        for i in range(attempts):
+            try:
+                async with self._client() as c:
+                    r = await c.put(f"{self._base}/api/taskstore/{task.id}",
+                                    json={"json": task.model_dump_json()})
+                    r.raise_for_status()
+                if terminal:
+                    print(f"[task-store] save({task.id}) state={state} → PUT {r.status_code}"
+                          f"{f' (after {i} retries)' if i else ''}", flush=True)
+                return
+            except Exception as e:  # noqa: BLE001 — the store must never kill the task
+                last_exc = e
+                if terminal and i < attempts - 1:
+                    await asyncio.sleep(0.4 * (i + 1))
+                    continue
+                break
+        if terminal:
+            # THIS is the line to watch: a terminal state that never reached the shared
+            # store. The task completed on this replica but the caller will poll a stale
+            # non-terminal task on another replica and hang until its deadline.
+            print(f"[task-store] ⚠️ save({task.id}) state={state} FAILED after {attempts} "
+                  f"tries — TERMINAL state NOT persisted to the shared store; the caller "
+                  f"will hang: {type(last_exc).__name__}: {last_exc}", flush=True)
+        else:
+            self._warn("save", task.id, last_exc)
 
     async def get(self, task_id: str, context=None) -> Task | None:
         if self._base:

@@ -65,6 +65,28 @@ def run_local() -> bool:
     return _AUTO_DETECTED
 
 
+def _peek_jwt(token: str) -> str:
+    """Decode a JWT's payload (NO signature check) to report aud + seconds-to-expiry.
+
+    Diagnostic only: the MCP 401 ('access token could not be verified') can mean the ID
+    token is EXPIRED (stale 45-min cache outliving the real token) or WRONG-AUDIENCE
+    (aud != the MCP server URL). This surfaces both from the token itself. Never logs the
+    token — only its claims.
+    """
+    try:
+        import base64
+        import json
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)  # restore base64url padding
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        aud = claims.get("aud", "?")
+        exp = claims.get("exp")
+        left = int(exp - time.time()) if exp else "?"
+        return f"aud={aud} exp_in={left}s type={'id' if aud else 'access?'}"
+    except Exception as e:  # noqa: BLE001 — diagnostics must never break auth
+        return f"(unparseable: {type(e).__name__})"
+
+
 class _TokenMinter:
     """Lazily-initialized ADC token source: one access token + per-audience ID tokens."""
 
@@ -133,17 +155,29 @@ class _TokenMinter:
         with self._lock:
             cached = self._id_tokens.get(audience)
             if cached and cached[1] > time.time():
+                # DIAGNOSTIC: a cache HIT still 401s if the token's REAL exp is past —
+                # our 45-min cache TTL can outlive the token. exp_in<0 here = the bug.
+                print(f"[idtoken] {audience} CACHE-HIT {_peek_jwt(cached[0])} "
+                      f"cache_left={int(cached[1]-time.time())}s", flush=True)
                 return cached[0]
         try:
             if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
                 # Agent Runtime + AGENT_IDENTITY: metadata server has no SA, and the
                 # ADC fallback below returns a token Cloud Run can't verify (401).
                 token = self._id_token_via_impersonation(audience)
+                print(f"[idtoken] {audience} MINTED via impersonation "
+                      f"{_peek_jwt(token)}", flush=True)
             else:
                 # Service accounts / metadata server (Cloud Run, GCE).
                 from google.oauth2 import id_token as _idt
                 token = _idt.fetch_id_token(self._request(), audience)
-        except Exception:
+        except Exception as _imp_exc:
+            # DIAGNOSTIC: impersonation FAILED — this is the silently-swallowed path.
+            # In an agent-identity engine the ADC fallback yields a token Cloud Run
+            # CANNOT verify (→ 401), so a failure here is very likely the 401 we chase.
+            print(f"[idtoken] {audience} ⚠️ impersonation FAILED "
+                  f"({type(_imp_exc).__name__}: {str(_imp_exc)[:120]}) → ADC fallback",
+                  flush=True)
             # User ADC (local dev against cloud services): gcloud ADC includes the
             # openid scope, so a refresh carries an id_token. NOTE: not audience-
             # bound — Cloud Run accepts it for user principals.
@@ -156,6 +190,8 @@ class _TokenMinter:
                     "RUN_LOCAL=false but no ID token available — run "
                     "`gcloud auth application-default login` or use a service account."
                 )
+            print(f"[idtoken] {audience} ADC-fallback token {_peek_jwt(token)} "
+                  f"(NOT audience-bound — Cloud Run will 401 an agent identity)", flush=True)
         with self._lock:
             self._id_tokens[audience] = (token, time.time() + 45 * 60)
         return token
@@ -181,6 +217,37 @@ def prewarm_id_token(url: str) -> None:
         _MINTER.id_token(f"{parts.scheme}://{parts.hostname}")
     except Exception:
         pass
+
+
+def mcp_auth_header(url: str) -> dict:
+    """`header_provider` for McpToolset — pre-set OUR audience-bound ID token.
+
+    ROOT CAUSE this fixes: ADK's mcp_session_manager builds an mTLS transport whenever
+    GOOGLE_API_USE_CLIENT_CERTIFICATE != "false" (its default is "true", and we keep it UNSET
+    because the SESSION service needs it for bound tokens). That transport's `before_request`
+    injects `google.auth.default().token` — the AGENT'S ACCESS TOKEN — and REPLACES our
+    httpx_client_factory, so our two-header ID-token logic never runs for MCP (measured: 0
+    auth_flow hits for MCP vs 170 for the task store). Cloud Run must REMOTELY verify an access
+    token (token introspection), which flakes under the concurrent fan-out → the intermittent
+    `401 "access token could not be verified"`. An ID token is verified LOCALLY (signature), so
+    it can't flake that way.
+    ADK's before_request skips if `Authorization` is already present, so pre-setting it to our
+    ID token here makes ADK leave it alone. Fresh per session-creation (the minter caches +
+    refreshes), and it does NOT touch the USE_CLIENT_CERTIFICATE flag, so the session fix stays.
+    """
+    if run_local():
+        return {}
+    parts = urlsplit(url)
+    if not parts.hostname:
+        return {}
+    try:
+        tok = _MINTER.id_token(f"{parts.scheme}://{parts.hostname}")
+        print(f"[mcp-hdr] inject ID token for {parts.hostname} {_peek_jwt(tok)}", flush=True)
+        return {"Authorization": f"Bearer {tok}"}
+    except Exception as e:  # noqa: BLE001 — never break the connection; let ADK fall back
+        print(f"[mcp-hdr] ⚠️ could not mint ID token for {parts.hostname}: "
+              f"{type(e).__name__}: {e}", flush=True)
+        return {}
 
 
 def token_for(url: str) -> str:
@@ -214,6 +281,26 @@ class GoogleAuth(httpx.Auth):
                         request.headers["Authorization"] = f"Bearer {id_tok}"
                     except Exception:
                         request.headers.pop("Authorization", None)
+                    # ROOT-CAUSE PROBE: log what auth THIS request actually carries, so a
+                    # 401 can be correlated to the exact token sent. Cloud Run rejects
+                    # ('access token could not be verified') a token it treats as an ACCESS
+                    # token — so if a 401'd request shows Authorization=ID here, the token is
+                    # fine and the fault is transit/gateway; if it shows NONE or an access
+                    # token, it's client-side. proxy_fp vs auth_fp being equal would mean the
+                    # gateway's access token leaked into Authorization.
+                    _auth = request.headers.get("Authorization", "")
+                    _proxy = request.headers.get("Proxy-Authorization", "")
+                    _atok = _auth[7:] if _auth.startswith("Bearer ") else ""
+                    _ptok = _proxy[7:] if _proxy.startswith("Bearer ") else ""
+                    import hashlib as _h
+                    _fp = lambda t: _h.sha256(t.encode()).hexdigest()[:8] if t else "—"
+                    print(f"[mcp-auth] {request.method} {host} "
+                          f"Authorization=[{_peek_jwt(_atok) if _atok else 'NONE'} fp={_fp(_atok)}] "
+                          f"Proxy-Auth fp={_fp(_ptok)} "
+                          f"same_token={_atok == _ptok and bool(_atok)}", flush=True)
+                elif "mtls.googleapis.com" in host:
+                    # Google API endpoint via mTLS subdomain/gateway egress
+                    request.headers["Authorization"] = f"Bearer {access_tok}"
                 else:
                     request.headers.pop("Authorization", None)
             else:
@@ -247,6 +334,8 @@ def auth_headers(url: str) -> dict:
                     hdrs["Authorization"] = f"Bearer {id_tok}"
                 except Exception:
                     pass
+            elif "mtls.googleapis.com" in host:
+                hdrs["Authorization"] = f"Bearer {access_tok}"
             return hdrs
         return {"Authorization": f"Bearer {access_tok}"}
     return {"Authorization": f"Bearer {token_for(url)}"}
@@ -254,7 +343,16 @@ def auth_headers(url: str) -> dict:
 
 def mcp_httpx_factory(headers=None, timeout=None, auth=None) -> httpx.AsyncClient:
     """`httpx_client_factory` for StreamableHTTPConnectionParams — every MCP
-    connection the toolset opens carries per-request Google auth."""
+    connection the toolset opens carries per-request Google auth.
+
+    ⚠️ Do NOT add `transport=httpx.AsyncHTTPTransport(retries=N)` here. It was tried as a
+    hedge against the transient `ConnectionError: Failed to create MCP session` and it
+    made things WORSE — MCP failures jumped ~12× per run (measured 2026-07-15: 1 failure
+    across 2 runs without it vs 6 in one run with it). Transport-level retries do not play
+    well with MCP streamable-HTTP's long-lived session (the retry re-opens connections
+    underneath the session manager). The right place to harden this is the session
+    lifecycle, not the socket.
+    """
     return httpx.AsyncClient(
         headers=headers,
         timeout=timeout if timeout is not None else httpx.Timeout(30.0),

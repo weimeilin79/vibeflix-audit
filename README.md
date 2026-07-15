@@ -60,8 +60,14 @@ and it's not in the orchestrator's fan-out. Every box is its own container/insta
     │mcp_brand_   │ │mcp_licensing │ │  mcp_market   │
     │style  :9004 │ │    :9002     │ │    :9003      │  (streamable-HTTP)
     └─────────────┘ └──────────────┘ └───────────────┘
+
+   vendor_clearance ──A2A──►┌─────────────────────────────┐
+   (on vendor/category      │          legal  :8005        │  standalone A2A agent —
+    onboarding, and on the  │   (A2A server · RAG over     │  NOT in the orchestrator
+    orchestrator's          │    resource/legal/docs)      │  fan-out; only vendor_
+    contract_finalize)      │  executes the LC-#### deal    │  clearance hands off to it.
+                            └─────────────────────────────┘
   brand_style → mcp_brand_style · vendor_clearance → mcp_licensing + mcp_market
-                 vendor_clearance ──A2A──► legal (:8005)
 ```
 
 ### The shared A2A task store (and why it exists)

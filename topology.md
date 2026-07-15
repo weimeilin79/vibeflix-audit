@@ -112,7 +112,7 @@ over-privilege or dead weight that a fresh deploy should NOT reproduce:
 |---|---|---|
 | `vibeflix-app` SA holds project-level **`roles/pubsub.editor`** | granted for a per-instance mesh subscription that was **reverted**. The app already has topic-scoped `publisher` + subscription-scoped `subscriber`, which is all it needs. | **remove** — it is unused over-privilege |
 | **`vibeflix-agents` SA** still exists (topic `publisher`, bucket `objectViewer`) | the pre-Agent-Identity shared service account. The engines now run as **agent identities** and never use it. | dead — remove once confirmed unused |
-| the MCP invoker SA has **12** `tokenCreator` members for 6 agents | 6 are orphaned principals of engines deleted in an earlier rebuild ([G1](deploy/GOTCHAS.md#g1--never-delete-an-engine)) | harmless (they match nothing) — evidence of why G1 matters |
+| the MCP invoker SA has 12 `tokenCreator` members for 6 agents | **NOT cruft** — 6 are the live engine principals, 1 is a platform `principalSet://`, and **5 are Google-managed service agents** (`gcp-sa-agentgateway`, `gcp-sa-iap`, `gcp-sa-ns-authz`, `gcp-sa-dep`). | **leave them alone** — removing the service agents would likely break the gateway |
 | operator (`user:…`) still holds `run.invoker` on the 3 MCPs | step-2 verification grant | fine to keep for a demo; remove for a locked-down environment |
 
 
