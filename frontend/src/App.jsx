@@ -739,22 +739,33 @@ export default function App() {
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                     Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three domain compliance agents running concurrently — and Vendor &amp; Licensing hands off to a <strong>Legal Clearance agent</strong>. When <strong>every workflow passes</strong>, the orchestrator's <em>contract_finalize</em> step ensures the audit ends with an <strong>executed licensing contract</strong> (📜 Final Clearance Report); every completed run is archived in the <strong>Audit History</strong> tab, exportable as PDF.
                   </p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginTop: '0.5rem' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, margin: '0.7rem 0 0.3rem' }}>
+                    Each agent is a demo of a distinct agent-engineering pattern:
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginTop: '0.2rem' }}>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: '#1a73e8', display: 'block', marginBottom: '0.2rem' }}>🎨 Style Agent</strong>
-                      Reads the mockup with vision — extracts printed text and <strong>classifies the product medium from the image</strong> (an explicit medium overrides) — then runs the deterministic typo / medium / asset-source pipeline.
+                      <strong style={{ color: '#fbbc05', display: 'block', marginBottom: '0.2rem' }}>🧭 Orchestrator — routing &amp; session start</strong>
+                      The main <strong>router</strong> and the <strong>starting point of the trace span</strong>. It reads each incoming request, decides which workflows to run (all three on a first audit, only the affected ones on a re-run), and is where the run's <strong>session memory</strong> is created. Fans the domain agents out concurrently, then owns recovery, the volume-cap decision, and contract finalization.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: '#ea4335', display: 'block', marginBottom: '0.2rem' }}>⚖️ Vendor &amp; Licensing</strong>
-                      Scans exclusivity + trademark, recommends eligible vendors, and onboards new ones.
+                      <strong style={{ color: '#1a73e8', display: 'block', marginBottom: '0.2rem' }}>🎨 Style Agent — multimodal + deterministic checks</strong>
+                      <strong>Multimodal</strong>: it reads the packaging mockup, extracts everything it needs (printed text, product medium), and pulls the <strong>branding rules from its Skill</strong> to drive the checks. The checking itself is <strong>deterministic</strong> — run inside a <strong>pre-existing MCP workflow</strong> the agent operates on its own by extracting the right parameters, with no human in the loop.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: '#c9922e', display: 'block', marginBottom: '0.2rem' }}>💰 Deal Pricing</strong>
-                      Reconciles the vendor's agreed total consideration (royalty + advance + MG) against the licensor rate card via an evaluate→validate→iterate loop.
+                      <strong style={{ color: '#ea4335', display: 'block', marginBottom: '0.2rem' }}>⚖️ Vendor &amp; Licensing — agent-to-agent comms</strong>
+                      Demonstrates <strong>A2A communication</strong>: based on the case it hands off to a <strong>remote Legal agent</strong> — a <strong>two-layer</strong> exchange (it can even answer Legal's questions itself via a liaison). It also drives <strong>multiple MCP servers</strong> (vendors, exclusivity, trademark, market), and its <strong>agent identity / profile setup is the most involved</strong> in the mesh.
+                    </div>
+                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                      <strong style={{ color: '#c9922e', display: 'block', marginBottom: '0.2rem' }}>💰 Deal Pricing — reasoning over deterministic data</strong>
+                      Shows an agent <strong>reasoning across multiple MCP tools</strong>. The inputs and calculations are <strong>deterministic</strong> (rate cards, projected royalty, MG / advance math from the MCP servers), but the <strong>verdict is the agent's reasoning</strong> over that data through an evaluate→validate→iterate loop — not a hardcoded rule.
                     </div>
                     <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
-                      <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance</strong>
-                      A standalone agent — only Vendor &amp; Licensing hands off to it (on onboarding, or when the orchestrator requests contract finalization). <strong>RAG-discovers</strong> its undefined process from scattered internal docs, self-issues a provisional safety cert when none is on file, and executes the LC-#### contract.
+                      <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>⚖️ Legal Clearance — the remote agent</strong>
+                      The standalone agent Vendor &amp; Licensing hands off to (on onboarding, or when the orchestrator requests contract finalization). It <strong>RAG-discovers</strong> its undefined process from scattered internal docs, self-issues a provisional safety cert when none is on file, and executes the LC-#### contract.
+                    </div>
+                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid #34a853', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                      <strong style={{ color: '#34a853', display: 'block', marginBottom: '0.2rem' }}>🖥 UI Renderer — A2UI integration</strong>
+                      Integrates with the client's <strong>A2UI library</strong>: instead of agents returning raw JSON, it turns each result into <strong>A2UI surface components</strong> — the live panels and report cards you watch stream into the console — so the interface is generated by the agents rather than hand-coded per report.
                     </div>
                   </div>
                 </div>
@@ -803,7 +814,7 @@ export default function App() {
                   {/* App — serves the console, streams SSE, talks to orchestrator + presenter */}
                   <g transform="translate(12, 105)">
                     <rect width="100" height="58" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="2" />
-                    <text x="50" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">🌐 App (:8000)</text>
+                    <text x="50" y="22" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">🌐 App</text>
                     <text x="50" y="37" fill="var(--accent-purple)" fontSize="7.5" fontWeight="bold" textAnchor="middle">React + FastAPI</text>
                     <text x="50" y="50" fill="var(--text-muted)" fontSize="7" textAnchor="middle">SSE · A2UI stream</text>
                   </g>
@@ -819,7 +830,7 @@ export default function App() {
                   {/* UI Renderer — standalone presenter, called only by the App */}
                   <g transform="translate(200, 190)">
                     <rect width="130" height="54" rx="6" fill="var(--bg-card)" stroke="var(--accent-blue)" strokeWidth="2" />
-                    <text x="65" y="20" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer (:8004)</text>
+                    <text x="65" y="20" fill="var(--text-dark)" fontSize="9" fontWeight="bold" textAnchor="middle">UI Renderer</text>
                     <text x="65" y="34" fill="var(--accent-blue)" fontSize="7.5" fontWeight="bold" textAnchor="middle">A2UI panels</text>
                     <text x="65" y="47" fill="var(--text-muted)" fontSize="7" textAnchor="middle">standalone · reports → surface</text>
                   </g>
@@ -851,7 +862,7 @@ export default function App() {
                   {/* Legal Clearance — private, only Vendor & Licensing calls it (dotted) */}
                   <g transform="translate(660, 94)">
                     <rect width="150" height="44" rx="6" fill="var(--bg-card)" stroke="var(--accent-purple)" strokeWidth="1.5" strokeDasharray="4 3" />
-                    <text x="10" y="18" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance (:8005)</text>
+                    <text x="10" y="18" fill="var(--text-dark)" fontSize="8.5" fontWeight="bold">⚖️ Legal Clearance</text>
                     <text x="10" y="32" fill="var(--accent-purple)" fontSize="6.5" fontWeight="bold">RAG · executes contract (LC-#)</text>
                   </g>
                 </svg>
@@ -862,6 +873,30 @@ export default function App() {
                 <span style={{ fontSize: '0.75rem', color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setActiveTab('canvas')}>
                   Go to Live Audit Console ➔
                 </span>
+              </div>
+            </div>
+
+            {/* Agent Gateway & Agent Identity — platform security */}
+            <div className="canvas-panel">
+              <h3 className="panel-title" style={{ fontSize: '0.95rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
+                <Shield size={16} style={{ color: 'var(--accent-purple)' }} /> Agent Gateway &amp; Agent Identity — how the mesh is secured
+              </h3>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                Every agent runs on Agent Engine behind a <strong>governed gateway</strong>, authenticated as its own <strong>Agent Identity</strong> — no shared service account. That pairing is what lets a licensing mesh prove <em>which</em> agent did <em>what</em>, and stop any agent from reaching a service it wasn't approved for.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginTop: '0.5rem' }}>
+                <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                  <strong style={{ color: '#1a73e8', display: 'block', marginBottom: '0.2rem' }}>🪪 Agent Identity</strong>
+                  Each engine gets its <strong>own principal</strong> (<code>principal://…/reasoningEngines/&lt;id&gt;</code>), set at create time (<code>identity_type=AGENT_IDENTITY</code>) — there is <strong>no service account</strong> behind it. Every call it makes is attributed to that identity, and IAM is granted to the specific principal.
+                </div>
+                <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                  <strong style={{ color: '#34a853', display: 'block', marginBottom: '0.2rem' }}>🚪 Agent Gateway</strong>
+                  A <strong>default-deny egress proxy</strong> in front of every agent. An agent can only reach endpoints <strong>registered</strong> with the gateway; each outbound call carries a <code>Proxy-Authorization</code> header the gateway checks before forwarding (per-tool allow-lists). Unregistered egress is refused.
+                </div>
+                <div style={{ gridColumn: '1 / -1', background: 'var(--bg-secondary)', border: '1px solid var(--accent-purple)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.75rem' }}>
+                  <strong style={{ color: 'var(--accent-purple)', display: 'block', marginBottom: '0.2rem' }}>🔒 Least-privilege by design</strong>
+                  Because every agent carries a <strong>verifiable identity</strong> and can only reach <strong>allow-listed services</strong>, every action is attributable and <strong>auditable end-to-end</strong>, and a misbehaving agent can't touch anything it wasn't granted. Security is enforced by the platform — not bolted on afterward.
+                </div>
               </div>
             </div>
 

@@ -12,6 +12,71 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 // vendors, exclusivity contracts, and trademark records are keyed on these.
 const MARKETS = ['North America', 'Europe', 'Asia-Pacific', 'Latin America', 'Middle East & Africa'];
 
+// Default mockup (grogu) — uploaded to the request-image bucket during setup.
+const DEFAULT_IMAGE = 'gs://vibeflix-request-image/vendor_request_refine.png';
+
+// Guided examples for new users. Each fills the whole form (from FLOW.md §6, seed
+// registry) and previews the workflow path as a diagram. Scenarios that pause mid-run
+// (needs_input) say so — the user answers the dynamically-rendered follow-up live.
+const SCENARIOS = [
+  {
+    id: 'happy', icon: '✅', title: 'Happy path',
+    blurb: 'All three checks pass → contract is executed.',
+    fields: { character: 'grogu', market: 'Asia-Pacific', productCategory: 'Vinyl Figures', vendor: 'VND-1001',
+      volume: '15000', medium: 'vinyl figures', netUnitPrice: '15', agreedRate: '18', agreedAdvance: '88000', agreedMg: '1500000' },
+    steps: [
+      { text: 'Brand ✓', kind: 'pass' }, { text: 'Vendor ✓', kind: 'pass' }, { text: 'Pricing ✓', kind: 'pass' },
+      { text: 'Finalize', kind: 'step' }, { text: '📜 Contract', kind: 'contract' },
+    ],
+    followUp: null,
+    what: 'grogu vinyl figures on VND-1001 (Shenzhen — cleared for vinyl in Asia-Pacific, no exclusivity) with compliant pricing, and the medium matches the mockup. Brand style, vendor clearance, and deal pricing all pass, so the orchestrator executes the licensing contract.',
+  },
+  {
+    id: 'exclusivity', icon: '⛔', title: 'Exclusivity block',
+    blurb: 'A rival holds exclusive rights → blocked.',
+    fields: { character: 'grogu', market: 'North America', productCategory: 'Vinyl Figures', vendor: 'VND-1001',
+      volume: '15000', medium: 'vinyl figures', netUnitPrice: '15', agreedRate: '18', agreedAdvance: '88000', agreedMg: '1500000' },
+    steps: [
+      { text: 'Clearance', kind: 'step' }, { text: 'Exclusivity scan', kind: 'step' },
+      { text: 'Collision · EXC-4471', kind: 'block' }, { text: 'BLOCKED', kind: 'block' },
+    ],
+    followUp: null,
+    what: 'Liberty Figure Works (VND-1008) holds the exclusive rights to grogu vinyl figures in North America (EXC-4471). Auditing a different vendor for that character × category × territory hits the lock and blocks — no contract.',
+  },
+  {
+    id: 'onboard', icon: '🆕', title: 'Onboard new vendor',
+    blurb: 'Unknown vendor → you fill onboarding details.',
+    fields: { character: 'grogu', market: 'Europe', productCategory: 'Vinyl Figures', vendor: 'Acme Toys Ltd',
+      volume: '15000', medium: 'vinyl figures', netUnitPrice: '15', agreedRate: '18', agreedAdvance: '88000', agreedMg: '1500000' },
+    steps: [
+      { text: 'get_vendor · not found', kind: 'step' }, { text: 'New-vendor details', kind: 'pause' },
+      { text: 'create_vendor', kind: 'step' }, { text: 'Cleared ✓', kind: 'pass' }, { text: 'Legal → 📜', kind: 'contract' },
+    ],
+    followUp: 'The mesh pauses and asks for the new vendor’s details — you only need to fill the HQ location (e.g. “Thailand”); every other field is optional. Submit it and the vendor is onboarded and legal runs on its own.',
+    what: '“Acme Toys Ltd” isn’t in the registry, so vendor clearance asks you to onboard it before it can clear.',
+  },
+  {
+    id: 'volumecap', icon: '📦', title: 'Over volume cap',
+    blurb: 'Volume > 25,000 → you make a sourcing call.',
+    fields: { character: 'grogu', market: 'Asia-Pacific', productCategory: 'Vinyl Figures', vendor: 'VND-1001',
+      volume: '40000', medium: 'vinyl figures', netUnitPrice: '15', agreedRate: '18', agreedAdvance: '88000', agreedMg: '1500000' },
+    steps: [
+      { text: 'Cleared ✓', kind: 'pass' }, { text: '40,000 > 25,000 cap', kind: 'pause' }, { text: 'Sourcing choice', kind: 'pause' },
+    ],
+    followUp: 'After clearing you’re asked a sourcing decision — A: split the excess into an addendum (SC-7798-EU), or B: cap at 25,000 and cancel the rest. Pick either.',
+    what: 'The happy-path vendor (VND-1001, Asia-Pacific vinyl), but 40,000 units exceeds the 25,000 authorized cap, which triggers a human sourcing decision inside the report step.',
+  },
+];
+
+// Diagram pill palette by step kind (semantic, theme-tolerant).
+const SCN_KIND = {
+  step:     { bd: 'var(--glass-border,#5a6472)', fg: 'var(--text-muted,#8a94a6)', bg: 'transparent' },
+  pass:     { bd: '#3ddc84', fg: '#26a56f', bg: 'rgba(61,220,132,.12)' },
+  block:    { bd: '#ff5c5c', fg: '#d9524d', bg: 'rgba(255,92,92,.12)' },
+  pause:    { bd: '#e0aa4e', fg: '#b7860f', bg: 'rgba(224,170,78,.15)' },
+  contract: { bd: '#3ddc84', fg: '#26a56f', bg: 'rgba(61,220,132,.12)' },
+};
+
 // The backend STREAMS incremental A2UI surfaceUpdate messages (plan → per-agent
 // fills → closing report line) and @a2ui/react patches the surface in place, so panels fill in
 // live. Each audit RUN targets its OWN surface id (`audit-<n>`), so a re-run (e.g.
@@ -203,6 +268,57 @@ function MeshStatus({ components }) {
 }
 
 // ---- Live workflow graph (right pane): nodes light up + show status as the run goes ----
+function ScenarioPicker({ active, onPick }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.15rem' }}>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+        New here? Pick an example — it fills the form and shows what will happen.
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+        {SCENARIOS.map((s) => {
+          const on = active?.id === s.id;
+          return (
+            <button key={s.id} type="button" onClick={() => onPick(s)} className="preset-btn"
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '1px',
+                textAlign: 'left', flex: '1 1 148px', minWidth: '148px', padding: '0.45rem 0.6rem',
+                borderColor: on ? '#6ea8ff' : undefined, boxShadow: on ? '0 0 0 1px #6ea8ff' : undefined }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700 }}>{s.icon} {s.title}</span>
+              <span style={{ fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>{s.blurb}</span>
+            </button>
+          );
+        })}
+      </div>
+      {active && (
+        <div style={{ border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '0.55rem 0.65rem',
+          background: 'var(--bg-tertiary, rgba(127,127,127,.06))', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px' }}>
+            {active.steps.flatMap((st, i) => {
+              const k = SCN_KIND[st.kind] || SCN_KIND.step;
+              const pill = (
+                <span key={`p${i}`} style={{ fontSize: '0.66rem', fontWeight: 600, color: k.fg, background: k.bg,
+                  border: `1px solid ${k.bd}`, borderRadius: '999px', padding: '2px 8px', whiteSpace: 'nowrap' }}>{st.text}</span>
+              );
+              return i < active.steps.length - 1
+                ? [pill, <span key={`a${i}`} style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>→</span>]
+                : [pill];
+            })}
+          </div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{active.what}</div>
+          {active.followUp && (
+            <div style={{ fontSize: '0.67rem', color: '#b7860f', background: 'rgba(224,170,78,.1)',
+              border: '1px solid rgba(224,170,78,.4)', borderRadius: '6px', padding: '0.4rem 0.55rem', lineHeight: 1.5 }}>
+              ⏸ <b>You’ll handle one step live:</b> {active.followUp}
+            </div>
+          )}
+          <div style={{ fontSize: '0.63rem', color: 'var(--text-muted)' }}>
+            Form filled below — review, then hit <b>Submit — run audit</b>.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const WF_STATUS = {
   running:     { fill: '#15304f', border: '#4a9eff', dot: '#4a9eff', label: 'running' },
   cleared:     { fill: '#123726', border: '#3ddc84', dot: '#3ddc84', label: 'cleared' },
@@ -456,7 +572,8 @@ export default function ChatAudit() {
   const runIdRef = useRef(null);
   const runActiveRef = useRef(false);
 
-  const [imageUri, setImageUri] = useState('');
+  const [imageUri, setImageUri] = useState(DEFAULT_IMAGE);
+  const [activeScenario, setActiveScenario] = useState(null);
   // Set when a run ends fully passed with an executed contract — the session is final.
   const [contractId, setContractId] = useState('');
   const [market, setMarket] = useState('North America');
@@ -942,6 +1059,16 @@ export default function ChatAudit() {
       </Field>
     </>
   );
+  // Guided example → fill the whole form and remember which one (drives the preview).
+  const pickScenario = (s) => {
+    const f = s.fields;
+    setImageUri(DEFAULT_IMAGE);
+    setMarket(f.market); setVolume(f.volume); setCharacter(f.character);
+    setProductCategory(f.productCategory); setVendor(f.vendor); setMedium(f.medium || '');
+    setNetUnitPrice(f.netUnitPrice); setAgreedRate(f.agreedRate);
+    setAgreedAdvance(f.agreedAdvance); setAgreedMg(f.agreedMg);
+    setNote(''); setActiveScenario(s);
+  };
   const reset = () => {
     runTokenRef.current = null;
     setMessages([{ role: 'system', text: 'New session. Start an audit below.' }]);
@@ -949,6 +1076,7 @@ export default function ChatAudit() {
     // Blank graph ⇒ no run to scope to: reject every mesh event until the next run
     // starts, so a finished audit's trailing events can't repopulate an empty graph.
     runIdRef.current = null; runActiveRef.current = false;
+    setActiveScenario(null);
     setNote(''); setNetUnitPrice(''); setAgreedRate(''); setAgreedAdvance(''); setAgreedMg('');
   };
   const uploadImage = async (fileObj) => {
@@ -988,6 +1116,9 @@ export default function ChatAudit() {
           </button>
         </div>
       </div>
+
+      {/* Guided examples — OUTSIDE the audit box, shown before the first run. */}
+      {phase === 'start' && <ScenarioPicker active={activeScenario} onPick={pickScenario} />}
 
       {/* Chat transcript — the active input is drawn INLINE, as the last turn */}
       <div ref={scrollRef} className="canvas-panel" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0.9rem', display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-start', gap: '0.6rem' }}>

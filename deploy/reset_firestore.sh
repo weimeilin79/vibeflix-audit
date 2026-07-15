@@ -68,6 +68,16 @@ PY
 echo "[reset_firestore] 4/5 deleting uploaded mockups from gs://$UPLOAD_BUCKET/…"
 gcloud storage rm "gs://$UPLOAD_BUCKET/**" --project "$PROJECT" 2>/dev/null \
   || echo "   (bucket already empty)"
+# Restore the default mockup the console form points at. The frontend's DEFAULT_IMAGE
+# (and every guided-scenario preset) is gs://$UPLOAD_BUCKET/vendor_request_refine.png,
+# so the bucket wipe above would otherwise leave the form's default image link dangling.
+DEFAULT_IMG="$ROOT/deploy/img/vendor_request_refine.png"
+if [ -f "$DEFAULT_IMG" ]; then
+  gcloud storage cp "$DEFAULT_IMG" "gs://$UPLOAD_BUCKET/vendor_request_refine.png" --project "$PROJECT" \
+    && echo "   restored default mockup → gs://$UPLOAD_BUCKET/vendor_request_refine.png"
+else
+  echo "   ⚠️ default mockup missing at $DEFAULT_IMG — the console form's default image will 404"
+fi
 
 echo "[reset_firestore] 5/5 removing the local JSONL fallback…"
 rm -f "$ROOT/data/app/audit_history.jsonl" && echo "   removed" || true
