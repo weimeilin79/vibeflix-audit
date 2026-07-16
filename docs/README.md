@@ -11,6 +11,9 @@ top-level [`README.md`](../README.md) stays lean and points here; deployment liv
    "tribal knowledge" legal problem, and the enterprise-grade security bar.
 2. **[Architecture](./02-architecture.md)** — the ten-service mesh: the layers, the two
    protocols (A2A + MCP), the shared task store, and what enforces the boundaries.
+3. **[The `vibeflix-common` library](./03-common-lib.md)** — the shared plumbing every
+   service uses: what each module does, who imports it, and the four that carry hard-won
+   fixes.
 
 ## Where the rest lives
 

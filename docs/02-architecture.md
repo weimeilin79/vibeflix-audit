@@ -5,8 +5,9 @@ boundaries between them.*
 
 > This page is the **conceptual** map. For the exact security target state (who may call
 > whom, and the IAM that creates each edge) see [`topology.md`](../topology.md); for the
-> rules that fail silently in production see
-> [`deploy/docs/GOTCHAS.md`](../deploy/docs/GOTCHAS.md).
+> shared plumbing that implements all of it see
+> [the `vibeflix-common` library](./03-common-lib.md); for the rules that fail silently in
+> production see [`deploy/docs/GOTCHAS.md`](../deploy/docs/GOTCHAS.md).
 
 ---
 
