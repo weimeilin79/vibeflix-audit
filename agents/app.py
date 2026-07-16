@@ -24,7 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "orchestrator", ".env"))
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from google.genai import types
@@ -1601,6 +1601,37 @@ async def upload_image(file: UploadFile = File(...)):
         return {"image_uri": uri}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
+
+@app.get("/api/image-preview")
+async def image_preview(uri: str):
+    """Stream a mockup image so the console can show a thumbnail — browsers can't fetch a
+    gs:// URI directly. RESTRICTED to the app's own image buckets so this can't be used as
+    an open GCS read proxy."""
+    if not uri.startswith("gs://"):
+        raise HTTPException(status_code=400, detail="Only gs:// URIs are previewable.")
+    bucket_name, _, blob_name = uri[len("gs://"):].partition("/")
+    allowed = {_REQUEST_IMAGE_BUCKET,
+               os.environ.get("APPROVED_ASSETS_BUCKET", "vibeflix-approved-assets")}
+    if not blob_name or bucket_name not in allowed:
+        raise HTTPException(status_code=403, detail="This bucket is not previewable.")
+
+    def _fetch():
+        from google.cloud import storage
+        client = storage.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT"))
+        blob = client.bucket(bucket_name).blob(blob_name)
+        if not blob.exists():
+            return None, None
+        return blob.download_as_bytes(), (blob.content_type or "image/png")
+
+    try:
+        data, ctype = await asyncio.to_thread(_fetch)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Preview failed: {e}")
+    if data is None:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return Response(content=data, media_type=ctype,
+                    headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.post("/api/telemetry")

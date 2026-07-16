@@ -579,6 +579,16 @@ export default function ChatAudit() {
 
   const [imageUri, setImageUri] = useState(DEFAULT_IMAGE);
   const [activeScenario, setActiveScenario] = useState(null);
+  const [previewErr, setPreviewErr] = useState(false);
+  const [debouncedImg, setDebouncedImg] = useState('');
+  // Debounce the image field so a pasted gs:// link previews AFTER you stop typing (not on
+  // every keystroke / half-typed URI). Upload + scenario presets set imageUri too, so they
+  // trigger the same thumbnail automatically — no separate "load" action needed.
+  useEffect(() => {
+    setPreviewErr(false);
+    const t = setTimeout(() => setDebouncedImg((imageUri || '').trim()), 400);
+    return () => clearTimeout(t);
+  }, [imageUri]);
   // Set when a run ends fully passed with an executed contract — the session is final.
   const [contractId, setContractId] = useState('');
   const [market, setMarket] = useState('North America');
@@ -1019,6 +1029,33 @@ export default function ChatAudit() {
                 onChange={(e) => { uploadImage(e.target.files?.[0]); e.target.value = ''; }} />
             </label>
           </div>
+          {/* Live thumbnail — loads automatically once the field holds a full link (debounced),
+              whether typed/pasted, uploaded, or set by a scenario preset. gs:// goes through the
+              app's /api/image-preview proxy (browsers can't fetch gs:// directly); http loads direct. */}
+          {(() => {
+            const d = debouncedImg;
+            const src = /^gs:\/\/[^/]+\/.+/.test(d)
+              ? `${API_BASE}/api/image-preview?uri=${encodeURIComponent(d)}`
+              : /^https?:\/\//.test(d) ? d : '';
+            if (!src) return null;
+            return previewErr ? (
+              <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                Couldn’t load a preview (bad link or no access) — the audit will still use it.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
+                <img src={src} alt="mockup preview" onError={() => setPreviewErr(true)}
+                  style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6,
+                    border: '1px solid var(--glass-border)', background: 'var(--bg-tertiary)', flex: '0 0 auto' }} />
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', minWidth: 0, lineHeight: 1.4 }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {d.split('/').pop()}
+                  </div>
+                  <span style={{ color: 'var(--color-success)' }}>✓ image set</span>
+                </div>
+              </div>
+            );
+          })()}
         </Field>
         <Field label="🌍 Operating region">
           <select className="top-textarea" value={market} onChange={(e) => setMarket(e.target.value)}>

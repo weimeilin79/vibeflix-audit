@@ -128,6 +128,15 @@ Re-apply IAM at any time (idempotent, safe to re-run):
 
 ---
 
+## Preflight — check your toolchain (run BEFORE anything else)
+
+```bash
+./deploy/preflight.sh   # verifies python 3.10–3.13, gcloud (+alpha/beta, auth, ADC),
+                        # terraform, jq, openssl, curl, and deploy/.env. Fix every ✗ first.
+```
+
+Don't start until this passes (warnings are OK to proceed past, but read them).
+
 ## Step 0 — Python environment (do this FIRST)
 
 Create ONE virtual env, install every dependency the deploy touches, and run **all** the
@@ -154,10 +163,23 @@ gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.google
   networkservices.googleapis.com networksecurity.googleapis.com iap.googleapis.com \
   iamcredentials.googleapis.com cloudresourcemanager.googleapis.com \
   observability.googleapis.com apphub.googleapis.com apptopology.googleapis.com \
-  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com
+  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com \
+  compute.googleapis.com cloudapiregistry.googleapis.com iamconnectors.googleapis.com \
+  modelarmor.googleapis.com saasservicemgmt.googleapis.com \
+  notebooks.googleapis.com securitycenter.googleapis.com texttospeech.googleapis.com
 # ⚠️ Do NOT trim this list. Each one bites on a FRESH project:
 #   apptopology       — the Agent Platform → Topology page ("enable services" prompt) is blank without it.
 #   cloudresourcemanager — the RAG SDK's bucket-ownership check (project-id→number) fails PermissionDenied.
+# The last two rows are the dependencies the Agent Platform console's own "APIs" panel
+# lists — a fresh project (vibeflix-test-1) had them OFF while pokedemo had them ON.
+# Enable them so nothing on the console (topology, connectors, safety, App Hub) is silently degraded:
+#   compute          — base dependency for App Hub / topology resource discovery.
+#   cloudapiregistry — managed API / MCP registry surface.
+#   iamconnectors    — Agent Platform identity connectors.
+#   modelarmor       — Agent Platform prompt/response safety.
+#   saasservicemgmt  — "App Lifecycle Manager" (App Hub application lifecycle).
+#   notebooks / securitycenter / texttospeech — also listed by the console panel; not called
+#     by vibeflix itself, enabled only for parity so the panel reads all-green (no cost when idle).
 #   iamcredentials    — engines impersonate MCP_INVOKER_SA to mint MCP ID tokens; off ⇒ MCP 403.
 #   iap               — the governed gateway's egress authorization (roles/iap.egressor).
 #   telemetry/cloudtrace/monitoring — traces + the topology edges; off ⇒ empty topology.

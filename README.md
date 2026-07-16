@@ -4,6 +4,11 @@ A modern, multi-agent workspace utilizing Google **ADK 2.0** for agent orchestra
 
 ---
 
+> 📖 **New here?** Start with **[`docs/`](docs/README.md)** — [the story](docs/01-the-story.md)
+> (what Vibeflix licenses and why the process still needs human reasoning) and
+> [the architecture](docs/02-architecture.md) (how the ten-service mesh is wired). This
+> README stays lean; the narrative lives there.
+
 > 🚀 **Deploying this?** Read **[`deploy/docs/GOTCHAS.md`](deploy/docs/GOTCHAS.md)** first — the single
 > source of truth for the rules that will otherwise cost you a day. Every one of them fails
 > *silently*: the deploy exits 0, the console looks right, and the mesh misbehaves in a way

@@ -47,6 +47,10 @@ Step 4's grants are not optional and must run **after** the engines exist (they 
 > silently fell back to a per-replica task store.
 
 ```bash
+# -1. PREFLIGHT — verify your toolchain (python 3.10–3.13, gcloud+alpha/beta+auth+ADC,
+#     terraform, jq, openssl, curl) BEFORE anything else. Fix every ✗ it reports.
+./deploy/preflight.sh
+
 # 0. Python environment FIRST — one venv, all deps, run every python step through it.
 #    (py3.14 pip is fragile — prefer uv or a 3.12 venv; skipping this makes you hunt for
 #    the right library mid-deploy.)
@@ -64,10 +68,23 @@ gcloud services enable --project=$PROJECT \
   networksecurity.googleapis.com iap.googleapis.com \
   iamcredentials.googleapis.com cloudresourcemanager.googleapis.com \
   observability.googleapis.com apphub.googleapis.com apptopology.googleapis.com \
-  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com
+  cloudtrace.googleapis.com telemetry.googleapis.com monitoring.googleapis.com \
+  compute.googleapis.com cloudapiregistry.googleapis.com iamconnectors.googleapis.com \
+  modelarmor.googleapis.com saasservicemgmt.googleapis.com \
+  notebooks.googleapis.com securitycenter.googleapis.com texttospeech.googleapis.com
 # ⚠️ Do NOT trim — each bites on a FRESH project:
 #   apptopology          → the Agent Platform → Topology page is blank / prompts "enable services" without it.
 #   cloudresourcemanager → the RAG SDK's bucket-ownership check (project-id→number) fails PermissionDenied.
+# The last two rows are the dependencies the Agent Platform console's own "APIs" panel lists —
+# a fresh project (vibeflix-test-1) had them OFF while the working project (pokedemo) had them ON.
+# Enable them so nothing on the console (topology, connectors, safety, App Hub) is silently degraded:
+#   compute          → base dependency for App Hub / topology resource discovery.
+#   cloudapiregistry → managed API / MCP registry surface.
+#   iamconnectors    → Agent Platform identity connectors.
+#   modelarmor       → Agent Platform prompt/response safety.
+#   saasservicemgmt  → "App Lifecycle Manager" (App Hub application lifecycle).
+#   notebooks / securitycenter / texttospeech → also listed by the console panel; not called by
+#     vibeflix itself, enabled only for parity so the panel reads all-green (no cost when idle).
 #   iamcredentials       → engines impersonate MCP_INVOKER_SA to mint MCP ID tokens; off ⇒ MCP 403.
 #   iap                  → the governed gateway's egress authorization (roles/iap.egressor).
 

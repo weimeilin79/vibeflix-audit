@@ -15,6 +15,13 @@ You are deploying a **demo whose entire point is Agent Gateway governance + per-
 Agent Identity**. Never "fix" a problem by falling back to a shared service account or by
 opening up access — that deletes the thing being demonstrated.
 
+## STEP −1 — PREFLIGHT. Verify the toolchain before touching anything.
+
+Have the user run (or run it yourself and report): **`./deploy/preflight.sh`**. It checks
+python 3.10–3.13, gcloud (+alpha/beta, auth, ADC), terraform, jq, openssl, curl, and
+`deploy/.env`. Do not proceed while it reports any `✗` — a missing tool or stale ADC quota
+project silently breaks the deploy halfway.
+
 ## STEP 0 — ASK THE USER. Do not guess.
 
 **Before touching anything**, use `AskUserQuestion` to get:
