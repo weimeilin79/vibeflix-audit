@@ -9,9 +9,9 @@
 #
 #   emitters (agents · MCPs · app fns) ──publish──► topic ──pull──► app ──SSE/WS──► graph
 #
+# The topic (vibeflix-mesh-events) is owned by terraform/foundations — apply that FIRST.
 # Creates:
-#   1. topic          vibeflix-mesh-events
-#   2. subscription   vibeflix-mesh-events-app   (pull; the app's live bridge)
+#   1. subscription   vibeflix-mesh-events-app   (pull; the app's live bridge)
 #      - ack deadline 10s, retention 10m, never expires — UI telemetry is
 #        ephemeral: late events are useless, so nothing needs to be durable.
 #   3. smoke test     publish one event, pull it back (via gcloud)
@@ -55,9 +55,13 @@ gcloud config set project "$PROJECT" >/dev/null
 echo "[setup_pubsub] 1/4 enabling the Pub/Sub API…"
 gcloud services enable pubsub.googleapis.com
 
-echo "[setup_pubsub] 2/4 creating topic '$TOPIC'…"
-gcloud pubsub topics create "$TOPIC" --project "$PROJECT" \
-  || echo "   (topic may already exist — continuing)"
+echo "[setup_pubsub] 2/4 verifying topic '$TOPIC' (owned by terraform/foundations)…"
+# The topic is created declaratively by terraform/foundations now — this script only owns the
+# local bridge subscription + smoke test. Assert the topic exists rather than creating it.
+gcloud pubsub topics describe "$TOPIC" --project "$PROJECT" >/dev/null 2>&1 || {
+  echo "ERROR: topic '$TOPIC' not found — apply deploy/terraform/foundations first (it owns the topic)." >&2
+  exit 1
+}
 
 echo "[setup_pubsub] 3/4 creating pull subscription '$SUBSCRIPTION'…"
 # UI telemetry is ephemeral: short retention, no expiry (the app reconnects at will).

@@ -123,11 +123,16 @@ The fix: the engines keep their tasks **outside** the replicas, in a store hoste
 app (`vibeflix_common/task_store.py` → `/api/taskstore/{id}`). Any replica can now serve
 any task — misses drop to **0**, and a full audit goes **5m01s → 1m44s**.
 
-Why hosted by the app and not a database: the Agent Gateway governs **HTTP** egress and
-can't match a gRPC channel or a raw TCP socket, which rules out Cloud SQL and Redis
-outright. Two things are therefore load-bearing, not tuning knobs — the app runs as
-**exactly one instance**, and its task-store endpoints are gated by a shared secret
-(`TASK_STORE_KEY`) because the app is deliberately public.
+Why hosted by the app and not the *engines* hitting a database directly: the Agent Gateway
+governs **HTTP** egress and can't match a gRPC channel or a raw TCP socket, which rules out
+the engines reaching Cloud SQL or Redis. The **app**, though, backs these endpoints with
+**Firestore** (collection `a2a_tasks`) — so the shared store is **durable** across a restart
+and no longer split-brains across app replicas (each op runs in a worker thread so the
+Firestore round-trip never stalls the SSE stream). The endpoints stay gated by a shared
+secret (`TASK_STORE_KEY`) because the app is deliberately public; if the app is ever
+unreachable the engines degrade to per-replica memory with a loud warning rather than
+failing the run. (The app is still pinned to one instance — but now for its *other*
+in-memory state, not the task store.)
 
 ---
 

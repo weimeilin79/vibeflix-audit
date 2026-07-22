@@ -32,7 +32,8 @@ provider "google" {
 }
 
 locals {
-  ar = "${var.region}-docker.pkg.dev/${var.project}/${google_artifact_registry_repository.vibeflix.repository_id}"
+  # The `vibeflix` repo is owned by terraform/foundations now — reference it by name.
+  ar = "${var.region}-docker.pkg.dev/${var.project}/vibeflix"
 
   services = {
     licensing = {
@@ -59,14 +60,12 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
-# Image registry
+# Image registry — MOVED to terraform/foundations (google_artifact_registry_repository.vibeflix).
+# On an already-applied deployment, drop it from THIS module's state so apply doesn't try to
+# destroy the repo (and its images):
+#   terraform -chdir=deploy/terraform/mcp state rm google_artifact_registry_repository.vibeflix
+# See deploy/terraform/foundations/README.md.
 # ---------------------------------------------------------------------------
-resource "google_artifact_registry_repository" "vibeflix" {
-  location      = var.region
-  repository_id = "vibeflix"
-  format        = "DOCKER"
-  description   = "Vibeflix audit mesh images"
-}
 
 # ---------------------------------------------------------------------------
 # Runtime identities + least-privilege grants

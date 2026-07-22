@@ -31,12 +31,15 @@ echo "[mcp-deploy] project=$PROJECT region=$REGION deployer=$DEPLOYER"
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
   cloudbuild.googleapis.com --project "$PROJECT" >/dev/null
 
-# The builds push to $REGION-docker.pkg.dev/$PROJECT/vibeflix — but nothing created that
-# Artifact Registry repo, so a FRESH project failed the first build with
-# `name unknown: Repository "vibeflix" not found`. Create it here (idempotent).
-gcloud artifacts repositories create vibeflix --repository-format=docker \
-  --location="$REGION" --project="$PROJECT" --description="Vibeflix container images" \
-  >/dev/null 2>&1 || true
+# The builds push to $REGION-docker.pkg.dev/$PROJECT/vibeflix. That Artifact Registry repo is
+# owned by terraform/foundations now (apply it first) — assert it exists so a fresh project
+# fails HERE with a clear message instead of an opaque `Repository "vibeflix" not found`.
+gcloud artifacts repositories describe vibeflix --location="$REGION" --project="$PROJECT" \
+  >/dev/null 2>&1 || {
+    echo "ERROR: Artifact Registry repo 'vibeflix' not found in $REGION." >&2
+    echo "       Apply deploy/terraform/foundations first (it owns the repo)." >&2
+    exit 1
+  }
 
 if [ "${1:-}" != "--no-build" ]; then
   echo "[mcp-deploy] building images (parallel Cloud Build)…"

@@ -46,7 +46,10 @@ Skip the second pass and everything still *looks* fine — but every engine sile
 export PROJECT=<your-project> REGION=<your-region>
 cp deploy/.env.example deploy/.env      # then edit: PROJECT, REGION, BUCKET, TASK_STORE_KEY
 
-./deploy/setup_pubsub.sh && ./deploy/setup_firestore.sh    # 1. foundations + seed data
+terraform -chdir=deploy/terraform/foundations init -input=false && \
+  terraform -chdir=deploy/terraform/foundations apply -auto-approve \
+    -var project=$PROJECT -var region=$REGION                # 0. foundations: AR repo + telemetry topic
+./deploy/setup_pubsub.sh && ./deploy/setup_firestore.sh    # 1. subscription + db + seed data
 ./deploy/setup_legal_rag.sh                                # 1b. legal RAG corpus → paste RAG_CORPUS into deploy/.env
 ./deploy/deploy_mcp_cloudrun.sh                            # 2. the 3 MCP servers → Cloud Run
 
@@ -184,6 +187,15 @@ gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.google
 #   iap               — the governed gateway's egress authorization (roles/iap.egressor).
 #   telemetry/cloudtrace/monitoring — traces + the topology edges; off ⇒ empty topology.
 
+# Foundations infra, owned declaratively (Terraform): the Artifact Registry repo every image
+# pushes to + the telemetry Pub/Sub topic. Apply BEFORE any image build so the app build no
+# longer depends on the MCP step. (Migrating an existing project? See
+# deploy/terraform/foundations/README.md — state-rm the repo from terraform/mcp + import, do
+# NOT let it recreate.)
+terraform -chdir=deploy/terraform/foundations init -input=false
+terraform -chdir=deploy/terraform/foundations apply -auto-approve \
+  -var project=$PROJECT -var region=$REGION -var pubsub_topic=${PUBSUB_TOPIC:-vibeflix-mesh-events}
+
 ./deploy/setup_buckets.sh        # creates $PROJECT-request-image + $PROJECT-approved-assets
                                  #   (GCS names are GLOBAL — the plain vibeflix-* names are
                                  #   taken; script uses project-prefixed defaults) and seeds
@@ -191,7 +203,7 @@ gcloud services enable --project=$PROJECT firestore.googleapis.com pubsub.google
 ./deploy/setup_firestore.sh      # creates the vibeflix-registry db + SEEDS it:
                                  #   registries (brand/legal/market policy),
                                  #   vendors (CRUD store), audit_history smoke test
-./deploy/setup_pubsub.sh         # telemetry topic + the local bridge subscription
+./deploy/setup_pubsub.sh         # local bridge subscription + smoke test (topic → foundations)
 ./deploy/setup_legal_rag.sh      # legal RAG corpus → note RAG_CORPUS for step 3
 ```
 

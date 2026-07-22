@@ -886,6 +886,7 @@ async def reset_database():
       1. vendors → pristine defaults + executed contracts cleared (mcp_licensing's
          reset_vendors tool, which owns the seed data);
       2. audit history wiped (Firestore docs + in-memory + JSONL fallback);
+      2b. A2A task store wiped (Firestore `a2a_tasks` collection + in-memory fallback);
       3. run caches dropped (run_token chains, pending sessions);
       4. uploaded mockups deleted from the request-image GCS bucket.
     """
@@ -918,6 +919,20 @@ async def reset_database():
     except Exception:
         pass
     result["history_cleared"] = cleared
+    # 2b) A2A task store — the shared `a2a_tasks` collection (+ in-memory fallback/diagnostic).
+    if _FIRESTORE_DB:
+        try:
+            deleted = 0
+            for doc in _task_collection().stream():
+                doc.reference.delete()
+                deleted += 1
+            result["tasks_cleared"] = deleted
+        except Exception as e:
+            result["tasks_error"] = f"{type(e).__name__}: {e}"
+    else:
+        result["tasks_cleared"] = len(_TASKS_MEM)
+    _TASKS_MEM.clear()
+    _TASKS_EVER.clear()
     # 3) in-flight run state.
     _AUDIT_CACHE.clear()
     _ORDER_BY_TOKEN.clear()
@@ -1202,29 +1217,56 @@ def health():
 # created a task on replica [17] while `GET /tasks/{id}` was balanced to [19]/[22], which
 # had never heard of it → `404 Task not found` on 86.8% of polls (measured). That single
 # fact produced the slow runs, the ~1,900 error spans, the 7-minute blocked chat, and the
-# phantom `recovery` re-runs. The engines now keep their tasks HERE instead, so any
-# replica can serve any task.
+# phantom `recovery` re-runs. The engines now keep their tasks HERE instead — over HTTP,
+# the one hop the Agent Gateway can govern — so any replica can serve any task.
 #
-# ⚠️ THIS ONLY WORKS BECAUSE THE APP RUNS AS EXACTLY ONE INSTANCE
-# (`--min-instances=1 --max-instances=1`). Two app instances would split this dict and
-# recreate the identical bug one layer up. That pinning is load-bearing, not a tuning knob.
-#
-# Demo state, deliberately not durable: a restart drops in-flight tasks, which is no worse
-# than the per-replica store it replaces.
+# BACKING: Firestore (collection `a2a_tasks` in FIRESTORE_DATABASE) is the system of record
+# — durable across an app restart, and no longer split-brained if the app runs on more than
+# one instance. Every op runs in a worker thread (`asyncio.to_thread`) so a blocking
+# Firestore round-trip never stalls the event loop or the browser SSE stream. This is slower
+# than the old in-process dict, on purpose: durability over hot-path latency. Firestore's
+# ~1-write/sec-per-document ceiling only bites a single HOT task; the engine side already
+# retries terminal writes (vibeflix_common/task_store.py), which absorbs the throttle.
+# When FIRESTORE_DATABASE is unset (local dev) it falls back to an in-process dict, so the
+# compose mesh is unchanged.
 #
 # 🔒 THIS SERVICE IS PUBLIC (`allUsers` holds run.invoker, so the browser can load the
 # console). These endpoints therefore need their own gate, or anyone on the internet could
 # read and tamper with the agents' A2A task state. TASK_STORE_KEY is a shared secret held
 # only by the app and the engines. Deliberately NOT Cloud Run IAM: locking the service down
 # would also lock out the frontend.
-_TASKS: dict[str, str] = {}
-# Every id ever written. A GET miss then means one of two VERY different things, and
-# without this set they are indistinguishable in the logs:
+_TASK_COLLECTION = "a2a_tasks"
+_TASKS_MEM: dict[str, str] = {}   # local-dev fallback ONLY (used when FIRESTORE_DATABASE unset)
+# Every id ever written THIS PROCESS — an in-memory diagnostic, NOT the store. A GET miss
+# then means one of two VERY different things, indistinguishable in the logs without it:
 #   • id never written  → the poll simply BEAT the first save (a benign creation race,
 #                         which the client resolves in ~50ms of fast probing);
 #   • id written, gone  → something deleted it, which would be a real bug.
 _TASKS_EVER: set[str] = set()
 _TASK_KEY = os.environ.get("TASK_STORE_KEY", "")
+_task_col_handle = None
+
+
+def _task_collection():
+    """Cached Firestore handle for the task collection (one client, reused across ops)."""
+    global _task_col_handle
+    if _task_col_handle is None:
+        from google.cloud import firestore
+        _task_col_handle = firestore.Client(database=_FIRESTORE_DB).collection(_TASK_COLLECTION)
+    return _task_col_handle
+
+
+def _task_write(task_id: str, j: str) -> None:
+    _task_collection().document(task_id).set({"json": j})
+
+
+def _task_read(task_id: str) -> str | None:
+    snap = _task_collection().document(task_id).get()
+    return (snap.to_dict() or {}).get("json") if snap.exists else None
+
+
+def _task_delete(task_id: str) -> None:
+    _task_collection().document(task_id).delete()
 
 
 def _task_auth(key: str | None) -> None:
@@ -1237,23 +1279,31 @@ async def taskstore_put(task_id: str, body: dict,
                         x_task_store_key: str | None = Header(default=None)):
     _task_auth(x_task_store_key)
     first = task_id not in _TASKS_EVER
-    _TASKS[task_id] = body["json"]
+    j = body["json"]
+    if _FIRESTORE_DB:
+        await asyncio.to_thread(_task_write, task_id, j)
+    else:
+        _TASKS_MEM[task_id] = j
     _TASKS_EVER.add(task_id)
     if first:
-        print(f"[taskstore] CREATE {task_id} (live={len(_TASKS)})", flush=True)
-    return {"ok": True, "tasks": len(_TASKS)}
+        print(f"[taskstore] CREATE {task_id} → "
+              f"{'firestore' if _FIRESTORE_DB else 'memory'}", flush=True)
+    return {"ok": True}
 
 
 @app.get("/api/taskstore/{task_id}")
 async def taskstore_get(task_id: str,
                         x_task_store_key: str | None = Header(default=None)):
     _task_auth(x_task_store_key)
-    j = _TASKS.get(task_id)
+    if _FIRESTORE_DB:
+        j = await asyncio.to_thread(_task_read, task_id)
+    else:
+        j = _TASKS_MEM.get(task_id)
     if j is None:
         # WHY did it miss? This is the whole point of _TASKS_EVER.
         why = ("was written then DELETED — REAL BUG" if task_id in _TASKS_EVER
                else "never written yet — benign creation race (poll beat the first save)")
-        print(f"[taskstore] MISS {task_id} — {why} (live={len(_TASKS)})", flush=True)
+        print(f"[taskstore] MISS {task_id} — {why}", flush=True)
         raise HTTPException(status_code=404, detail="task not found")
     return {"json": j}
 
@@ -1262,7 +1312,10 @@ async def taskstore_get(task_id: str,
 async def taskstore_delete(task_id: str,
                            x_task_store_key: str | None = Header(default=None)):
     _task_auth(x_task_store_key)
-    _TASKS.pop(task_id, None)
+    if _FIRESTORE_DB:
+        await asyncio.to_thread(_task_delete, task_id)
+    else:
+        _TASKS_MEM.pop(task_id, None)
     return {"ok": True}
 
 

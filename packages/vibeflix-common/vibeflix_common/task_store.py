@@ -37,16 +37,24 @@ rewritten over REST. So:
   • Memorystore / Redis → TCP → same wall, plus a VPC connector the app doesn't have.
   • Firestore → HTTPS, so it WOULD pass — but A2A saves the task on every event, and
     Firestore's sustained write limit is ~1/sec on the SAME document.
+    UPDATE: the app now DOES back its `/api/taskstore` endpoints with Firestore
+    (collection `a2a_tasks`), trading hot-path latency for durability — the ~1/sec hot-doc
+    ceiling is absorbed by the terminal-write retries below. This engine-side client is
+    unchanged: it still speaks plain HTTPS to the app, which owns the Firestore write.
   • The app → plain HTTPS to a Cloud Run service. The engines ALREADY reach Cloud Run
     this way (that is how they call the MCP servers), so the whole auth story is solved:
     `GoogleAuth` attaches Proxy-Authorization (for the gateway) + an audience-bound ID
     token minted by impersonating MCP_INVOKER_SA (an agent identity cannot mint OIDC).
 
-Nothing here needs to survive a restart — this is demo state, not a system of record.
+The app persists these to Firestore (see above), so the shared store now survives an app
+restart — but this client treats it as best-effort regardless: it mirrors every write into
+a local InMemoryTaskStore and falls back to it if the app is unreachable.
 
-⚠️ THE APP MUST RUN AS EXACTLY ONE INSTANCE (`--min-instances=1 --max-instances=1`).
-The store is a dict in the app process; two app instances would split-brain it and
-recreate this very bug one layer up.
+NOTE ON APP INSTANCES: with the Firestore backing this store no longer split-brains across
+app replicas (that was the dict's failure mode). The app is still pinned to a single
+instance (`--min-instances=1 --max-instances=1`) for its OTHER in-memory state — the audit-
+history cache, run-token chains, presenter/note sessions — so this store isn't the reason
+for the pin anymore, but the pin stays until that state is externalized too.
 
 DEGRADATION: every call mirrors into a local InMemoryTaskStore and falls back to it if
 the app is unreachable. Worst case we are exactly as broken as we were before — never
