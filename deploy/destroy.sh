@@ -9,7 +9,10 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(dirname "$HERE")"
 [ -f "$HERE/.env" ] && { set -a; . "$HERE/.env"; set +a; }
-PROJECT="${PROJECT:?set PROJECT in deploy/.env}"; REGION="${REGION:-us-central1}"
+# DESTROY_PROJECT wins over .env, so you can target a DIFFERENT project than your working config
+# without editing .env — destroying the wrong project is not a mistake you want to be one typo from.
+PROJECT="${DESTROY_PROJECT:-${PROJECT:?set PROJECT in deploy/.env (or pass DESTROY_PROJECT=…)}}"
+REGION="${REGION:-us-central1}"
 TOPIC="${PUBSUB_TOPIC:-vibeflix-mesh-events}"; DB="${FIRESTORE_DATABASE:-vibeflix-registry}"
 REQ_BUCKET="${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}"
 ASSET_BUCKET="${APPROVED_ASSETS_BUCKET:-$PROJECT-approved-assets}"
