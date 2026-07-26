@@ -164,6 +164,21 @@ That's the **Agent Registry** — a catalog of the callable things in your syste
 
 It's also the foundation of the mesh's security. Think of the registry as the set of **permitted endpoints** — the destinations the system is allowed to reach. When an agent reaches for one, that call is checked against the registry, if the endpoint is registered, it passes, and the agent can be granted access to it. So registering the MCP servers here is what lets agents be given access to them safely — only the endpoints on the list, and nothing else. Setup registers the three MCP servers for you; the agents get registered as they're built.
 
+### 💻 Open Cloud Shell
+
+Everything in this workshop runs in **Cloud Shell**, which already has `gcloud`, `terraform`, `python3`, and `git` installed.
+
+👉 In the [Google Cloud console](https://console.cloud.google.com), click **Activate Cloud Shell** — the terminal-shaped icon at the top right. A terminal opens along the bottom of the page.
+
+👉💻 Confirm you're authenticated and pointed at a project:
+
+```
+gcloud auth list
+gcloud config get-value project
+```
+
+Your account should show as `ACTIVE`, and the project should be your project id.
+
 ### 💻 Get the code
 
 Clone the workshop repository:
@@ -173,21 +188,60 @@ git clone https://github.com/weimeilin79/vibeflix-audit
 cd vibeflix-audit
 ```
 
-(In **Cloud Shell**, `git` is already installed. The scripts are committed executable, so there's
-no `chmod` to do — you can run them straight away.)
+### Understanding the project structure
 
-### 💻 Run — configure the project
+Before building anything, take a minute on the repo layout so you know where things live:
 
-Create your environment file and set your project + region:
+```
+vibeflix-audit/
+├── agents/          # the 6 ADK agents (brand_style, deal_pricing, vendor_clearance, legal, orchestrator, ui_renderer)
+├── mcp_servers/     # the 3 MCP tool servers (mcp_brand_style, mcp_licensing, mcp_market)
+├── packages/        # vibeflix_common — shared helpers (auth, A2A, MCP clients, the task store)
+├── deploy/          # deploy + verify scripts, Terraform modules, and your .env
+│   └── verify/      # the per-step verify scripts (step1.sh … step8.sh)
+├── frontend/        # the React console (the A2UI renderer)
+└── resource/        # seed data, including the legal "tribal knowledge" docs
+
+```
+
+You'll mostly **read** `agents/` and `mcp_servers/` to understand each piece, and **run** scripts from `deploy/`.
+
+### 💻 Set your project
+
+Point gcloud at your project, and capture its id and number for later commands:
+
+```
+gcloud config set project YOUR_PROJECT_ID --quiet
+export PROJECT_ID=$(gcloud config get-value project)
+export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+```
+*(`init.sh`, next, also picks up your project id automatically — from `~/project_id.txt` if your lab provides one, otherwise from gcloud or a prompt — so you can skip the manual set above if you prefer.)*
+
+
+### 💻 Initialize your environment
+
+Run the init script. It points gcloud at your project (prompting for the id if it isn't set yet) and writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`:
+
+```
+./init.sh
+```
+
+Enter your Google Cloud Project ID if it prompts you. Re-running it is safe: it won't overwrite an existing `deploy/.env`.
+
+
+### 💻 Install the Python dependencies
+
+The seeding and the agent-deploy scripts run Python, so create a virtual environment and install the dependencies once:
 
 ```bash
-cp deploy/.env.example deploy/.env
-# edit deploy/.env — set at least:
-#   PROJECT=<your-project-id>
-#   REGION=us-central1
-#   TASK_STORE_KEY=$(openssl rand -hex 24)
-# On a fresh project, LEAVE the bucket vars unset (project-prefixed defaults are used).
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r agents/requirements.txt -r deploy/requirements-legal-rag.txt
+pip install -e packages/vibeflix-common
 ```
+
+Every workshop command that needs Python uses this `.venv` — the deploy scripts call `.venv/bin/python` directly, so you don't have to keep it activated in later steps.
 
 ### 💻 Setup the foundations + all 3 MCP servers
 
@@ -195,7 +249,9 @@ cp deploy/.env.example deploy/.env
 ./workshop/setup.sh
 ```
 
-This runs, in order: **preflight** (checks your tools) → Python **venv + deps** → **enable APIs** → **foundations** (a Terraform module that creates the container-image registry + the telemetry topic) → **buckets** → **Firestore** (creates the database and seeds the registries the MCP servers read) → **Pub/Sub** → **builds and deploys the 3 MCP servers to Cloud Run** → **registers the 3 MCP servers in the Agent Registry**.
+`setup.sh` turns on everything it uses (Firestore, Cloud Run, Artifact Registry, Cloud Build, Pub/Sub, Vertex AI, and the Agent Platform services) as its first step.
+
+This runs, in order: **preflight** (checks your tools) → **enable APIs** → **foundations** (a Terraform module that creates the container-image registry + the telemetry topic) → **buckets** → **Firestore** (creates the database and seeds the registries the MCP servers read) → **Pub/Sub** → **builds and deploys the 3 MCP servers to Cloud Run** → **registers the 3 MCP servers in the Agent Registry**.
 
 
 It's idempotent — if a step fails (usually a missing API or permission), fix it and re-run, completed steps are skipped.
@@ -207,7 +263,6 @@ It's idempotent — if a step fails (usually a missing API or permission), fix i
 ```
 
 This confirms the Artifact Registry repo, the telemetry topic, the Firestore database, and **all three MCP servers are up *and* IAM-gated** (It should return **403**). 
-
 
 You now have the mesh's foundation: three deterministic, IAM-gated tool servers **registered in the Agent Registry**, a seeded database, a telemetry topic, and an image registry. 
 Next, you'll build the first agent, connect it to `mcp_brand_style`, and grant it its own access.
@@ -262,18 +317,33 @@ def run_brand_audit(text: str, medium: str, image_uri: str) -> str:
 
 Those three parameters — `text`, `medium`, `image_uri` — **are the intern's form.** Everything inside `run_brand_audit` (the typography check, the approved-medium check, the asset-source gate) is pure deterministic Python. No model, no guessing.
 
-Now open `agents/brand_style/agent.py`. Its docstring states the division plainly:
+### 💡 A quick tour of ADK
 
-> *"The agent does the EXTRACTION (reading the artwork's printed text and product medium, using
-> its own multimodal vision); the MCP server is the deterministic auditor."*
+Every agent in this workshop is built with **Google's Agent Development Kit (ADK)**, the open-source framework for defining agents and deploying them to Agent Runtime. A handful of building blocks recur from here on, so it's worth naming them:
 
-So the model's *only* job is to turn a picture into the three inputs. The verdict is the tool's.
+- **`LlmAgent`** — the basic agent: a model, an instruction, and a set of tools. (Multi-step agents use **`Workflow`**, a graph of nodes — you'll meet it in Deal Pricing and the Orchestrator.)
+- **Tools** — what the agent can *do*. Here that's the MCP `run_brand_audit`.
+- **Skills** — a versioned, written procedure the agent follows (a `SKILL.md`), so its steps are repeatable.
+- **`output_schema`** — a Pydantic model the agent's final answer *must* fill, so downstream code always gets structured JSON.
+- **Callbacks** — hooks that run **your own deterministic code** at fixed points around the model. A **`before_model_callback`** runs *before* the model is called, and can short-circuit it entirely; an **`after_model_callback`** runs *after*, and can inspect or rewrite what the model produced. Callbacks are where you enforce the rules a model shouldn't be trusted with — and brand_style leans on all of them.
 
-> 💡 **Reinforcement (optional):** the code has three guardrails that all say *"keep the
-> deterministic stuff out of the model's hands"* — `require_image_before_model` (no image →
-> refuse *before* calling the model, so it can't invent an extraction), the **asset-source
-> gate** inside the tool (unapproved image → `rejected`, stop), and `tool_guard` (if the MCP
-> didn't load, the agent refuses rather than answering blind). Mention one, skip the rest.
+### 📝 Inside `agents/brand_style/agent.py`
+
+Now open `agents/brand_style/agent.py`. The agent is a single `LlmAgent`, and its shape tells the whole story.
+
+Its docstring states the division plainly:
+
+> "The agent does the EXTRACTION (reading the artwork's printed text and product medium, using its own multimodal vision); the MCP server is the deterministic auditor."
+
+**One `output_schema` — `BrandStyleReport` — covers every outcome.** The agent must always return that Pydantic model: a `status` (`compliant` / `flagged` / `rejected` / `needs_input` / `error`), the `extracted` text and medium it read from the image, the `checks_run`, any `findings`, and a `question` when it needs something from the user. Because the shape is fixed, the orchestrator and the UI consume it without ever parsing prose.
+
+**Three callbacks enforce what the model can't be trusted to do** — the ADK callback concept in action:
+
+- **`before_model_callback` → `require_image_before_model`** — a deterministic guard. If the request carries no real image, it returns `needs_input` *without ever calling the model*, so the model can't hallucinate an extraction out of nothing.
+- **`before_model_callback` → `make_toolset_health_guard(...)`** — fails **closed**. If the MCP tool can't be reached, it returns `status: "error"` up front, which stops the model from inventing a clean `findings: []` "compliant" verdict for an audit that never ran.
+- **`after_model_callback` → `make_schema_guard(...)`** — a safety net. If the model ever answers in prose, this rewrites the reply into a valid `needs_input` report, so the run completes even though the schema was missed.
+
+The pattern to notice: the model does one fuzzy thing (read the image), and deterministic callbacks stand guard on both sides of it.
 
 ### Build & deploy brand_style
 
@@ -295,8 +365,52 @@ The engine exists now, but with no permissions. Grant project roles on **its own
 
 This is **least privilege in action**: each agent grants its *own* access as it's deployed, keyed to its *own* principal — no blanket "any agent can do anything." 
 
+
+### 💻 Try it in the ADK Dev UI
+
+While we wait for the deploymenet to the cloud, run brand_style on your machine and poke at it in **ADK's web playground**. First bring the three MCP servers up locally (they listen on `127.0.0.1:9002-9004` using your `.venv`):
+
+👉💻 In a **second Cloud Shell tab**, point the agent at the local brand-style MCP and launch the ADK Dev UI:
+
+```bash
+./run_local.sh mcp
+```
+
+👉💻 In a **third Cloud Shell tab**, point the agent at the local brand-style MCP and launch the ADK Dev UI:
+
+```bash
+source .venv/bin/activate
+export RUN_LOCAL=true
+export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
+export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
+adk web agents/brand_style
+```
+
+You should see the server start up:
+
+```
++-----------------------------------------------------------------------------+
+| ADK Web Server started                                                       |
+| For local testing, access at http://localhost:8000.                          |
++-----------------------------------------------------------------------------+
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+```
+
+👉 To open the UI: click the **Web Preview** icon in the Cloud Shell toolbar (top right), choose **Change port**, set it to **8000**, and click **Change and Preview**. A new tab opens with the ADK Dev UI.
+
+Pick **brand_style** and ask it to audit the default mock-up — for example:
+
+> Audit `gs://<your-project>-request-image/vendor_request_refine.png` for grogu vinyl figures in NA.
+
+Watch it read the text and medium from the image, call `run_brand_audit`, and fill in the `BrandStyleReport`. This local loop is the fastest way to iterate on an agent before you ship it.
+
+👉💻 When you're finished exploring, shut the local servers down: press `Ctrl+C` in the `adk web` tab, and again in the `./run_local.sh mcp` tab.
+
+
 ### 👀 Verify the agent extracts, then the tool decides
 
+The cloud deploy from the *Build & deploy* step takes a few minutes. Once it reports success, verify the engine: 
 ```bash
 ./deploy/verify/step2.sh
 ```
@@ -357,7 +471,31 @@ The reasoner have whole audit procedure loaded in a **Skill**.
 > A **Skill** is a reusable, versioned *standard-operating-procedure* you give an agent —
 > instructions + the exact tools it's allowed to use + the output it must produce.
 
-### 📝 Look — the skill and the loop, in the code
+**How a Skill works in ADK.** You load a skill from its folder and hand it to the agent through a **`SkillToolset`**:
+
+```python
+tools=[
+    skill_toolset.SkillToolset(
+        skills=[load_skill_from_dir(_SKILL_DIR)],               # the deal-pricing-audit SKILL.md
+        additional_tools=[mcp_toolset("mcp_licensing", ...)],  # the tool the skill may call
+    ),
+]
+```
+
+The `SKILL.md` file *is* the procedure: **frontmatter** (`name`, `version`, `allowed-tools`) followed by a numbered set of steps and a required output shape. At run time the toolset hands the model the skill machinery (load the skill, follow its steps) and **scopes the tools** to exactly what the skill declares — so the agent runs a fixed, versioned SOP every time, using only the tools that SOP allows.
+
+**And a Workflow ties agents together.** Deal Pricing is built as an ADK **`Workflow`** — a small directed graph. You define it by writing **nodes** (the steps) and **edges** (what follows what):
+
+```python
+root_agent = Workflow(
+    name="deal_pricing",
+    edges=[("START", evaluate), (evaluate, reconcile), (reconcile, finalize)],
+)
+```
+
+Each node is a function decorated with `@node`, and a node can run a **sub-agent** — a full `LlmAgent` living *inside* this one engine — with `await ctx.run_node(some_agent, input)`. That's the idea to hold onto: **several agents inside a single deployed agent**, coordinated by the graph. Deal Pricing has two sub-agents you'll see next — a **reasoner** for the first pass and a **resolver** that adjudicates one disputed item at a time.
+
+### 📝 The skill and the loop, in the code
 
 Open `agents/deal_pricing/skills/deal-pricing-audit/SKILL.md`. It's a Markdown file with:
 
@@ -387,6 +525,15 @@ for _ in range(MAX_ROUNDS):
         await ctx.run_node(resolver, ...)   # adjudicate ONE claim against the rules
 ```
 
+Here's what the graph does, node by node — and it's really **two sub-agents coordinated by deterministic code inside one deployed engine**:
+
+- **`evaluate`** runs the first sub-agent, the **pricing reasoner** (`await ctx.run_node(pricing_reasoner, …)`). The reasoner follows the skill: it calls `get_license_pricing` for the *expected* deal, then tags each component — royalty, advance, minimum guarantee — as `clear`, `unresolved`, or `discrepancy`.
+- **`reconcile`** is the loop. For every component still `unresolved`, it runs the second sub-agent, the **resolver** (`await ctx.run_node(resolver, …)`), which judges that *one* claimed factor against the rate-card rules and returns `clear` or `discrepancy`. The loop re-checks and repeats — up to `MAX_ROUNDS = 4` — then settles the verdict (`APPROVED` / `NEEDS-ADJUSTMENT` / `UNDERPRICED`).
+- **`finalize`** emits the finished `DealPricingReport`, the value the A2A caller receives.
+
+Both sub-agents are ordinary `LlmAgent`s, but they never talk to the outside world — they exist only to be called by the Workflow's nodes. So from the outside `deal_pricing` is one agent; inside, it's a **reasoner plus a resolver driven by a deterministic loop**: judgement in the two sub-agents, control flow in the graph.
+
+
 ### 💻 Build & deploy deal_pricing
 
 Same one command as before — the deploy script finds `mcp_licensing`'s URL automatically:
@@ -400,6 +547,28 @@ Then grant it its own access (project roles on its principal + reach to the MCP 
 ```bash
 ./deploy/grant_agent_access.sh deal-pricing
 ```
+
+
+### 💻 Try it in the ADK Dev UI
+
+Like brand_style, you can run deal_pricing locally and drive it from the playground. With the MCP servers up (`./run_local.sh mcp` — start it again if you stopped it), launch the Dev UI in a second Cloud Shell tab, pointed at the local licensing MCP:
+
+```bash
+source .venv/bin/activate
+export RUN_LOCAL=true
+export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+adk web agents/deal_pricing
+```
+
+Open it via **Web Preview → Change port → 8000**, pick **deal_pricing**, and paste the underpriced deal:
+
+> Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, volume: 30000, net_unit_price: 18. Agreed terms — royalty_rate: 0.10, advance: 8000, mg: 30000.
+
+Watch the reasoner pull the expected deal, mark the royalty **unresolved**, and the **reconcile loop** reject the volume-discount claim (30k < 50k) → **NEEDS-ADJUSTMENT**.
+
+👉💻 When you're done, press `Ctrl+C` in the `adk web` tab (and in the `./run_local.sh mcp` tab if you're finished with local testing).
 
 ### 👀 Verify and watch the loop reconcile a claim
 
@@ -446,13 +615,14 @@ You *cannot* hard-code a process nobody agrees on. So the legal agent **reconstr
 > **RAG in one line:** give the model a *search tool* over your documents, so it pulls in the
 > exact facts it needs instead of relying on what it happened to memorize.
 
-### 📝 The retrieval tool
+**Under the hood: a managed vector search.** RAG needs somewhere to search. Vibeflix uses **Vertex AI RAG Engine**, a managed service that turns a pile of documents into a searchable knowledge base:
 
-Open `agents/legal/legal_kb.py`. It exposes one FunctionTool, `search_legal_docs`, with the following backends:
+- **Chunking + embedding.** When you import the legal docs, RAG Engine splits each into passages and runs every passage through an **embedding model** (`text-embedding-005`), turning text into a **vector** — a list of numbers that captures its *meaning*.
+- **The vector store.** Those vectors go into a **managed vector database** (Vertex Vector Search). Passages with similar meaning land as nearby vectors.
+- **Retrieval.** At query time (`retrieveContexts`), your question is embedded the same way, and the store returns the passages whose vectors are **nearest** to it — a *semantic* match, so "what insurance do we need?" finds the insurance memo even if the memo never uses the word "insurance."
 
-- **`RAG_CORPUS` set** → Vertex AI **RAG Engine** (`:retrieveContexts`) over a corpus built from those docs (you'll build it below);
+The payoff: the model never has to have memorized the legal process. It asks a question, gets back the three or four most relevant scraps from the actual docs, and reasons over those. "Managed" means you create a corpus, import files, and query it, with no index or database to run yourself.
 
-In `agents/legal/agent.py`, `search_legal_docs` sits alongside the legal *workflow* tools (`draft_license_amendment`, `verify_certifications`, `assign_customs_hs_code`, `verify_liability_insurance`, …) and the one real side effect — `upsert_contract` (an MCP tool) that persists the executed contract. The agent uses RAG to figure out *what the process is*, then the tools to *do it*.
 
 ### 💻 Build legal's knowledge base
 
@@ -464,6 +634,24 @@ Legal needs its RAG corpus first. Build it from the tribal-knowledge docs:
 # Add that line (and RAG_LOCATION=us-central1) to deploy/.env, then continue.
 ```
 
+`setup_legal_rag.sh` runs `deploy/setup_legal_rag.py`, which does four things:
+
+1. **Uploads** the docs in `resource/legal/docs/` to a GCS bucket — the source RAG Engine imports from.
+2. **Creates (or reuses) the corpus** `vibeflix-legal-kb`, configured with the `text-embedding-005` embedding model.
+3. **Imports the files** into the corpus (`import_files` from the GCS source). RAG Engine then chunks, embeds, and indexes them behind the scenes.
+
+It prints the corpus resource name as `RAG_CORPUS=…`. Paste that (plus `RAG_LOCATION=us-central1`) into `deploy/.env` so the deployed `legal` agent's `search_legal_docs` tool knows which corpus to query.
+
+
+### 📝 The retrieval tool
+
+Open `agents/legal/legal_kb.py`. It exposes one FunctionTool, `search_legal_docs`, with the following backends:
+
+- **`RAG_CORPUS` set** → Vertex AI **RAG Engine** (`:retrieveContexts`) over a corpus built from those docs (you'll build it below);
+
+In `agents/legal/agent.py`, `search_legal_docs` sits alongside the legal *workflow* tools (`draft_license_amendment`, `verify_certifications`, `assign_customs_hs_code`, `verify_liability_insurance`, …) and the one real side effect — `upsert_contract` (an MCP tool) that persists the executed contract. The agent uses RAG to figure out *what the process is*, then the tools to *do it*.
+
+
 
 ### 💡 Concept — A2A: handing off to a remote agent
 
@@ -471,6 +659,12 @@ Legal needs its RAG corpus first. Build it from the tribal-knowledge docs:
 agent delegating to another.
 
 The way ADK models "an agent running somewhere else that I can call" is a **remote agent**. You hold a lightweight stand-in for the remote engine and invoke it like a local step; the call travels over A2A to the other engine and the result comes back.
+
+
+**How A2A works.** A2A is a small HTTP contract every ADK agent speaks. Each agent publishes an **agent card** at a well-known URL, describing what it is and how to reach it. To call one, you `POST` a message to its `message:send` endpoint, which returns a **task id**; you then `GET .../tasks/{id}` and poll until the task is done, and read the result. The *task* is the unit of work — which is exactly why the shared task store from Step 5 matters.
+
+**How a remote agent works in ADK.** You don't hand-write those HTTP calls. ADK gives you **`RemoteA2aAgent`**: construct it with the target's agent-card URL, and from then on you invoke it like any local sub-agent (`ctx.run_node(remote, input)`). Under the covers it does the send-and-poll over A2A and hands you back the result. The orchestrator uses this for its fan-out. `vendor_clearance → legal` does the same thing with a direct, fresh-context call (so legal starts clean each time), but the model is identical: **treat an agent running in another engine as a step you can call.**
+
 
 ### 📝 The handoff as its own step
 
@@ -486,6 +680,21 @@ START → clearance → legal_clearance → finalize
 > `vendor_clearance→legal` uses a direct, fresh-context A2A call on purpose — so legal doesn't
 > receive vendor_clearance's whole conversation and echo it back.
 
+Like Deal Pricing, `vendor_clearance` is a `Workflow` with sub-agents inside it:
+
+```
+START → clearance → legal_clearance → finalize
+```
+
+- **`clearance`** runs the **`clearance_reasoner`** sub-agent (following its skill): it checks exclusivity collisions, trademark/customs registration, and marketplace leaks, and recommends eligible vendors — producing a report with `status` `cleared` / `blocked` / `needs_input`.
+- **`legal_clearance`** is the handoff node. When a new vendor/category was onboarded, it calls the **`legal`** engine over A2A. Legal may ask a question back, and this node has two ways to answer it:
+  - **Flow A — an agent answers.** If legal's question is about the *vendor* (its royalty tier, its record), a second sub-agent, the **`vendor_liaison`**, answers it from the licensing registry and the loop continues — one agent answering another, no human involved.
+  - **Flow B — a human answers.** If legal needs the **safety-cert ID** (which lives in no record), the node sets `status: "needs_input"` with the `question`, and it propagates up to the user — the HITL path below.
+- **`finalize`** emits the merged report: the clearance verdict plus legal's executed contract id.
+
+The `@node(..., rerun_on_resume=True)` decorators are what let the workflow *pause* on a question and *resume* once the answer arrives.
+
+
 ### 💡 Concept — Human-in-the-loop (HITL)
 
 Buried in that tribal knowledge is a rule that keeps breaking onboardings: a contract **cannot execute** until a human supplies a **safety-certification ID** that lives in *no* record.
@@ -493,9 +702,25 @@ Everyone forgot it existed.
 
 So legal implements it as **human-in-the-loop**: when it needs a value it can't find, it doesn't guess and it doesn't hard-fail — it returns a **question** and a status like `needs_user`. That question **propagates up** the call chain — legal → vendor_clearance (`status: needs_input`) → orchestrator → the app → **the person who started the audit**. Their answer comes **back down** through workflow state (`legal_safety_cert`), vendor_clearance folds it into the brief, and legal reads it and proceeds. (If no ID is ever supplied, legal issues a provisional `PROV-…` id and reports it — so onboarding is never silently blocked.)
 
+
+**How HITL works in ADK.** An agent that needs something from a human returns a result that says *"I need input"* — here a `status` of `needs_user` / `needs_input` plus a `question` — and the run ends there, cleanly. The caller surfaces the question to the person. When they answer, the answer is written into the workflow's **session state** and the run is **resumed**: ADK re-executes the nodes marked `rerun_on_resume=True`, but this time the answer (`legal_safety_cert`) is already in state, so the node that was waiting reads it and continues past the question.
+
+So a paused-for-a-human run and a normal run are the *same* workflow — the only difference is whether the needed value is in state yet. In this mesh the question and answer travel over the A2A chain (legal → vendor_clearance → orchestrator → app → user, and back), but the ADK primitive underneath is just: **return a question, resume with the answer in state.**
+
 ### 📝 The question that travels
 
 In `agents/legal/agent.py` the instruction says: when it needs a value → status `ask_vendor` / `needs_user` with the options stated in a **`question`** field. In `agents/vendor_clearance/agent.py` you'll see the matching `status: "needs_input"` + `question` on its report, and `legal_safety_cert` carried in state — that's the answer coming back down.
+
+
+
+
+`legal` is a single `LlmAgent` — no Workflow — but it's the most *tool-rich* agent in the mesh. It loads the `legal-clearance` skill and, through a `SkillToolset`, a full toolbox:
+
+- **`search_legal_docs`** — the RAG tool, for reconstructing the process from the tribal-knowledge docs.
+- **the workflow tools** — `draft_license_amendment`, `verify_certifications`, `request_certification`, `assign_customs_hs_code`, `set_royalty_rate`, `verify_liability_insurance`, `request_insurance_rider` — the concrete steps of clearing a deal, each a plain Python `FunctionTool`.
+- **`upsert_contract`** — the one real side effect: an MCP tool that persists the executed `LC-####` contract to Firestore.
+
+Its instruction ties them together: given a clearance brief, follow the skill (leaning on `search_legal_docs` to fill the gaps the docs leave), run the steps, and either **ask** for a missing value (`needs_user` + `question`) or **execute** the contract. When someone asks *it* a question ("what's an annual-volume band?"), it answers from `search_legal_docs`. The division to notice: RAG to figure out *what* to do, tools to *do* it.
 
 ### 💻 Deploy both Agents
 
@@ -512,6 +737,44 @@ Then grant each its own access:
 ./deploy/grant_agent_access.sh legal
 ./deploy/grant_agent_access.sh vendor-clearance
 ```
+
+
+
+### 💻 Try it in the ADK Dev UI
+
+This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call). Start it in one tab:
+
+```bash
+export RUN_LOCAL=true
+export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
+./run_local.sh mesh
+```
+
+In a **second Cloud Shell tab**, launch the Dev UI for vendor_clearance, pointed at the local MCP servers **and** the local `legal` service:
+
+```bash
+source .venv/bin/activate
+export RUN_LOCAL=true
+export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+export MCP_MARKET_URL=http://127.0.0.1:9003/mcp
+export LEGAL_A2A_URL=http://127.0.0.1:8005
+adk web agents/vendor_clearance
+```
+
+Open it via **Web Preview → Change port → 8000**, pick **vendor_clearance**, and **onboard a vendor to a new category** — onboarding is what triggers the handoff to legal:
+
+> Onboard vendor VND-1008 for grogu resin statues in North America.
+
+Watch vendor_clearance clear the vendor, then **hand off to `legal` over A2A** (the `legal_clearance` node). Legal reconstructs its process from the docs — locally, via the keyword retriever — and either asks back for the **safety-cert ID** (the HITL question travelling up) or executes the contract. You can watch the handoff land in legal's log from the first tab:
+
+```bash
+tail -f /tmp/a2a_legal.log
+```
+
+👉💻 When you're done, press `Ctrl+C` in the `adk web` tab and again in the `./run_local.sh mesh` tab.
 
 ### 👀 Verify
 
