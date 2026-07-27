@@ -916,6 +916,67 @@ The fix: keep tasks **outside** the replicas in a **shared task store** that any
 
 Read the header of `packages/vibeflix-common/vibeflix_common/task_store.py` (or `docs/02-architecture.md` → *the shared task store*) for the full story. The key line: the engines don't use ADK's default in-memory task store; they're wired to a `RemoteTaskStore` that reads/writes the app's Firestore-backed endpoints.
 
+### 💡 Concept — two kinds of memory: the session and the Memory Bank
+
+The task store you just met is one place state lives — a *coordination* board that every replica shares *during* a run. The orchestrator touches two more, and they are the two most-confused ideas in ADK, so it is worth pulling them apart. They answer different questions:
+
+- the **session** answers *"what has happened so far in **this** audit?"*
+- the **Memory Bank** answers *"what did we learn from **past** audits?"*
+
+**1. The session — the memory of one run.**
+
+Every time the orchestrator runs, ADK opens a **session**: an ordered log of the run's events plus the shared **`state`** dictionary the nodes read and write (the vendor, the character, the volume, and — importantly — the answer to any HITL question). It is the same `state` you watched fan out from node to node.
+
+Two things depend on it:
+
+- **HITL resume.** When legal paused on the safety-cert question in Step 4, the run ended but the session was **kept**. The person answers, the answer is written into `state`, and ADK **replays the `rerun_on_resume` nodes** against that same session — so the run picks up exactly where it paused. A durable session is the thing there is to resume *into*.
+- **Surviving a crash.** Agent Runtime recycles replicas (a deploy, an autoscale event). A session that lived only in a replica's memory would be lost on a recycle mid-run. So each engine's session is backed by **`VertexAiSessionService`**, which stores it in the engine itself (the Vertex Agent Engine). A session is scoped to **one run** — a new audit opens a new session.
+
+Every engine gets this, keyed by the engine's own id (Agent Runtime injects `GOOGLE_CLOUD_AGENT_ENGINE_ID` at runtime):
+
+```python
+# deploy/deploy_agents_a2a.py — the Runner every engine is deployed with
+session_service = VertexAiSessionService(project, location, agent_engine_id=eid)
+```
+
+**2. The Memory Bank — the memory across runs.**
+
+A session forgets everything the moment its run ends. But a compliance desk *should* remember: *"we audited VND-1001 for grogu vinyl figures last month, all cleared, 18% royalty."* That cross-run recall is a **Memory Bank** — a separate Vertex surface that stores durable **memories** you search semantically, and it outlives any single session.
+
+Only the **orchestrator** has one — it is the single agent that ever needs to recall past audits. The four specialists run with plain in-memory (they have nothing to remember between runs):
+
+```python
+# deploy/deploy_agents_a2a.py — build_runner(), orchestrator only
+memory_service = VertexAiMemoryBankService(project, location, agent_engine_id=eid)  # orchestrator
+memory_service = InMemoryMemoryService()                                            # every other engine
+```
+
+Two halves make it useful — a **write** and a **read**:
+
+- **Write (end of a passing audit).** When `contract_finalize` has a clean audit, it writes **one curated memory** — *"Licensing audit — vendor VND-1001, character grogu, Vinyl Figures, Asia-Pacific, 15,000 units: all workflows passed. Terms: royalty 0.18…"* — with `add_memory`. Two subtleties live here. Building the service stores nothing on its own; a memory only exists once you **call `add_memory`**. And the write runs **engine-side, inside the orchestrator's own workflow**, because that is the only place the real run lives — the app, calling over A2A, receives just the reply text back.
+- **Read (any later run).** The console's chat box routes to a small `note_responder` agent that carries ADK's built-in **`load_memory`** tool. Ask *"have we audited VND-1001 before?"* and `load_memory` searches the same bank and answers from the stored memories.
+
+For the read to find the write, both use the **same scope** — an `app_name` / `user_id` pair. The orchestrator pins that scope explicitly, so every audit writes into, and every question reads from, one shared pool.
+
+**Holding the two apart:**
+
+| | **Session** | **Memory Bank** |
+|---|---|---|
+| Question it answers | what happened in *this* run? | what did we learn from *past* runs? |
+| Scope | one audit run | across all audits |
+| Backed by | `VertexAiSessionService` (every engine) | `VertexAiMemoryBankService` (orchestrator only) |
+| Written | automatically, at every node | explicitly, once, by `contract_finalize` |
+| Read by | ADK, to resume / replay the run | `note_responder`'s `load_memory` tool |
+| Powers | HITL resume · crash survival | "have we seen this vendor before?" |
+
+A session is your **working notes** for the case on your desk; the Memory Bank is the **filing cabinet** of every case you have ever closed.
+
+### 📝 Look — where each one is wired
+
+- **Session** — `deploy/deploy_agents_a2a.py` → `build_runner()`: every engine's `Runner` gets `session_service=VertexAiSessionService(agent_engine_id=eid)`.
+- **Memory write** — `agents/orchestrator/agent.py` → `contract_finalize` calls `_remember_audit(...)`, which builds the one-line fact and calls `add_memory(...)` under the pinned scope.
+- **Memory read** — the same file's `note_responder` agent lists the `load_memory` tool; the app runs it whenever you type in the console's chat box.
+
 ### 💻 Deploy the orchestrator
 
 Deploy it last of the agents — it auto-discovers the three specialists' A2A URLs from
@@ -944,6 +1005,7 @@ It confirms the orchestrator engine is deployed with an agent identity. The end-
 - An ADK **Workflow** is a **graph** of nodes and edges; you declare the flow, ADK walks it.
 - An edge to a **tuple** is a **fan-out** (parallel); a **`JoinNode`** waits for all branches.
 - Fan-out over A2A needs a **shared task store** (here, Firestore-backed) or replica load-balancing 404s most of your polls.
+- A **session** (`VertexAiSessionService`) is the memory of **one run** — it powers HITL resume and crash survival; a **Memory Bank** (`VertexAiMemoryBankService`, orchestrator-only) is the memory **across runs** — written once by `contract_finalize`, read by `note_responder`'s `load_memory`.
 
 ## UI Renderer, A2UI, and the Frontend
 
