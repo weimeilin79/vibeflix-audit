@@ -323,7 +323,7 @@ def make_runner_builder(agent_name: str):
     def build_runner():
         import importlib
         import os
-        from google.adk.apps import App
+        from google.adk.apps import App, ResumabilityConfig
         # The agent name comes from THIS engine's own env (VIBEFLIX_AGENT_NAME,
         # set per-engine in config["env_vars"]). Do NOT trust the pickled closure
         # `agent_name`: cloudpickle serialized every engine's executor with the
@@ -331,22 +331,35 @@ def make_runner_builder(agent_name: str):
         # module and failed. Reading from env at runtime is immune to that.
         name = os.environ.get("VIBEFLIX_AGENT_NAME") or agent_name
         mod = importlib.import_module(f"agents.{name}.agent")
-        app = App(name=name, root_agent=mod.root_agent)
-        # ENGINE-LEVEL MEMORY: Agent Runtime sets GOOGLE_CLOUD_AGENT_ENGINE_ID
-        # inside every engine — present in the cloud, absent everywhere else, so
-        # local runs are untouched by construction. Sessions + Memory Bank are
-        # backed by THIS engine itself (regional, not the Gemini `global`).
+        # Crash/failure recovery — ORCHESTRATOR only for now: with is_resumable, a re-invoked
+        # invocation REPLAYS its completed nodes from cached output and re-runs only the pending
+        # ones, instead of restarting. Relies on the durable VertexAiSessionService below to keep
+        # the events across a replica crash. (Nodes must be idempotent — resume is at-least-once.)
+        app = App(name=name, root_agent=mod.root_agent,
+                  resumability_config=ResumabilityConfig(is_resumable=(name == "orchestrator")))
+        # ENGINE-LEVEL SESSIONS: Agent Runtime sets GOOGLE_CLOUD_AGENT_ENGINE_ID inside every
+        # engine — present in the cloud, absent everywhere else, so local runs are untouched by
+        # construction. Each engine's SESSIONS are backed by THIS engine itself (regional, not the
+        # Gemini `global`), which is what gives HITL resume + restart survival.
+        # Memory Bank is scoped to the ORCHESTRATOR only: it's the sole memory consumer
+        # (its note-responder searches memory) and it writes THIS audit's durable session
+        # to its OWN engine's Bank from `contract_finalize`. Every other engine never
+        # searches/writes memory, so they stay on InMemory.
         eid = os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").rsplit("/", 1)[-1]
         if eid:
             from google.adk.runners import Runner
             from google.adk.sessions import VertexAiSessionService
-            from google.adk.memory import VertexAiMemoryBankService
+            from google.adk.memory import InMemoryMemoryService, VertexAiMemoryBankService
+            if name == "orchestrator":
+                memory_service = VertexAiMemoryBankService(
+                    project=project, location=region, agent_engine_id=eid)
+            else:
+                memory_service = InMemoryMemoryService()
             return Runner(
                 app=app,
                 session_service=VertexAiSessionService(
                     project=project, location=region, agent_engine_id=eid),
-                memory_service=VertexAiMemoryBankService(
-                    project=project, location=region, agent_engine_id=eid),
+                memory_service=memory_service,
             )
         from google.adk.runners import InMemoryRunner
         return InMemoryRunner(app=app)
@@ -383,6 +396,12 @@ def agent_card(name: str, desc: str):
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         preferred_transport="HTTP+JSON",
+        # Registers the `handle_authenticated_agent_card` route on the engine (see
+        # A2aAgent.register_operations — it appends that op ONLY when this flag is set).
+        # Without it the engine serves message:send/tasks but 404s on the agent card, so a
+        # standard a2a client (RemoteA2aAgent) can't discover it. With it, the card is
+        # fetchable at {engine}/a2a/v1/card.
+        supports_authenticated_extended_card=True,
         skills=[AgentSkill(id=name, name=name.replace("_", " "),
                            description=desc, tags=["vibeflix"])],
     )

@@ -79,56 +79,28 @@ Wiring is entirely by environment variable, so the same images run locally
 **mcp servers**
 - `MCP_TRANSPORT=streamable-http`, `HOST`, `PORT` — serves MCP at `/mcp`.
 
-## Persistence memory (Phase 1)
+## Persistence & memory
 
-Durable episodic memory uses **managed Vertex services**: `VertexAiSessionService`
-(session event trail) + `VertexAiMemoryBankService` (cross-session recall), backed
-by an **Agent Engine** instance, plus `GcsArtifactService` (images/reports).
+**Sessions — durable, automatic, no setup.** Every engine's sessions are backed by its OWN
+Agent Engine via `VertexAiSessionService`: Agent Runtime injects `GOOGLE_CLOUD_AGENT_ENGINE_ID`
+into each engine, and `deploy/deploy_agents_a2a.py` wires the session service to it. This is
+what gives HITL resume and survive-a-replica-restart. Nothing to provision.
 
-> The Agent Engine instance is **not** where your agents run — they stay in the
-> A2A mesh. It's only the managed backend the two services talk to, scoped by an
-> `agent_engine_id`. The instance is empty (no deployed agent code).
+**Memory Bank — cross-audit recall, scoped to the orchestrator.** The only consumer of memory
+is the note-responder (its `load_memory` tool), and it runs in the **app**. The app backs its
+memory with the **orchestrator's own Agent Engine Memory Bank**, resolved automatically from
+`ORCHESTRATOR_A2A_URL` (`agents/app.py` → `memory.build_memory_service(agent_engine_id=…)`). So
+there is **no dedicated memory engine, no `AGENT_ENGINE_ID`, and no `setup_memory.sh` step** —
+deploy the app after the orchestrator (`deploy/deploy_app.sh` sets `ORCHESTRATOR_A2A_URL`) and
+it works. `agents/app.py::_persist_audit` writes each finished audit into that Bank, and
+`note_responder`'s `load_memory` reads it back across sessions. Locally (no engine URL) it falls
+back to in-memory, so `adk web` / `run_local.sh` keep working with zero setup.
 
-Provision it (bucket + Agent Engine) with:
+The other agents use no Memory Bank, and the app's own sessions stay in-memory (it's a thin
+client) — only the orchestrator's cross-audit memory is made durable.
 
-```bash
-PROJECT=pokedemo-test REGION=us-central1 BUCKET=vibeflix-artifacts \
-  ./deploy/setup_memory.sh
-```
-
-It enables the APIs, creates the private artifacts bucket, and creates the Agent
-Engine instance, then prints the env the app reads:
-
-```bash
-export AGENT_ENGINE_ID=<numeric id>
-export MEMORY_LOCATION=us-central1     # ⚠️ a REGION — Agent Engine can't use "global"
-export ARTIFACTS_BUCKET=vibeflix-artifacts
-```
-
-**Locally**, put these three in `agents/orchestrator/.env` (gitignored) — `agents/memory.py`
-loads it automatically, so no manual `export` is needed. **In containers/Cloud Run**
-set them as real env vars. With them set the app uses `VertexAiSessionService` +
-`VertexAiMemoryBankService` + `GcsArtifactService`, and after each audit
-`agents/app.py::_persist_audit` sends the session to Memory Bank and stores the
-report as a GCS artifact. Unset → in-memory (local dev), nothing persists.
-`ContextCacheConfig` is on regardless.
-
-**Agent Engine creation is a Vertex SDK call, not `gcloud`.** The script uses
-`agent_engines.create()` (`pip install "google-cloud-aiplatform[agent_engines]"`).
-If your SDK version differs, create it via REST instead:
-
-```bash
-curl -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  -H "Content-Type: application/json" \
-  "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/pokedemo-test/locations/us-central1/reasoningEngines" \
-  -d '{"displayName":"vibeflix-memory"}'
-# returns a long-running operation → poll it → the reasoningEngines/<NNN> id is AGENT_ENGINE_ID
-```
-
-Without these env vars the app falls back to in-memory services (local dev / adk
-web keep working, nothing persists). No Agent Engine needed for sessions-only if
-you prefer `DatabaseSessionService` (self-managed Postgres) — Memory Bank's
-auto-generation is the part that requires Agent Engine.
+**Artifacts — optional.** Set `ARTIFACTS_BUCKET` on the app to persist reports/images to GCS
+(`GcsArtifactService`); unset → in-memory. `ContextCacheConfig` is on regardless.
 
 ## Semantic registries (Firestore — Phase 2)
 

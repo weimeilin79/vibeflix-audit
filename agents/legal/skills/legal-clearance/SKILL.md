@@ -65,10 +65,10 @@ matching tool:
   to the CURRENT figure, then `verify_liability_insurance(vendor_id, category)`; if
   `insufficient`, `request_insurance_rider(vendor_id, category)`.
 - **safety certification id** — if the brief provides a REAL one, use it. Otherwise look up
-  the certification note (`search_legal_docs("safety certification id format")`) and
-  **GENERATE a provisional id**: `PROV-<STD>-<YYYYMMDD>-<random 6-digit serial>` — STD by
-  category (toys/plush/vinyl/blind box -> ASTM, apparel -> OEKO-TEX), today's date, and a
-  random 6-digit serial. Mark it provisional.
+  the certification note
+  (`search_legal_docs("safety certification id format")`) and **GENERATE a provisional id**:
+  `PROV-<STD>-<YYYYMMDD>-<random 6-digit serial>` — STD by category (toys/plush/vinyl/blind box
+  -> ASTM, apparel -> OEKO-TEX), today's date, and a random 6-digit serial. Mark it provisional.
 - **execute** -> `upsert_contract` with `{vendor_id, character_id, category, territory,
   status: "executed", amendment_id, hs_code, royalty_pct, safety_cert_id, and the
   certification/rider ids}` -> you get an `LC-####`.

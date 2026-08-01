@@ -194,11 +194,22 @@ adk_app = App(
     context_cache_config=build_context_cache_config(),
 )
 
-# Env-gated persistence: managed Vertex (Sessions + Memory Bank + GCS) when
-# AGENT_ENGINE_ID/ARTIFACTS_BUCKET are set, else in-memory (local dev).
+# Env-gated persistence. Sessions + artifacts follow AGENT_ENGINE_ID/ARTIFACTS_BUCKET (usually
+# in-memory here — the app is a thin client). MEMORY is scoped to the ORCHESTRATOR's OWN Agent
+# Engine (parsed from ORCHESTRATOR_A2A_URL), since the note-responder is the only thing that
+# searches memory. So cross-audit recall is durable in the orchestrator's Memory Bank, and
+# nothing else (other agents, app sessions) is touched.
 session_service = build_session_service()
-memory_service = build_memory_service()
 artifact_service = build_artifact_service()
+_orch_eng = re.search(r"/reasoningEngines/(\d+)", _ORCHESTRATOR_URL)
+_orch_reg = re.search(r"https://([a-z0-9-]+)-aiplatform", _ORCHESTRATOR_URL)
+memory_service = build_memory_service(
+    agent_engine_id=_orch_eng.group(1) if _orch_eng else None,
+    location=_orch_reg.group(1) if _orch_reg else None,
+)
+print("[memory] orchestrator Memory Bank = "
+      + (f"engine {_orch_eng.group(1)}" if _orch_eng else "in-memory (local / no engine URL)"),
+      flush=True)
 runner = Runner(
     app=adk_app,
     session_service=session_service,
@@ -395,16 +406,15 @@ async def _render_surface(aggregate: dict, market, volume) -> dict:
 
 
 async def _persist_audit(user_id: str, session_id: str, result: dict) -> None:
-    """Best-effort: send the finished session to Memory Bank + store the report.
+    """Best-effort: store the finished audit report as an artifact.
 
-    Never fails the request — persistence errors are logged and swallowed.
+    Memory Bank is NOT written here: over A2A the app never holds the orchestrator's
+    real session (only the reply text + a throwaway id), so the memory write lives
+    engine-side in the orchestrator's `contract_finalize`. The app still SEARCHES that
+    same Bank via note_responder's `load_memory`. Never fails the request — persistence
+    errors are logged and swallowed.
     """
     try:
-        session = await session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        if session is not None:
-            await memory_service.add_session_to_memory(session)
         await artifact_service.save_artifact(
             app_name=APP_NAME,
             user_id=user_id,
@@ -589,7 +599,7 @@ async def _collect_or_complete(request: dict, token: str | None = None) -> dict:
     pending = await _pending_input(aggregate, request)
     if pending is not None:
         tok = token or uuid.uuid4().hex[:12]
-        _SESSIONS[tok] = {"user_id": user_id, "request": request}
+        await asyncio.to_thread(_session_write, tok, {"user_id": user_id, "request": request})
         return {
             "status": "input_required",
             "session_id": tok,
@@ -598,7 +608,7 @@ async def _collect_or_complete(request: dict, token: str | None = None) -> dict:
             "partial": aggregate,  # show what's known so far while asking
         }
     if token:
-        _SESSIONS.pop(token, None)
+        await asyncio.to_thread(_session_delete, token)
     await _record_history(request, aggregate)
     await _persist_audit(user_id, sid, aggregate)
     return {"status": "completed", "result": aggregate}
@@ -847,11 +857,39 @@ def list_audits():
     return {"audits": list(reversed(_AUDIT_HISTORY))}
 
 
+def _task_store_summary() -> dict:
+    """Summarise the a2a_tasks store for the Database tab: id → {state, updated, steps, last}.
+    Reads Firestore when configured, else the in-memory fallback. Newest first. Best-effort —
+    a stuck job shows here as `state: working` long after it should have completed."""
+    try:
+        if _FIRESTORE_DB:
+            raw = {doc.id: (doc.to_dict() or {}).get("json") for doc in _task_collection().stream()}
+        else:
+            raw = dict(_TASKS_MEM)
+    except Exception as e:  # noqa: BLE001
+        return {"__error__": {"state": "error", "error": f"{type(e).__name__}: {e}"}}
+    out: dict = {}
+    for tid, j in raw.items():
+        try:
+            t = json.loads(j) if isinstance(j, str) else (j or {})
+            status = t.get("status") or {}
+            hist = t.get("history") or []
+            last = ""
+            if hist:
+                parts = hist[-1].get("parts") or []
+                last = " ".join((p.get("text", "") or "") for p in parts if isinstance(p, dict)).strip()[:180]
+            out[tid] = {"state": status.get("state"), "updated": status.get("timestamp"),
+                        "steps": len(hist), "last": last}
+        except Exception as e:  # noqa: BLE001
+            out[tid] = {"state": "?", "parse_error": f"{type(e).__name__}: {e}"}
+    return dict(sorted(out.items(), key=lambda kv: kv[1].get("updated") or "", reverse=True))
+
+
 @app.get("/api/database")
 async def database_dump():
     """Everything the mesh runs on, for the console's Database tab (loaded only on
     demand): mcp_licensing's stores (vendors/trademarks/exclusivity/contracts/rate
-    cards) + the Firestore registries + the audit history."""
+    cards) + the Firestore registries + the audit history + the A2A task store."""
     out: dict = {"stores": {}, "registries": {}, "audit_history": list(reversed(_AUDIT_HISTORY)),
                  "firestore_database": _FIRESTORE_DB or "(unset — in-memory fallbacks)"}
     dump = await _licensing_call("dump_stores", {})
@@ -865,6 +903,7 @@ async def database_dump():
                 out["registries"][col] = {d.id: d.to_dict() for d in db.collection(col).stream()}
         except Exception as e:
             out["registries_error"] = f"{type(e).__name__}: {e}"
+    out["task_store"] = await asyncio.to_thread(_task_store_summary)
     return out
 
 
@@ -936,7 +975,7 @@ async def reset_database():
     # 3) in-flight run state.
     _AUDIT_CACHE.clear()
     _ORDER_BY_TOKEN.clear()
-    _SESSIONS.clear()
+    result["sessions_cleared"] = await asyncio.to_thread(_session_clear_all)
     # 4) uploaded demo images.
     try:
         result["uploads_deleted"] = await asyncio.to_thread(_clear_upload_bucket)
@@ -1267,6 +1306,58 @@ def _task_read(task_id: str) -> str | None:
 
 def _task_delete(task_id: str) -> None:
     _task_collection().document(task_id).delete()
+
+
+# ── Pending-HITL sessions (Phase 6) ────────────────────────────────────────────────────────
+# A paused audit (status input_required) parks its {user_id, request} here so /api/audit/resume
+# can merge the operator's answer and re-run. Backed by Firestore (collection `audit_sessions`)
+# so a paused audit survives an app restart AND is visible across Cloud Run replicas — the
+# in-memory `_SESSIONS` dict (defined earlier) is the LOCAL-dev fallback when FIRESTORE_DATABASE
+# is unset. Sync Firestore calls; callers wrap in asyncio.to_thread.
+_SESSION_COLLECTION = os.environ.get("SESSION_COLLECTION", "audit_sessions")
+_session_col_handle = None
+
+
+def _session_collection():
+    global _session_col_handle
+    if _session_col_handle is None:
+        from google.cloud import firestore
+        _session_col_handle = firestore.Client(database=_FIRESTORE_DB).collection(_SESSION_COLLECTION)
+    return _session_col_handle
+
+
+def _session_write(tok: str, data: dict) -> None:
+    if _FIRESTORE_DB:
+        _session_collection().document(tok).set({"json": json.dumps(data)})
+    else:
+        _SESSIONS[tok] = data
+
+
+def _session_read(tok: str) -> dict | None:
+    if _FIRESTORE_DB:
+        snap = _session_collection().document(tok).get()
+        raw = (snap.to_dict() or {}).get("json") if snap.exists else None
+        return json.loads(raw) if raw else None
+    return _SESSIONS.get(tok)
+
+
+def _session_delete(tok: str) -> None:
+    if _FIRESTORE_DB:
+        _session_collection().document(tok).delete()
+    else:
+        _SESSIONS.pop(tok, None)
+
+
+def _session_clear_all() -> int:
+    """Delete every pending session (used by the reset endpoint). Returns count cleared."""
+    n = 0
+    if _FIRESTORE_DB:
+        for doc in _session_collection().stream():
+            doc.reference.delete(); n += 1
+    else:
+        n = len(_SESSIONS)
+    _SESSIONS.clear()
+    return n
 
 
 def _task_auth(key: str | None) -> None:
@@ -1613,7 +1704,7 @@ async def run_audit(req: AuditRequest):
 async def resume_audit(req: ResumeRequest):
     """Answer a dynamic input request: merge the provided values into the
     accumulated request and re-run until nothing is pending."""
-    ctx = _SESSIONS.get(req.session_id)
+    ctx = await asyncio.to_thread(_session_read, req.session_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail="No audit session to resume.")
     request = dict(ctx["request"])

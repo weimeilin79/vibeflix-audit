@@ -10,6 +10,11 @@ python-dotenv>=1.0.0
 mcp>=1.0,<2
 # Pinned: --pre would otherwise pull a newer pre-release where McpToolset moved
 # (breaks vibeflix_common.mcp_clients). 2.3.0 is the version verified in .venv.
+# NO `gcp` extra here on purpose: it drags in the whole google-cloud-aiplatform tree
+# (pyarrow/bigquery/bigtable/dataplex, ~200 MB) and THIS file is installed by every agent
+# image. The agents get `vertexai` from the Agent Runtime env at runtime, so they don't
+# need it baked in. Only the Cloud Run APP needs it (note_responder's Memory Bank read) —
+# it layers `google-adk[gcp]` on top in deploy/Dockerfile.app (WITH_GCP arg, on in cloud).
 google-adk[a2a,agent-identity]==2.3.0
 google-genai>=1.0.0
 # Lets google-auth use its async transport (silences the mTLS/AsyncAuthorizedSession

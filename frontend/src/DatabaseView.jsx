@@ -108,6 +108,8 @@ export default function DatabaseView() {
           <Collection title="📦 market_policy" docs={registries.market_policy} hint="incl. the sourcing cap the gate reads" />
           <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '0.3rem' }}>Audit history (Firestore)</div>
           <Collection title="🗂 audit_history" docs={audits} hint="one record per audit order" />
+          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '0.3rem' }}>A2A task store (Firestore)</div>
+          <Collection title="⏳ a2a_tasks" docs={data?.task_store} hint="one ticket per A2A job · state working/completed; a stranded 'working' ticket is a stuck run" />
         </>
       )}
     </div>

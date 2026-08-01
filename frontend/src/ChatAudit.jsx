@@ -350,7 +350,28 @@ const ESCALATABLE = new Set(['flagged', 'unverified', 'blocked', 'needs_input', 
 // through submitFields from the standard inputs' state).
 const STD_TOKENS = new Set(['image', 'image_uri', 'medium', 'character', 'vendor', 'market', 'target_market', 'volume', 'category', 'product_category']);
 
-function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
+// Agents whose single box is really an internal ADK Workflow — drawn as connected
+// sub-boxes with a loop instead of a flat step list. Keyed by the GRAPH NODE ID (the
+// `<name>_agent` the plan uses, e.g. `deal_pricing_agent`). Each sub-box lights off the
+// SAME toolLights key the flat rows use — `<nodeId>/<subId>` (e.g. deal_pricing_agent/reconcile),
+// driven by the per-node mesh events instrument_node() already emits. No engine change.
+const SUB_WORKFLOWS = {
+  deal_pricing_agent: {
+    nodes: [
+      { id: 'evaluate',  label: 'evaluate',  sub: 'pricing_reasoner' },
+      { id: 'reconcile', label: 'reconcile', sub: 'pricing_resolver' },
+      { id: 'finalize',  label: 'finalize' },
+    ],
+    // The loop is evaluate ⇄ reconcile: reconcile re-checks state and loops back until
+    // every component resolves, then exits down to finalize. Drawn as an ANIMATED loop-back
+    // edge (from node index 1 up to 0) so the cycle is visible and turning.
+    // Real self-cycle: reconcile routes "loop" back to ITSELF until every pricing component
+    // resolves (bounded by MAX_ROUNDS in the agent). `node` = the looping box index.
+    loop: { node: 1, hint: 'reconcile loops back to itself until every component resolves' },
+  },
+};
+
+function WorkflowGraph({ graph, components, mcpTools, toolLights, running }) {
   const nodes = graph ? Object.values(graph) : [];
   if (!nodes.length) {
     return <div style={{ padding: '1.2rem 0.6rem', fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5 }}>
@@ -359,6 +380,10 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   }
   const W = 760, NW = 224, NH = 60;                 // 2× type on a wider canvas
   const BOX_HDR = 22, ROW_H = 16, BOX_PAD = 6, BOX_GAP = 12, STACK_DY = 14;
+  // Internal sub-workflow boxes (deal_pricing): stacked top→bottom, connected by down
+  // arrows, with a loop-back arrow on the looping node. Sized to leave a right margin
+  // (NW − SUBX_L − SUBW) for that loop arc.
+  const SUBX_L = 14, SUBW = NW - 56, SUBH = 38, SUB_GAP = 26, SUB_TOP = 10, SUB_BOT = 10;
 
   // MCP servers each agent talks to — from the live readiness probe (/api/ready),
   // so the topology isn't hardcoded and each server box carries real health. The
@@ -381,10 +406,18 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   const rowCount = (m) => toolsOf(m).reduce((n, t) => n + 1 + ((stepsOf(m)[t] || []).length), 0);
 
   const root = nodes.find((n) => !n.parent);
-  const l1 = nodes.filter((n) => root && n.parent === root.id);
-  const l2 = nodes.filter((n) => n.parent && (!root || n.parent !== root.id));
-  // Agent boxes grow to fit their workflow-step rows (deal_pricing → evaluate/reconcile/…).
-  const nodeH = (n) => NH + ((n.steps?.length || 0) ? (n.steps.length * ROW_H + 6) : 0);
+  // Standalone agents (ui_renderer): the APP calls them, not the orchestrator — so they get
+  // their OWN box at the very bottom, wired to nothing (excluded from l1/l2 and every edge).
+  const standaloneNodes = nodes.filter((n) => n.standalone);
+  const l1 = nodes.filter((n) => root && n.parent === root.id && !n.standalone);
+  const l2 = nodes.filter((n) => n.parent && (!root || n.parent !== root.id) && !n.standalone);
+  // Agent boxes grow to fit their content: a sub-workflow agent (deal_pricing) grows to
+  // fit its internal connected boxes; every other agent grows for its flat step rows.
+  const nodeH = (n) => {
+    const wf = SUB_WORKFLOWS[n.id];
+    if (wf) return NH + SUB_TOP + wf.nodes.length * SUBH + (wf.nodes.length - 1) * SUB_GAP + SUB_BOT;
+    return NH + ((n.steps?.length || 0) ? (n.steps.length * ROW_H + 6) : 0);
+  };
   const heights = {}; nodes.forEach((n) => { heights[n.id] = nodeH(n); });
   const maxL1H = Math.max(NH, ...l1.map((n) => heights[n.id]));
   const l1Y = 116;
@@ -423,7 +456,16 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
   // boxes, which paint over it — no crowding in the agent/MCP band).
   const l2Y = mcpY + mcpMaxH + 42;
   l2.forEach((n) => { pos[n.id].y = l2Y; });
-  const H = l2.length ? l2Y + NH + 14 : mcpY + mcpMaxH + 14;
+  let H = l2.length ? l2Y + Math.max(NH, ...l2.map((n) => heights[n.id] || NH)) + 14 : mcpY + mcpMaxH + 14;
+  // Standalone agents get a lone row at the very bottom (centered), below everything, with
+  // no incoming/outgoing edges — they light on their own started/completed mesh events.
+  if (standaloneNodes.length) {
+    const saY = H + 12;
+    const saTotal = standaloneNodes.length * NW + Math.max(0, standaloneNodes.length - 1) * gap;
+    const saX0 = Math.max(8, (W - saTotal) / 2);
+    standaloneNodes.forEach((n, i) => { pos[n.id] = { x: saX0 + i * (NW + gap), y: saY }; });
+    H = saY + Math.max(NH, ...standaloneNodes.map((n) => heights[n.id] || NH)) + 14;
+  }
 
   const edge = (a, b, dashed) => {
     const pa = pos[a], pb = pos[b]; if (!pa || !pb) return null;
@@ -510,6 +552,7 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
     // status text, never a misleading 'queued'.
     const s = WF_STATUS[n.status] || { ...WF_STATUS.pending, label: n.status || 'queued' };
     const h = heights[n.id] || NH;
+    const wf = SUB_WORKFLOWS[n.id];
     const steps = n.steps || [];
     return (
       <g className={n.status === 'running' ? 'wf-running' : ''}>
@@ -520,29 +563,98 @@ function WorkflowGraph({ graph, components, mcpTools, toolLights }) {
             fixed light color — theme-aware text would go black-on-dark in light mode. */}
         <text x={p.x + NW / 2} y={p.y + 26} textAnchor="middle" fontSize="16" fontWeight="700" fill="#e8eaed">{n.label}</text>
         <text x={p.x + NW / 2} y={p.y + 46} textAnchor="middle" fontSize="12" fill={s.dot}>{s.label}</text>
-        {/* Agent WORKFLOW STEPS — one lit row each, mirroring the MCP server boxes. Keyed
-            `<agentNode>/<step>` into the SAME toolLights map, so pulseLed drives them. */}
-        {steps.length > 0 && (
-          <line x1={p.x + 12} y1={p.y + NH - 6} x2={p.x + NW - 12} y2={p.y + NH - 6}
-            stroke="rgba(232,234,237,0.22)" strokeWidth="0.8" />
+        {wf ? (
+          /* Internal ADK Workflow drawn as connected sub-boxes with an ANIMATED loop-back edge
+             (evaluate ⇄ reconcile). Boxes light off toolLights `<nodeId>/<subId>` — the SAME
+             per-node mesh events as the flat rows. */
+          <>
+            {/* down connectors: evaluate → reconcile → finalize */}
+            {wf.nodes.slice(0, -1).map((_, i) => {
+              const cx = p.x + SUBX_L + SUBW / 2;
+              const y1 = p.y + NH + SUB_TOP + i * (SUBH + SUB_GAP) + SUBH;
+              const y2 = p.y + NH + SUB_TOP + (i + 1) * (SUBH + SUB_GAP);
+              return (
+                <g key={`conn${i}`}>
+                  <line x1={cx} y1={y1} x2={cx} y2={y2 - 5} stroke="rgba(232,234,237,0.5)" strokeWidth="1.6" />
+                  <polygon points={`${cx - 4},${y2 - 6} ${cx + 4},${y2 - 6} ${cx},${y2 - 1}`} fill="rgba(232,234,237,0.7)" />
+                </g>
+              );
+            })}
+            {/* sub-boxes */}
+            {wf.nodes.map((sn, i) => {
+              const key = `${n.id}/${sn.id}`;
+              const mode = (toolLights || {})[key];
+              const lit = mode === 'on' || mode === 'blink';
+              const bx = p.x + SUBX_L, by = p.y + NH + SUB_TOP + i * (SUBH + SUB_GAP);
+              const midY = by + SUBH / 2;
+              return (
+                <g key={key} data-led={key}>
+                  <rect x={bx} y={by} width={SUBW} height={SUBH} rx="8"
+                    fill={lit ? 'rgba(61,220,132,0.14)' : 'rgba(255,255,255,0.03)'}
+                    stroke={lit ? '#3ddc84' : 'rgba(232,234,237,0.30)'} strokeWidth={lit ? 1.8 : 1} />
+                  <circle className={mode === 'blink' ? 'wf-led-blink' : ''} cx={bx + 13} cy={midY} r="3.6"
+                    fill={lit ? '#3ddc84' : 'rgba(232,234,237,0.30)'} />
+                  <text x={bx + 24} y={by + (sn.sub ? 16 : SUBH / 2 + 4)} fontSize="12.5" fontWeight="700"
+                    fill={lit ? '#e8eaed' : 'rgba(232,234,237,0.78)'}>{sn.label}</text>
+                  {sn.sub && (
+                    <text x={bx + 24} y={by + 30} fontSize="10" fill="rgba(232,234,237,0.5)">{sn.sub}</text>
+                  )}
+                </g>
+              );
+            })}
+            {/* the LOOP: a real SELF-cycle on reconcile (the graph edge reconcile→reconcile).
+                Drawn last so it sits on top. Flowing dashes + a spinning ⟲ show it turning while
+                running; a ×N label carries the MAX_ROUNDS cap. */}
+            {wf.loop && (() => {
+              const bx = p.x + SUBX_L, rx = bx + SUBW, ox = rx + 20;
+              const midY = p.y + NH + SUB_TOP + wf.loop.node * (SUBH + SUB_GAP) + SUBH / 2;
+              return (
+                <g>
+                  <title>{wf.loop.hint}</title>
+                  {/* self-loop arc: out the right edge, around, back into the same box */}
+                  <path d={`M ${rx} ${midY - 9} C ${ox + 10} ${midY - 15}, ${ox + 10} ${midY + 15}, ${rx} ${midY + 9}`}
+                    fill="none" stroke="#e0b341" strokeWidth="2" strokeLinecap="round" strokeDasharray="6 5">
+                    {/* Only turn while a run is in flight; static once complete or cleared. */}
+                    {running && <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="0.9s" repeatCount="indefinite" />}
+                  </path>
+                  {/* arrowhead pointing left, back INTO reconcile */}
+                  <polygon points={`${rx},${midY + 9} ${rx + 8},${midY + 4} ${rx + 8},${midY + 13}`} fill="#e0b341" />
+                  {/* loop glyph — spins only while running */}
+                  <text x={ox + 12} y={midY} textAnchor="middle" dominantBaseline="central" fontSize="13" fill="#e0b341">⟲
+                    {running && <animateTransform attributeName="transform" attributeType="XML" type="rotate"
+                      from={`0 ${ox + 12} ${midY}`} to={`360 ${ox + 12} ${midY}`} dur="2.4s" repeatCount="indefinite" />}
+                  </text>
+                </g>
+              );
+            })()}
+          </>
+        ) : (
+          <>
+            {/* Agent WORKFLOW STEPS — one lit row each, mirroring the MCP server boxes. Keyed
+                `<agentNode>/<step>` into the SAME toolLights map, so pulseLed drives them. */}
+            {steps.length > 0 && (
+              <line x1={p.x + 12} y1={p.y + NH - 6} x2={p.x + NW - 12} y2={p.y + NH - 6}
+                stroke="rgba(232,234,237,0.22)" strokeWidth="0.8" />
+            )}
+            {steps.map((st, j) => {
+              const key = `${n.id}/${st}`;
+              const mode = (toolLights || {})[key];
+              const lit = mode === 'on' || mode === 'blink';
+              const ty = p.y + NH + 5 + j * ROW_H;
+              const txt = st.replace(/_/g, ' ');
+              return (
+                <g key={key} data-led={key}>
+                  <circle className={mode === 'blink' ? 'wf-led-blink' : ''} cx={p.x + 18} cy={ty} r="3.6"
+                    fill={lit ? '#3ddc84' : 'rgba(232,234,237,0.28)'} />
+                  <text x={p.x + 30} y={ty + 4} fontSize="11.5" fontWeight={lit ? 700 : 400}
+                    fill={lit ? '#e8eaed' : 'rgba(232,234,237,0.62)'}>
+                    {txt.length > 30 ? txt.slice(0, 29) + '…' : txt}
+                  </text>
+                </g>
+              );
+            })}
+          </>
         )}
-        {steps.map((st, j) => {
-          const key = `${n.id}/${st}`;
-          const mode = (toolLights || {})[key];
-          const lit = mode === 'on' || mode === 'blink';
-          const ty = p.y + NH + 5 + j * ROW_H;
-          const txt = st.replace(/_/g, ' ');
-          return (
-            <g key={key} data-led={key}>
-              <circle className={mode === 'blink' ? 'wf-led-blink' : ''} cx={p.x + 18} cy={ty} r="3.6"
-                fill={lit ? '#3ddc84' : 'rgba(232,234,237,0.28)'} />
-              <text x={p.x + 30} y={ty + 4} fontSize="11.5" fontWeight={lit ? 700 : 400}
-                fill={lit ? '#e8eaed' : 'rgba(232,234,237,0.62)'}>
-                {txt.length > 30 ? txt.slice(0, 29) + '…' : txt}
-              </text>
-            </g>
-          );
-        })}
       </g>
     );
   };
@@ -764,6 +876,14 @@ export default function ChatAudit() {
         mcp_brand_style: 'brand_style_compliance_agent',
         vendor_clearance: 'vendor_clearance_agent',
         deal_pricing: 'deal_pricing_agent',
+        // legal is a single LlmAgent vendor_clearance hands off to; we instrument its TOOL
+        // calls (before/after_tool_callback → source:'legal', node:<tool>), so each function
+        // it runs shows as a lit step row in its box (RAG search, drafting, certs, contract…).
+        legal: 'legal',
+        // ui_renderer is a single LlmAgent (not a Workflow) the APP calls over A2A. It emits
+        // agent-level started/completed (before/after_agent_callback), so its box appears and
+        // then goes terminal on its own — no orchestrator node event backs it.
+        ui_renderer: 'ui_renderer',
       };
       const box = AGENT_OF[e.source];
       if (box) {
@@ -772,15 +892,27 @@ export default function ChatAudit() {
         // mcp_brand_style events carry a tool, so they're NOT steps (they fall through to
         // the LED-tool branch below).
         const step = (!e.tool && e.node && e.node !== e.source) ? e.node : null;
+        // An AGENT-LEVEL completed/failed (no sub-step) means the whole agent finished — this
+        // is how single-agent boxes (ui_renderer) go terminal. The Workflow agents emit only
+        // sub-step events, so they're untouched here and still get terminal from the orchestrator.
+        const agentDone = !step && (e.event === 'completed' || e.event === 'failed');
         setGraph((g) => {
           const label = box.replace(/_agent$/, '').replace(/_compliance$/, '')
             .replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-          const cur = g?.[box] || { id: box, label, parent: 'orchestrator', steps: [] };
+          // ui_renderer is standalone (bottom, edge-free). legal defaults under vendor_clearance,
+          // though its box is normally created first by the vendor→legal handoff handler (which
+          // sets its ⚖️ label + parent); this default only covers a mesh-order race.
+          const cur = g?.[box] || { id: box, label,
+            parent: box === 'legal' ? 'vendor_clearance' : 'orchestrator',
+            standalone: box === 'ui_renderer', steps: [] };
           const steps = step && !(cur.steps || []).includes(step)
             ? [...(cur.steps || []), step] : (cur.steps || []);
-          // Record the step even on a resolved box, but never DOWNGRADE its status.
+          // Never DOWNGRADE a terminal box; otherwise running, or terminal on agent-level done.
           const terminal = ['completed', 'done', 'blocked', 'failed'].includes(cur.status);
-          return { ...(g || {}), [box]: { ...cur, steps, status: terminal ? cur.status : 'running' } };
+          const status = terminal ? cur.status
+            : agentDone ? (e.event === 'failed' ? 'failed' : 'completed')
+            : 'running';
+          return { ...(g || {}), [box]: { ...cur, steps, status } };
         });
         if (step) pulseLed(`${box}/${step}`, e.event);
       }
@@ -1233,10 +1365,27 @@ export default function ChatAudit() {
                   {phase === 'done' ? 'Adjust inputs & re-run:' : 'Start an audit — fill in and submit:'}
                 </div>
                 {standardInputs()}
-                <button className="preset-btn primary" onClick={startAudit} disabled={busy || !imageUri.trim()} style={{ alignSelf: 'flex-start' }}>
-                  <Satellite size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                  {busy ? 'Running…' : (phase === 'done' ? 'Re-run audit' : 'Submit — run audit')}
-                </button>
+                {(() => {
+                  // vendor_clearance + deal_pricing need these — submitting blank dead-ends the
+                  // run at input_required. Block it and say what's missing (a scenario fills all).
+                  const missing = [
+                    !imageUri.trim() && 'image', !character && 'character',
+                    !vendor && 'vendor', !productCategory && 'product category',
+                  ].filter(Boolean);
+                  return (
+                    <>
+                      <button className="preset-btn primary" onClick={startAudit} disabled={busy || missing.length > 0} style={{ alignSelf: 'flex-start' }}>
+                        <Satellite size={13} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                        {busy ? 'Running…' : (phase === 'done' ? 'Re-run audit' : 'Submit — run audit')}
+                      </button>
+                      {!busy && missing.length > 0 && (
+                        <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+                          Pick a scenario above, or fill: {missing.join(', ')}.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 {phase === 'done' && graph && Object.entries(graph).some(([id, n]) => id !== 'orchestrator' && ESCALATABLE.has(n.status)) && (
                   <div style={{ marginTop: '0.4rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--glass-border)', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                     <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
@@ -1265,7 +1414,7 @@ export default function ChatAudit() {
         <Share2 size={14} style={{ color: 'var(--accent-purple)' }} /> Workflow graph
       </h3>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
-        <WorkflowGraph graph={graph} components={components} mcpTools={mcpTools} toolLights={toolLights} />
+        <WorkflowGraph graph={graph} components={components} mcpTools={mcpTools} toolLights={toolLights} running={busy} />
       </div>
     </aside>
     </div>

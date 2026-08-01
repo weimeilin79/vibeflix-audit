@@ -204,7 +204,12 @@ services:
   # ---- App: frontend + FastAPI. A THIN CLIENT — it calls the orchestrator and the
   #      ui_renderer over A2A, and runs no agent workflow itself. ----
   app:
-    build: { context: ., dockerfile: deploy/Dockerfile.app }
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.app
+      # Local app resolves no engine URL, so it uses in-memory recall — skip the heavy
+      # google-cloud-aiplatform tree the `gcp` extra pulls. Cloud builds default WITH_GCP=1.
+      args: { WITH_GCP: "0" }
     ports: ["8000:8000"]
     environment:
       # The app no longer calls Gemini itself — the ui_renderer service does.

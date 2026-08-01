@@ -42,10 +42,18 @@ from google.adk.events.event import Event
 # (no-op when unset) — lets the Workflow graph show the mesh working in real time.
 from vibeflix_common.telemetry import instrument_node, set_run_id
 from vibeflix_common.models import gemini
-from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url
+from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url, is_engine_url
 
 # Load the orchestrator's Vertex AI / project configuration from its local .env.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+# A2A transport is POLL-BASED here (a2a_engine_send / direct_engine_agent). Native ADK
+# RemoteA2aAgent was evaluated as a replacement and rejected for request/response hops: Agent
+# Runtime engines only reliably return a completed long-running result via POLLING — their
+# blocking message:send times out to a 'working' task and their message:stream SSE forwards
+# only the opening 'submitted' event before the platform drops the connection. Native's client
+# does neither (it treats 'working' as a HITL pause). See eng-report/a2a-native-transport-findings.md
+# and memory engine-a2a-card-flag. VibeflixRemoteA2aAgent is retained for the HITL hop only.
 
 # Sourcing policy comes from the LIVE registry (Firestore `market_policy/sourcing_caps`,
 # same doc mcp_market reads) — the hardcoded values are only the offline fallback, so
@@ -89,7 +97,9 @@ def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
     if not run_local():
         # CLOUD: call the target engine's A2A endpoint DIRECTLY (registry
         # resolution 403s from a gateway-attached engine). base is the engine
-        # resource URL from the env var.
+        # resource URL from the env var. Uses the POLL-based sender — native
+        # RemoteA2aAgent can't poll long-running engine tasks to completion
+        # (see the transport note above).
         from vibeflix_common.a2a_engine import direct_engine_agent
         return direct_engine_agent(name, description, base)
     # LOCAL: direct A2A to the compose service (unchanged).
@@ -742,10 +752,75 @@ async def _a2a_send(base_url: str, text: str, timeout: float = 420) -> str:
     return "".join(parts)
 
 
+# Memory Bank scope. MUST match the app's note_responder READ scope (agents/app.py:268,286 —
+# app_name="note_responder", user_id="note"), or load_memory can't recall what we write. The
+# engine's A2A session uses random per-run ids, so we pin an explicit shared scope here.
+_MEMORY_APP = "note_responder"
+_MEMORY_USER = "note"
+
+
+def _audit_memory_fact(ctx: Context, node_input: dict) -> str:
+    """One-line, human-readable summary of THIS audit for cross-audit recall."""
+    reports = node_input.get("reports") or {}
+    statuses = {k: str((v or {}).get("status", "")).lower() for k, v in reports.items()}
+    passed = bool(statuses) and all(s in _PASSING_STATUSES for s in statuses.values())
+    vendor = ctx.state.get("vendor") or "?"
+    character = ctx.state.get("character_id") or ctx.state.get("character") or "?"
+    category = ctx.state.get("product_category") or "?"
+    territory = ctx.state.get("target_market") or "?"
+    volume = ctx.state.get("volume") or 0
+    outcome = ("all workflows passed" if passed
+               else "flagged (" + ", ".join(f"{k}={s or 'n/a'}" for k, s in statuses.items()) + ")")
+    terms = []
+    if ctx.state.get("agreed_royalty_rate"):
+        terms.append(f"royalty {ctx.state.get('agreed_royalty_rate')}")
+    if ctx.state.get("agreed_advance"):
+        terms.append(f"advance {ctx.state.get('agreed_advance')}")
+    if ctx.state.get("agreed_mg"):
+        terms.append(f"MG {ctx.state.get('agreed_mg')}")
+    fact = (f"Licensing audit — vendor {vendor}, character {character}, {category}, "
+            f"{territory}, {volume} units: {outcome}.")
+    if terms:
+        fact += " Terms: " + "; ".join(terms) + "."
+    return fact
+
+
+async def _remember_audit(ctx: Context, node_input: dict) -> None:
+    """Best-effort: write ONE explicit, curated memory for this audit to the orchestrator's
+    Memory Bank — engine-side, where the durable Vertex session lives (the app can't; over A2A
+    it only holds the reply text). Uses add_memory (memories.create, deterministic) under the
+    fixed note_responder scope so the console's load_memory can recall it. Auto-extraction was a
+    dead end here — it distils nothing from structured audit JSON. Never raises: a memory failure
+    must not fail the audit."""
+    try:
+        ic = ctx.get_invocation_context()
+        ms = getattr(ic, "memory_service", None)
+        if ms is None or type(ms).__name__ != "VertexAiMemoryBankService":
+            return  # local / InMemory runs — nothing to persist to
+        # IDEMPOTENT under resume: contract_finalize is rerun_on_resume, so a resumed invocation
+        # would re-enter here — write the audit memory AT MOST ONCE per invocation.
+        if ctx.state.get("audit_remembered"):
+            return
+        from google.adk.memory.memory_entry import MemoryEntry
+        fact = _audit_memory_fact(ctx, node_input)
+        await ms.add_memory(
+            app_name=_MEMORY_APP,
+            user_id=_MEMORY_USER,
+            memories=[MemoryEntry(
+                content=types.Content(role="model", parts=[types.Part.from_text(text=fact)]))],
+        )
+        ctx.state["audit_remembered"] = True
+        print(f"[memory] audit → orchestrator Memory Bank "
+              f"(scope={_MEMORY_APP}/{_MEMORY_USER}): {fact[:140]}", flush=True)
+    except Exception as e:  # noqa: BLE001 — memory is best-effort, never fail the audit
+        print(f"[memory] write skipped (non-fatal): {type(e).__name__}: {e}", flush=True)
+
+
 @node(name="contract_finalize", rerun_on_resume=True)
 @instrument_node("orchestrator")
 async def contract_finalize(ctx: Context, node_input):
     """Ensure a fully-passed audit ends with an executed contract (see block comment)."""
+    await _remember_audit(ctx, node_input)   # engine-side curated write to Memory Bank
     result = dict(node_input)
     reports = result.get("reports") or {}
     sourcing = result.get("sourcing") or {}
@@ -781,8 +856,20 @@ async def contract_finalize(ctx: Context, node_input):
     )
     print(f"[orchestrator] contract_finalize: delegating to vendor_clearance "
           f"({vendor} × {character} × {category} × {territory})", flush=True)
+    _vc_url = os.environ.get("VENDOR_CLEARANCE_A2A_URL", "")
     try:
-        raw = await _a2a_send(os.environ.get("VENDOR_CLEARANCE_A2A_URL", ""), brief)
+        # Engine→engine one-shot. The proven POLL-based engine sender (dual Authorization +
+        # Proxy-Authorization, token refresh, task poll — same path the app uses to reach the
+        # orchestrator). Native RemoteA2aAgent was evaluated here and rejected: this finalize is
+        # LONG-RUNNING (vendor_clearance → legal → execute contract), and native can't poll it to
+        # completion — it returns a 'pending' task and no contract executes (see the transport
+        # note at the top of this file). The generic _a2a_send 400s on the engine's mTLS card
+        # fetch; it's only correct for local serve_a2a URLs.
+        if is_engine_url(_vc_url):
+            from vibeflix_common.a2a_engine import a2a_engine_send
+            raw = await a2a_engine_send(_vc_url, brief)
+        else:
+            raw = await _a2a_send(_vc_url, brief)
     except Exception as e:
         print(f"[orchestrator] contract_finalize: call failed: {type(e).__name__}: {e}", flush=True)
         raw = ""

@@ -810,15 +810,6 @@ You've built four specialist agents. The **orchestrator** is the coordinator tha
 > calls it over A2A exactly like any other agent — which is what makes the whole mesh uniformly
 > governable later.
 
-### 💡 Concept — the ADK graph: nodes and edges
-
-An ADK **Workflow** is a **directed graph**. You describe *what* happens and *in what order* with two primitives:
-
-- a **node** — one unit of work: a function, or "run this agent";
-- an **edge** — "after this node, go to that node."
-
-You don't write control flow by hand; you declare the edges and ADK walks the graph, carrying shared **state** from node to node.
-
 ### 📝 The orchestrator's graph
 
 Open `agents/orchestrator/agent.py` and find the `Workflow` at the bottom:
@@ -977,6 +968,26 @@ A session is your **working notes** for the case on your desk; the Memory Bank i
 - **Memory write** — `agents/orchestrator/agent.py` → `contract_finalize` calls `_remember_audit(...)`, which builds the one-line fact and calls `add_memory(...)` under the pinned scope.
 - **Memory read** — the same file's `note_responder` agent lists the `load_memory` tool; the app runs it whenever you type in the console's chat box.
 
+### 💡 Concept — resuming a run after a crash
+
+A full audit is a long, multi-step run — fan out to three agents, merge, self-heal, compile the UI, then execute the contract — that can take a few minutes. Agent Runtime runs each engine as several replicas, and a replica can be recycled mid-run (a deploy, an autoscale event). Starting the whole audit over from the top every time that happens would be wasteful.
+
+ADK's answer is **resumability**, turned on with one flag on the `App`:
+
+```python
+# deploy/deploy_agents_a2a.py — build_runner(), orchestrator only
+app = App(name=name, root_agent=mod.root_agent,
+          resumability_config=ResumabilityConfig(is_resumable=True))
+```
+
+With it on, a **re-invoked** invocation picks up where it stopped: ADK **replays the nodes that already finished from their cached output** and re-runs only the ones still pending. This works because each engine's session is durable (`VertexAiSessionService`), so the run's events survive the replica dying — the session gives you the material to replay from.
+
+Two things keep it correct:
+- **`@node(..., rerun_on_resume=True)`** marks which nodes re-execute on a resume; the others replay from cache.
+- A node that re-runs runs **again**, so it must be **idempotent** — resume is at-least-once. That's why `contract_finalize`'s Memory Bank write is guarded to fire once (`ctx.state["audit_remembered"]`) and the licensing contract is an **upsert** keyed by contract id.
+
+One honest boundary worth knowing: the flag makes a run *able* to resume — it doesn't, by itself, *trigger* a resume. Something has to re-invoke the orchestrator with the **same invocation id** for ADK to pick it up (verified: re-invoking with a matching id replays the finished nodes rather than restarting). Fully-automatic crash recovery — detecting an orphaned run and re-invoking it — is extra wiring on top. (Separately, the HITL "resume" the console does today is a *re-submit* that re-runs the workflow incrementally with the answer, not an in-graph pause.)
+
 ### 💻 Deploy the orchestrator
 
 Deploy it last of the agents — it auto-discovers the three specialists' A2A URLs from
@@ -1006,6 +1017,7 @@ It confirms the orchestrator engine is deployed with an agent identity. The end-
 - An edge to a **tuple** is a **fan-out** (parallel); a **`JoinNode`** waits for all branches.
 - Fan-out over A2A needs a **shared task store** (here, Firestore-backed) or replica load-balancing 404s most of your polls.
 - A **session** (`VertexAiSessionService`) is the memory of **one run** — it powers HITL resume and crash survival; a **Memory Bank** (`VertexAiMemoryBankService`, orchestrator-only) is the memory **across runs** — written once by `contract_finalize`, read by `note_responder`'s `load_memory`.
+- **Resumability** (`ResumabilityConfig(is_resumable=True)`) lets a re-invoked run replay finished nodes from cache and re-run the pending ones instead of restarting — which is why `rerun_on_resume` nodes must be **idempotent**.
 
 ## UI Renderer, A2UI, and the Frontend
 

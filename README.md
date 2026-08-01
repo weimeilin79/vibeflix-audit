@@ -190,7 +190,7 @@ overridden from Firestore when `FIRESTORE_DATABASE` is set.
 | **Brand allowlist / printed media / approved asset sources** | `mcp_brand_style` | canned defaults, Firestore-overridable (`brand_style_registry`) | via Firestore | brand-compliance reference lists |
 | **Sourcing caps** | `mcp_market` | canned default, Firestore-overridable (`market_policy/sourcing_caps`) | via Firestore | primary-vendor volume ceiling (25,000) |
 | **Marketplace scan / audit map** | `mcp_market` | simulated | — | e-com leak scan, telemetry log |
-| **Audit results** | app | Vertex Agent Engine / Firestore when `AGENT_ENGINE_ID` set, else none | ✅ | persisted audit runs |
+| **Audit results** | app | Firestore `audit_history` (always); cross-audit recall in the **orchestrator's** Memory Bank (auto, via `ORCHESTRATOR_A2A_URL`) | ✅ | persisted audit runs |
 
 > **In-memory caveat:** `mcp_licensing`'s stores are per-process, single-instance, and
 > reset on restart — deliberately, so create/update are trivial for the demo. Behind the

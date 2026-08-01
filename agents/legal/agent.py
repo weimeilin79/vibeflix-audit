@@ -23,6 +23,10 @@ from google.adk.tools import skill_toolset
 
 from vibeflix_common.mcp_clients import mcp_toolset
 from vibeflix_common.models import gemini
+# Live mesh telemetry: emit a step per tool call so the console's Workflow graph shows what
+# legal actually DOES (RAG doc search, amendment drafting, cert/customs/royalty/insurance
+# checks, contract upsert) as lit rows in its box. No-op when PUBSUB_TOPIC is unset.
+from vibeflix_common.telemetry import emit_event
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -91,6 +95,25 @@ def request_insurance_rider(vendor_id: str, category: str) -> dict:
             "rider_id": _ref("RIDER"), "coverage_usd": 5_000_000, "status": "granted"}
 
 
+def _tool_started(tool, args, tool_context):
+    """before_tool_callback → one 'started' step keyed by the tool name (lights a row in
+    legal's box). Returning None lets the tool run normally."""
+    try:
+        emit_event("legal", "started", node=getattr(tool, "name", "") or "tool")
+    except Exception:  # noqa: BLE001 — telemetry is best-effort, never block a tool call
+        pass
+    return None
+
+
+def _tool_completed(tool, args, tool_context, tool_response):
+    """after_tool_callback → 'completed' for the same step."""
+    try:
+        emit_event("legal", "completed", node=getattr(tool, "name", "") or "tool")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 legal_agent = LlmAgent(
     name="legal_clearance_agent",
     model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
@@ -126,6 +149,8 @@ legal_agent = LlmAgent(
             ],
         ),
     ],
+    before_tool_callback=_tool_started,
+    after_tool_callback=_tool_completed,
 )
 
 root_agent = legal_agent

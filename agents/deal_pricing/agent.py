@@ -126,30 +126,39 @@ async def evaluate(ctx: Context, node_input):
     await ctx.run_node(pricing_reasoner, node_input)
     report = _parse(_latest_text(ctx, "pricing_reasoner")) or {"status": "flagged", "components": []}
     report["agent"] = "deal_pricing_agent"
+    ctx.state["reconcile_round"] = 0   # fresh reconcile loop; reconcile bumps this each round
     yield Event(output=report)
 
 
 @node(name="reconcile", rerun_on_resume=True)
 @instrument_node("deal_pricing")
 async def reconcile(ctx: Context, node_input):
-    """LOOP: adjudicate UNRESOLVED components until none remain (or MAX_ROUNDS), then rule."""
+    """ONE reconciliation round, then a REAL cyclic edge. Adjudicate the currently-UNRESOLVED
+    components via the pricing_resolver; if any remain and we're under the cap, take the
+    self-cycle back to reconcile (`ctx.route = "loop"`), otherwise rule the verdict and route
+    `"done"` -> finalize. Bounded by MAX_ROUNDS: Workflow cycles have no built-in cap, so we
+    count rounds in ctx.state — the intended pattern (the graph builder REQUIRES the cycle to
+    be conditional; an unconditional one is rejected)."""
     report = node_input if isinstance(node_input, dict) else {}
     card = report.get("rate_card", {})
     deal = {k: report.get(k) for k in ("expected", "agreed")}
-    for _ in range(MAX_ROUNDS):
-        unresolved = [c for c in report.get("components", []) if c.get("status") == "unresolved"]
-        if not unresolved:
-            break
-        for c in unresolved:
-            await ctx.run_node(resolver, json.dumps({"discrepancy": c, "rate_card": card, "deal": deal}))
-            r = _parse(_latest_text(ctx, "pricing_resolver"))
-            if r.get("resolved"):
-                c["status"] = "clear"
-            else:
-                c["status"] = "discrepancy"
-            c["note"] = r.get("explanation", "")
-            if r.get("corrected_expected") is not None:
-                c["expected"] = r["corrected_expected"]
+
+    round_n = int(ctx.state.get("reconcile_round", 0)) + 1
+    ctx.state["reconcile_round"] = round_n
+
+    for c in [c for c in report.get("components", []) if c.get("status") == "unresolved"]:
+        await ctx.run_node(resolver, json.dumps({"discrepancy": c, "rate_card": card, "deal": deal}))
+        r = _parse(_latest_text(ctx, "pricing_resolver"))
+        c["status"] = "clear" if r.get("resolved") else "discrepancy"
+        c["note"] = r.get("explanation", "")
+        if r.get("corrected_expected") is not None:
+            c["expected"] = r["corrected_expected"]
+
+    still_unresolved = any(c.get("status") == "unresolved" for c in report.get("components", []))
+    if still_unresolved and round_n < MAX_ROUNDS:
+        ctx.route = "loop"          # ← the cycle: run reconcile again on the same report
+        yield Event(output=report)
+        return
 
     comps = report.get("components", [])
     if any(c.get("status") == "discrepancy" and c.get("below_floor") for c in comps):
@@ -158,6 +167,7 @@ async def reconcile(ctx: Context, node_input):
         report["verdict"], report["status"] = "NEEDS_ADJUSTMENT", "flagged"
     else:
         report["verdict"], report["status"] = "APPROVED", "cleared"
+    ctx.route = "done"
     yield Event(output=report)
 
 
@@ -183,6 +193,8 @@ root_agent = Workflow(
     edges=[
         ("START", evaluate),
         (evaluate, reconcile),
-        (reconcile, finalize),
+        # Real cyclic edge: reconcile routes "loop" back to ITSELF (another round) or "done"
+        # -> finalize. The self-cycle is why this is a genuine loop, not a plain for-loop.
+        (reconcile, {"loop": reconcile, "done": finalize}),
     ],
 )

@@ -20,11 +20,20 @@ FROM python:3.12-slim AS app
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=5 \
     PORT=8000 \
     FRONTEND_DIST=/app/frontend/dist
 
 COPY agents/requirements.txt agents/requirements.txt
 RUN pip install --pre -r agents/requirements.txt
+
+# The APP (Cloud Run) needs `vertexai` for note_responder's Memory Bank read. The agents
+# get vertexai from the Agent Runtime env, so it's NOT in the shared agents/requirements.txt.
+# Default ON so cloud builds always have it; local compose sets WITH_GCP=0 to skip the heavy
+# google-cloud-aiplatform download (the app falls back to in-memory recall locally anyway).
+ARG WITH_GCP=1
+RUN if [ "$WITH_GCP" != "0" ]; then pip install --pre "google-adk[gcp]==2.3.0"; fi
 
 # Shared package (modules only; deps came from requirements above).
 COPY packages/vibeflix-common ./vibeflix-common

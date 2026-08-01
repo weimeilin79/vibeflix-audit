@@ -21,8 +21,24 @@ from pydantic import BaseModel, Field
 from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
 from vibeflix_common.models import gemini
+# Live mesh telemetry: emit agent-level started/completed so the console's Workflow graph
+# shows the UI-render agent as its own box — lit when the app calls it, terminal when it
+# finishes. No-op when PUBSUB_TOPIC is unset (local/dev).
+from vibeflix_common.telemetry import emit_event
 
 _SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" / "render-a2ui")
+
+
+def _emit_render(event: str):
+    """ADK before/after_agent_callback → one agent-level mesh event (node defaults to the
+    source, so the console treats it as the box's own start/stop, not a sub-step)."""
+    def _cb(callback_context):
+        try:
+            emit_event("ui_renderer", event)
+        except Exception:  # noqa: BLE001 — telemetry is best-effort, never break rendering
+            pass
+        return None
+    return _cb
 
 
 class Line(BaseModel):
@@ -68,6 +84,8 @@ presenter_agent = LlmAgent(
     instruction=_SKILL.instructions,
     output_schema=Presentation,
     output_key="presentation",
+    before_agent_callback=_emit_render("started"),
+    after_agent_callback=_emit_render("completed"),
 )
 
 # ADK entrypoint convention.
