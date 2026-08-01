@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Upload, Send, Shield, AlertTriangle, AlertCircle, CheckCircle,
+  Upload, Send, Shield, AlertTriangle,
   MapPin, Sliders, Play, RefreshCw, BarChart2, Terminal, Info,
   ArrowRight, GitBranch, Layers, Check, Database, RefreshCw as LoopIcon, HelpCircle, XCircle, MessagesSquare, Satellite
 } from 'lucide-react';
@@ -13,70 +13,10 @@ import DatabaseView from './DatabaseView';
 // http://localhost:8000) when running the frontend separately from the backend.
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-// ---------------------------------------------------------------------------
-// A2UI renderer
-// Walks the `a2ui_payload.canvas_layout` schema emitted by the Sourcing
-// Orchestrator's compile_ui node and paints matching React components. The
-// agent decides the layout; the frontend just renders whatever it is handed.
-// ---------------------------------------------------------------------------
-function A2UIField({ field }) {
-  const blocked = field.status === 'blocked';
-  const cleared = field.status === 'clear';
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: '1 1 180px' }}>
-      <label style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>
-        {field.id}
-      </label>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem',
-        padding: '0.5rem 0.75rem', borderRadius: '0.4rem', fontSize: '0.85rem', fontWeight: 600,
-        background: 'var(--bg-secondary)',
-        border: `1px solid ${blocked ? 'var(--color-danger)' : cleared ? 'var(--color-success)' : 'var(--glass-border)'}`,
-        color: blocked ? 'var(--color-danger)' : 'var(--text-main)'
-      }}>
-        <span>{typeof field.value === 'number' ? field.value.toLocaleString() : String(field.value)}</span>
-        {field.status && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}>
-            {blocked ? <><AlertCircle size={12} /> blocked</> : <><CheckCircle size={12} /> {field.status}</>}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function A2UIComponent({ component }) {
-  if (component.type === 'remediation_form') {
-    return (
-      <div className="canvas-panel" style={{ padding: '0.85rem' }}>
-        <h3 className="panel-title" style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-          <Sliders size={14} /> remediation_form
-        </h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          {(component.fields || []).map((f, i) => <A2UIField key={f.id || i} field={f} />)}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="canvas-panel" style={{ padding: '0.85rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-      Unsupported A2UI component: <code>{component.type}</code>
-    </div>
-  );
-}
-
-function A2UICanvas({ payload }) {
-  if (!payload || !payload.canvas_layout) return null;
-  const { container, components = [] } = payload.canvas_layout;
-  return (
-    <div data-container={container} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-        a2ui v{payload.a2ui_version} · container <code>{container}</code>
-      </div>
-      {components.map((c, i) => <A2UIComponent key={i} component={c} />)}
-    </div>
-  );
-}
+// NOTE: the live A2UI surface is rendered by @a2ui/react in ChatAudit.jsx, fed by the
+// backend's STREAMED A2UI messages (agents/a2ui_surface.py stream_*). The old hand-written
+// canvas renderer (A2UIField/A2UIComponent/A2UICanvas, which read a `canvas_layout` shape
+// nothing produces) was removed — it was dead code for a surface the live console never showed.
 
 export default function App() {
   // Navigation / Tabs
@@ -553,7 +493,7 @@ export default function App() {
     } else {
       setLiveResult(data);
       setLiveStatus('done');
-      addLog("Orchestrator", "Live backend audit returned a2ui_payload. Rendering agent-painted canvas.");
+      addLog("Orchestrator", "Live backend audit completed.");
     }
   };
 

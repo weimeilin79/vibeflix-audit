@@ -1,12 +1,14 @@
-"""Deterministic A2UI assembly (app-side): panels → a real A2UI v0.9 surface.
+"""Deterministic A2UI assembly (app-side): panels → streamed A2UI messages.
 
 The remote UI-Render agent (its own :8004 A2A service) turns the varied reports
-into `panels` ({title, status, headline, lines:[(text, resolve)]}); app.py calls
-it and then uses this module to assemble the `{root, components, data}` shape the
-official A2UI React renderer consumes — a flat list of catalog components
-(Column / Card / Text / Divider), Text with simple Markdown. `panels_fallback` is
-a rule-based summary used when the presenter agent is unreachable, so the UI keeps
-working even if that instance is down.
+into `panels` ({title, status, headline, lines:[(text, resolve)]}); app.py streams
+those to the browser as incremental A2UI messages that the official `@a2ui/react`
+renderer patches into the surface live. The wire uses the legacy message names
+`surfaceUpdate` / `beginRendering` (A2UI v0.8; still accepted by @a2ui/react — the
+protocol's current release renamed them to updateComponents / createSurface). The
+messages carry a flat list of catalog components (Column / Card / Text / Divider),
+Text with simple Markdown. `panels_fallback` is a rule-based summary used when the
+presenter agent is unreachable, so the UI keeps working even if that instance is down.
 """
 
 
@@ -31,42 +33,6 @@ def report_line(sourcing: dict) -> str:
     if st == "needs_choice":
         return "🧾 **Report:** awaiting a production-volume sourcing decision."
     return f"🧾 **Report:** {st or 'pending'}."
-
-
-def build_surface(panels, sourcing, market, volume) -> dict:
-    """Assemble an A2UI v0.9 static surface from panels + the sourcing outcome."""
-    comps = []
-
-    def add(cid, comp):
-        comps.append({"id": cid, "component": comp})
-        return cid
-
-    def text(cid, s, hint=None):
-        node = {"text": {"literalString": s}}
-        if hint:
-            node["usageHint"] = hint
-        return add(cid, {"Text": node})
-
-    n = len(panels)
-    root_kids = [text("hdr", f"**Orchestrator dispatched {n} compliance workflow{'s' if n != 1 else ''}** — market: {market} · volume: {_fmt(volume)} units", "h4")]
-
-    for idx, p in enumerate(panels):
-        col_kids = [
-            text(f"t{idx}", f"{p['title']} — **{str(p['status']).upper()}**", "h5"),
-            text(f"h{idx}", p["headline"]),
-        ]
-        for j, (line, resolve) in enumerate(p.get("lines", [])):
-            col_kids.append(text(f"l{idx}_{j}", line))
-            if resolve:
-                col_kids.append(text(f"r{idx}_{j}", f"↳ *how to resolve:* {resolve}", "caption"))
-        add(f"col{idx}", {"Column": {"children": {"explicitList": col_kids}}})
-        root_kids.append(add(f"card{idx}", {"Card": {"child": f"col{idx}"}}))
-
-    root_kids.append(add("div", {"Divider": {"axis": "horizontal"}}))
-    root_kids.append(text("srce", report_line(sourcing)))
-
-    add("root", {"Column": {"children": {"explicitList": root_kids}}})
-    return {"a2ui_version": "0.9", "root": "root", "components": comps, "data": {}}
 
 
 # Emoji hints for inferring a title from a workflow name (best-effort, generic).

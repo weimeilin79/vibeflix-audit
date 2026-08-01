@@ -36,7 +36,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_K
 
 from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of, note_responder
 from agents.a2ui_surface import (
-    build_surface, panels_fallback, stream_initial, stream_panel, stream_report_line,
+    panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
 from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
@@ -390,21 +390,6 @@ async def _design_fields(tokens: list, prompts: list, aggregate: dict, request: 
     return {"prompt": data.get("prompt") or " ".join(prompts), "fields": fields}
 
 
-async def _render_surface(aggregate: dict, market, volume) -> dict:
-    """Turn the aggregate into an A2UI surface: presenter agent → panels →
-    build_surface. Generic — renders EVERY `*_report` in the aggregate, so adding a
-    new workflow needs no change here. Falls back to a rule-based summary on error."""
-    reports = {k: v for k, v in aggregate.items() if k.endswith("_report") and isinstance(v, dict)}
-    try:
-        panels = await _present(reports)
-        if not panels:
-            raise ValueError("presenter returned no panels")
-    except Exception as e:
-        print(f"[app] a2ui presenter failed ({type(e).__name__}: {e}); using rule-based fallback", flush=True)
-        panels = panels_fallback(reports)
-    return build_surface(panels, aggregate.get("sourcing") or {}, market, volume)
-
-
 async def _persist_audit(user_id: str, session_id: str, result: dict) -> None:
     """Best-effort: store the finished audit report as an artifact.
 
@@ -591,11 +576,6 @@ async def _collect_or_complete(request: dict, token: str | None = None) -> dict:
     """Run the audit; if it needs input, register the session and return the fields;
     otherwise persist and return the completed aggregate."""
     user_id, sid, aggregate = await _run_once(request)
-    # Paint the A2UI surface via the UI-Render agent (decoupled from the
-    # orchestrator, which self-heals failed workflows and returns raw reports).
-    aggregate["a2ui_payload"] = await _render_surface(
-        aggregate, request.get("target_market", "North America"), request.get("volume", 0)
-    )
     pending = await _pending_input(aggregate, request)
     if pending is not None:
         tok = token or uuid.uuid4().hex[:12]
@@ -1189,10 +1169,6 @@ async def _stream_audit(request: dict):
         yield _sse({"event": "input_required", "run_token": token,
                     "prompt": pending["prompt"], "fields": pending["fields"]})
     else:
-        aggregate["a2ui_payload"] = build_surface(
-            panels_fallback(aggregate.get("reports") or {}),
-            aggregate.get("sourcing") or {}, market, volume,
-        )
         # Record the completed run in this ORDER's history entry (upsert — a re-submit
         # replaces the previous state); when EVERYTHING passed, close the run with the
         # final clearance report + the executed contract.

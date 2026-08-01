@@ -595,10 +595,12 @@ Presentation is decoupled from the orchestrator. The **ui_renderer** agent (:800
 its own A2A service) turns the raw reports into user-friendly *panels* via a
 versioned skill (`skills/render-a2ui/`, `output_schema`, no tools → reliable native
 structured output); `agents/a2ui_surface.py` deterministically assembles those into
-a real **A2UI v0.9 surface** (`Column`/`Card`/`Text`/`Divider`), rendered by the
-official **`@a2ui/react`** renderer. It's **generic** — one panel per `*_report`, so
-adding a workflow needs no render change. If ui_renderer is unreachable, a rule-based
-fallback keeps the UI working.
+**streamed A2UI messages** (`Column`/`Card`/`Text`/`Divider`) that the official
+**`@a2ui/react`** renderer patches into the surface live. (The wire uses the legacy
+`surfaceUpdate`/`beginRendering` message names — A2UI v0.8, still accepted by the
+renderer; the protocol's current release renamed them to `updateComponents`/`createSurface`.)
+It's **generic** — one panel per `*_report`, so adding a workflow needs no render
+change. If ui_renderer is unreachable, a rule-based fallback keeps the UI working.
 
 #### How A2UI is used — three layers
 
