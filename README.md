@@ -591,45 +591,54 @@ executed contract, exportable as PDF.
 
 ### 🎨 A2UI rendering & streaming
 
-Presentation is decoupled from the orchestrator. The **ui_renderer** agent (:8004,
-its own A2A service) turns the raw reports into user-friendly *panels* via a
-versioned skill (`skills/render-a2ui/`, `output_schema`, no tools → reliable native
-structured output); `agents/a2ui_surface.py` deterministically assembles those into
-**streamed A2UI messages** (`Column`/`Card`/`Text`/`Divider`) that the official
-**`@a2ui/react`** renderer patches into the surface live. (The wire uses the legacy
-`surfaceUpdate`/`beginRendering` message names — A2UI v0.8, still accepted by the
-renderer; the protocol's current release renamed them to `updateComponents`/`createSurface`.)
-It's **generic** — one panel per `*_report`, so adding a workflow needs no render
-change. If ui_renderer is unreachable, a rule-based fallback keeps the UI working.
+> Full write-up: **[A2UI.md](A2UI.md)** — the flow end to end, the wire format, the SDK's role,
+> the healing/validation rules, and the safety net.
+
+Presentation is decoupled from the orchestrator. The **ui_renderer** agent (:8004, its own
+A2A service) **emits the A2UI itself** — a versioned skill (`skills/render-a2ui/`) says what
+to build, and the official **`a2ui-agent-sdk`** supplies the contract it must build within;
+`agents/a2ui_surface.py` slots each rendered panel into the console surface and streams it,
+and the official **`@a2ui/react`** renderer patches it in live. (The wire uses the
+`surfaceUpdate`/`beginRendering` message names — A2UI v0.8, what the renderer speaks; the
+protocol's current release renamed them to `updateComponents`/`createSurface`.) It's
+**generic** — one panel per `*_report`, so adding a workflow needs no render change. If
+ui_renderer is unreachable *or its A2UI fails validation*, a rule-based fallback
+(`panels_fallback`) keeps the UI working.
 
 #### How A2UI is used — three layers
 
-A2UI is a **wire protocol** with an official **client-side** renderer. The mesh uses the
-library where it exists and hand-builds the protocol where it doesn't:
+A2UI ships an official client renderer AND an official Python agent SDK; the mesh uses both,
+and hand-writes only what is genuinely ours (the surface scaffold and the panel layout).
 
 ```
-ui_renderer (LLM, :8004)  ──A2A──►  Presentation { panels }         # CONTENT only (title/status/lines)
+ui_renderer (LLM, :8004)  ──A2A──►  <a2ui-json> surfaceUpdate {components} # the AGENT emits A2UI
                                           │
-app.py ──► agents/a2ui_surface.py ──► A2UI { root, components, data} # PROTOCOL JSON (Column/Card/Text/Divider)
-                                          │  surfaceUpdate / beginRendering  (SSE)
-browser ──► @a2ui/react + @a2ui/web_core ──► rendered panels         # the official A2UI RENDERER
+app.py ─► vibeflix_common/a2ui_format.py ─► heal + VALIDATE (a2ui-agent-sdk)  # spec-checked
+       └► agents/a2ui_surface.py         ─► slot into card{i} + stream (SSE)  # ids namespaced
+                                          │
+browser ──► @a2ui/react + @a2ui/web_core ──► rendered panels                  # official RENDERER
 ```
 
+- **Agent (`ui_renderer`) — emits A2UI.** Its instruction is *generated* by
+  `a2ui-agent-sdk` from the spec assets: the response rules, the `<a2ui-json>` block
+  contract, and the real component/message JSON schema (pruned to
+  `Text`/`Card`/`Column`/`Divider`). We supply only the role + the layout procedure. No
+  `output_schema`: A2UI blocks are a text format, and the model is given the schema in the
+  prompt instead.
+- **Server (app) — validates, does not author.** `vibeflix_common/a2ui_format.py` wraps the
+  SDK: unwrap the blocks, heal damaged JSON, and validate against the spec (unknown
+  components, bad `usageHint`, dangling id references all rejected → fallback).
+  `agents/a2ui_surface.py` then owns only what is the app's business: the surface scaffold
+  (header, pending card slots, divider, final-report slot), namespacing a panel's ids into
+  its slot, and the deterministic closing/final report cards.
 - **Client (frontend) — uses A2UI's library.** `@a2ui/react` + `@a2ui/web_core`
   (`A2UIProvider` / `A2UIRenderer` / `useA2UI().processMessages`) render the surfaces.
-  This is where A2UI's published library actually lives — it's a *client renderer*.
-- **Server (app) — no Python A2UI library exists**, so `agents/a2ui_surface.py` emits the
-  A2UI wire format directly as plain dicts (`{root, components, data}` +
-  `surfaceUpdate`/`beginRendering`). It's imported by **`app.py` only** — the app-side
-  A2UI serializer.
-- **Agent (`ui_renderer`) — deliberately does NOT emit A2UI.** It returns a tiny
-  `Presentation` schema (panels) via `output_schema`; `a2ui_surface` deterministically
-  maps that → A2UI. **Why:** having an LLM generate the full nested, id-referenced A2UI
-  tree is exactly the kind of large structured output that triggers Gemini's
-  `set_model_response` "malformed function call" — a small schema is reliable, and the
-  protocol/layout is owned by deterministic code. So the name is really *presenter*: the
-  model decides **what to say**, `a2ui_surface` decides the **A2UI shape**, `@a2ui/react`
-  **renders** it.
+
+*Previously* the agent returned a small `Presentation` schema (title/status/lines) and
+`a2ui_surface` built the A2UI — the concern being that a large id-referenced structured
+output would trigger Gemini's `set_model_response` "malformed function call". Emitting A2UI
+as *text* under the SDK's prompt sidesteps that failure mode entirely, and validation +
+`panels_fallback` cover the rest: the model now decides the **layout**, not just the words.
 
 Two paths:
 - **`POST /api/audit`** — runs the graph once (the orchestrator's `recovery` node

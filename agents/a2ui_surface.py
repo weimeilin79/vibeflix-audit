@@ -1,15 +1,25 @@
-"""Deterministic A2UI assembly (app-side): panels → streamed A2UI messages.
+"""Deterministic A2UI assembly (app-side): the audit surface + panel slotting.
 
-The remote UI-Render agent (its own :8004 A2A service) turns the varied reports
-into `panels` ({title, status, headline, lines:[(text, resolve)]}); app.py streams
-those to the browser as incremental A2UI messages that the official `@a2ui/react`
-renderer patches into the surface live. The wire uses the legacy message names
-`surfaceUpdate` / `beginRendering` (A2UI v0.8; still accepted by @a2ui/react — the
-protocol's current release renamed them to updateComponents / createSurface). The
-messages carry a flat list of catalog components (Column / Card / Text / Divider),
-Text with simple Markdown. `panels_fallback` is a rule-based summary used when the
-presenter agent is unreachable, so the UI keeps working even if that instance is down.
+The remote UI-Render agent (its own :8004 A2A service) RENDERS the varied reports: it emits
+A2UI itself, which app.py validates against the spec (`vibeflix_common.a2ui_format`, backed by
+the official a2ui-agent-sdk) and hands here as `{root, components}`. This module owns only the
+parts that are the APP's business, not the agent's:
+
+  * the surface scaffold — header, one pending card slot per workflow, divider, the closing
+    report line, and the reserved `final` slot (`stream_initial`);
+  * slotting an agent panel into position i, namespacing its ids (`stream_panel`);
+  * the app's own deterministic content: the closing report line and the final clearance
+    report, which are assembled from mesh state, not from an LLM;
+  * `panels_fallback`, the rule-based summary used when the presenter agent is unreachable —
+    so the UI keeps working even if that instance is down.
+
+The wire uses the message names `surfaceUpdate` / `beginRendering` and `{"id", "component"}`
+components: A2UI v0.8, which is what `@a2ui/react@0.10` renders (the protocol's current
+release renamed them to updateComponents / createSurface). Everything streamed from here is
+incremental — the renderer patches components into the live surface by id.
 """
+
+from vibeflix_common.a2ui_format import rewrite_ids
 
 
 def _fmt(n) -> str:
@@ -107,20 +117,55 @@ def stream_initial(titles, market, volume, reused=0):
 
 
 def stream_panel(i, panel):
-    """surfaceUpdate that fills panel `i` (title, headline, lines) — patched by id."""
-    comps = [
-        _text_comp(f"t{i}", f"{panel['title']} — **{str(panel['status']).upper()}**", "h5"),
-        _text_comp(f"h{i}", panel["headline"]),
-    ]
-    col_kids = [f"t{i}", f"h{i}"]
-    for j, (line, resolve) in enumerate(panel.get("lines", [])):
-        comps.append(_text_comp(f"l{i}_{j}", line))
-        col_kids.append(f"l{i}_{j}")
-        if resolve:
-            comps.append(_text_comp(f"r{i}_{j}", f"↳ *how to resolve:* {resolve}", "caption"))
-            col_kids.append(f"r{i}_{j}")
-    comps.append({"id": f"col{i}", "component": {"Column": {"children": {"explicitList": col_kids}}}})
+    """surfaceUpdate that fills panel slot `i` with the AGENT-EMITTED A2UI.
+
+    `panel` is `{root, components}` — components already in WIRE form, straight from the
+    ui_renderer (parsed and validated against the spec by `vibeflix_common.a2ui_format`) or
+    from `panels_fallback`. The app does NOT build the layout; it only slots the panel into
+    position i: the panel takes the id `card{i}` (which the surface's root Column already
+    lists) and every other id is namespaced `p{i}_…` so panels can't collide on the generic
+    ids an LLM picks (`card`, `col`, `t1`). `rewrite_ids` remaps the component ids AND the
+    references between them, using the catalog to know which fields hold references.
+
+    The slot is always a **Card**, and exactly one deep — that's the surface's own layout
+    decision, made when `stream_initial` drew the pending placeholder. What arrives varies:
+    the panel may be rooted in its Card (take the slot id directly), in a Column wrapping that
+    Card (descend to it, drop the wrapper), or in a Column with no Card at all (wrap it). All
+    three then render identically to every other panel — no bare panel, no card-inside-a-card.
+    """
+    root = panel.get("root")
+    components = [c for c in (panel.get("components") or []) if isinstance(c, dict)]
+    slot = f"card{i}"
+    card, wrappers = _panel_card(root, {c.get("id"): c for c in components})
+
+    def nid(x):
+        return slot if (card and x and x == card) else f"p{i}_{x}"
+
+    comps = rewrite_ids([c for c in components if c.get("id") not in wrappers], nid)
+    if not card:
+        comps.append({"id": slot, "component": {"Card": {"child": nid(root)}}})
     return {"surfaceUpdate": {"surfaceId": _SURFACE, "components": comps}}
+
+
+def _panel_card(root, by_id):
+    """(the panel's own Card, the wrapper ids above it) — descending from `root`.
+
+    Returns `(None, set())` when the panel has no Card at its top, so the caller wraps it.
+    Only SINGLE-child Columns are descended through: a Column with several children is real
+    layout the agent chose, not a wrapper, and must be kept. `node not in wrappers` also makes
+    the descent cycle-proof — the SDK validator rejects recursive components, but the app's own
+    fallback panels never go through it."""
+    node, wrappers = root, set()
+    while node and node in by_id and node not in wrappers:
+        component = by_id[node].get("component") or {}
+        if "Card" in component:
+            return node, wrappers
+        children = ((component.get("Column") or {}).get("children") or {}).get("explicitList")
+        if not (isinstance(children, list) and len(children) == 1):
+            return None, set()
+        wrappers.add(node)
+        node = children[0]
+    return None, set()
 
 
 def stream_report_line(sourcing):
@@ -182,23 +227,36 @@ def stream_final_report(entry):
 
 
 def panels_fallback(reports: dict):
-    """Deterministic, REPORT-AGNOSTIC summary — used when the presenter LLM is
-    unavailable. Works for any set/shape of reports (findings / issues / message)."""
+    """Deterministic, REPORT-AGNOSTIC A2UI panels — the safety net when the presenter LLM is
+    unavailable. Emits the SAME `{root, components}` wire shape the agent does, so the app
+    slots it identically. Works for any set/shape of reports (findings / issues / message)."""
     out = []
     for key, report in (reports or {}).items():
         report = report or {}
         status = report.get("status", "unknown")
-        lines = []
+        comps = []
+
+        def text(cid, s, hint=None):
+            comps.append(_text_comp(cid, s, hint))
+            return cid
+
+        col_kids = [text("t", f"{_title_for(key, report)} — **{str(status).upper()}**", "h5")]
+        issues = []
         for item in (report.get("findings") or []) + (report.get("issues") or []):
             if not isinstance(item, dict):
                 continue
             desc = item.get("description") or item.get("issue_type") or item.get("word") or "Issue"
             icon = "⛔" if item.get("severity") == "critical" else "⚠️"
             sug = item.get("suggestions") or []
-            out_resolve = f"Try: {', '.join(sug)}" if sug else ""
-            lines.append((f"{icon} {desc}", out_resolve))
+            issues.append((f"{icon} {desc}", f"Try: {', '.join(sug)}" if sug else ""))
         headline = report.get("message") or report.get("question") or (
-            f"{len(lines)} issue(s) found." if lines else "No issues found."
-        )
-        out.append({"title": _title_for(key, report), "status": status, "headline": headline, "lines": lines})
+            f"{len(issues)} issue(s) found." if issues else "No issues found.")
+        col_kids.append(text("h", headline))
+        for j, (line, resolve) in enumerate(issues):
+            col_kids.append(text(f"l{j}", line))
+            if resolve:
+                col_kids.append(text(f"r{j}", f"↳ *how to resolve:* {resolve}", "caption"))
+        comps.append({"id": "col", "component": {"Column": {"children": {"explicitList": col_kids}}}})
+        comps.append({"id": "card", "component": {"Card": {"child": "col"}}})
+        out.append({"root": "card", "components": comps})
     return out

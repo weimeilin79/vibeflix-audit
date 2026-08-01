@@ -10,16 +10,21 @@ Design notes:
 - The rendering PROCEDURE lives in a versioned skill (skills/render-a2ui/SKILL.md),
   loaded here as the agent's instruction — consistent with the domain agents, but
   without a SkillToolset because the presenter needs NO tools.
-- No tools + `output_schema` → the model uses native structured output, which
-  avoids the `set_model_response` "malformed function call" flakiness we see on the
-  tool-using agents. If it ever does fail, app.py falls back to a rule-based summary.
+- The A2UI CONTRACT (catalog, message schema, response rules) is NOT ours: the official
+  `a2ui-agent-sdk` renders it into the instruction from the spec assets — see
+  vibeflix_common/a2ui_format.py. The skill says what to build; the SDK says what's legal.
+- No tools, so we avoid the `set_model_response` "malformed function call" flakiness the
+  tool-using agents hit. There is no `output_schema` either: the report task emits A2UI as
+  `<a2ui-json>` blocks (a text format — structured output would forbid it), so BOTH tasks
+  are plain text the app parses. If a response is unparseable or fails A2UI validation,
+  app.py falls back to a rule-based summary.
 """
 
 import pathlib
 
-from pydantic import BaseModel, Field
 from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
+from vibeflix_common.a2ui_format import render_instruction
 from vibeflix_common.models import gemini
 # Live mesh telemetry: emit agent-level started/completed so the console's Workflow graph
 # shows the UI-render agent as its own box — lit when the app calls it, terminal when it
@@ -41,48 +46,37 @@ def _emit_render(event: str):
     return _cb
 
 
-class Line(BaseModel):
-    text: str          # a clear explanation of one issue/finding (⛔ critical, ⚠️ warning)
-    resolve: str = ""  # a concrete "how to resolve" suggestion
+# The skill covers TWO tasks, and only the first one is A2UI. Split it so the SDK's A2UI
+# rules + schema wrap the RENDER task only: the form-design task must emit a plain JSON
+# object, and sitting it inside the A2UI contract invites the model to wrap that in
+# `<a2ui-json>` too. Headings are asserted, not assumed — an edit to SKILL.md that drops
+# one would otherwise silently ship a presenter with no layout procedure.
+_LAYOUT_HEADING = "## The layout"
+_FORM_HEADING = "# Design the input form"
 
 
-class Panel(BaseModel):
-    title: str         # workflow name incl. emoji, e.g. "🎨 Brand Style"
-    status: str        # the report's status, verbatim
-    headline: str      # one-sentence outcome summary
-    lines: list[Line] = Field(default_factory=list)
+def _sections(text: str) -> tuple[str, str, str]:
+    """SKILL.md → (who you are, the A2UI layout procedure, the form-design task)."""
+    for heading in (_LAYOUT_HEADING, _FORM_HEADING):
+        if heading not in text:
+            raise ValueError(f"render-a2ui SKILL.md is missing its '{heading}' section")
+    render, form = text.split(_FORM_HEADING, 1)
+    role, layout = render.split(_LAYOUT_HEADING, 1)
+    return role.strip(), (_LAYOUT_HEADING + layout).strip(), (_FORM_HEADING + form).strip()
 
 
-class Option(BaseModel):
-    value: str
-    label: str
+_ROLE, _LAYOUT, _FORM_TASK = _sections(_SKILL.instructions)
 
-
-class FieldSpec(BaseModel):
-    """One input control for the console's dynamic form (task: design_input_form)."""
-
-    name: str                # MUST equal the requested token verbatim (merged by name)
-    label: str               # human-friendly title for the control
-    type: str = "text"       # text | textarea | number | select
-    placeholder: str = ""    # hint text incl. expected format / required sub-fields
-    value: str = ""          # prefill, when a sensible value is already known
-    required: bool = True
-    options: list[Option] = Field(default_factory=list)   # for type=select
-
-
-class Presentation(BaseModel):
-    # Report-rendering task → panels; input-form design task → prompt + fields.
-    panels: list[Panel] = Field(default_factory=list)
-    prompt: str = ""
-    fields: list[FieldSpec] = Field(default_factory=list)
+# instruction = OUR procedure + THE SPEC's contract (response rules + component/message
+# schema, straight from the a2ui-agent-sdk assets), then the non-A2UI second task.
+INSTRUCTION = f"{render_instruction(role_description=_ROLE, ui_description=_LAYOUT)}\n\n{_FORM_TASK}"
 
 
 presenter_agent = LlmAgent(
     name="a2ui_presenter",
     model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
     description="Renders any set of compliance-workflow reports into A2UI panels.",
-    instruction=_SKILL.instructions,
-    output_schema=Presentation,
+    instruction=INSTRUCTION,
     output_key="presentation",
     before_agent_callback=_emit_render("started"),
     after_agent_callback=_emit_render("completed"),

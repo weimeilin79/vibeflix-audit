@@ -8,6 +8,9 @@ python-dotenv>=1.0.0
 mcp>=1.0,<2
 google-adk[a2a]==2.3.0
 google-genai>=1.0.0
+# The A2UI contract: this agent's instruction is GENERATED from the spec assets by the
+# official SDK (vibeflix_common/a2ui_format.py) — without it the agent cannot build.
+a2ui-agent-sdk>=0.5.0
 aiohttp>=3.9.0
 google-cloud-firestore>=2.16.0
 google-cloud-pubsub>=2.21.0

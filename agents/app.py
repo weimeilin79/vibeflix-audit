@@ -39,6 +39,7 @@ from agents.a2ui_surface import (
     panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
+from vibeflix_common.a2ui_format import parse_panel, text_of as a2ui_text
 from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
 from vibeflix_common.memory import (
     APP_NAME,
@@ -297,41 +298,63 @@ async def _respond_to_note(note: str, reports: dict) -> str | None:
         return None
 
 
-async def _run_presenter(payload: dict) -> dict | None:
-    """One UI-Render agent round-trip (over A2A) → its Presentation dict, or None
-    if it's unconfigured/unreachable or produced nothing parseable."""
+async def _run_presenter(payload: dict) -> str | None:
+    """One UI-Render agent round-trip (over A2A) → its RAW response text, or None if it's
+    unconfigured/unreachable or said nothing.
+
+    Raw, because the agent's two tasks answer in two formats: the render task emits A2UI in
+    `<a2ui-json>` blocks (parsed by `_present`), the form-design task a plain JSON object
+    (parsed by `_design_fields`). Neither is a schema-constrained response — see
+    agents/ui_renderer/agent.py for why there is no `output_schema`."""
     presenter_runner = _get_presenter_runner()
     if presenter_runner is None:
         return None
     user_id = "presenter"
     session = await presenter_runner.session_service.create_session(app_name=PRESENTER_APP, user_id=user_id)
-    data = None
+    out = ""
     async for event in presenter_runner.run_async(
         user_id=user_id, session_id=session.id, new_message=_content(json.dumps(payload))
     ):
         content = getattr(event, "content", None)
         parts = getattr(content, "parts", None) if content else None
-        text = "".join(getattr(p, "text", "") or "" for p in (parts or [])).strip()
-        if text:
-            try:
-                parsed = json.loads(text)
-                if isinstance(parsed, dict) and ("panels" in parsed or "fields" in parsed):
-                    data = parsed
-            except ValueError:
-                pass
-    return data
+        out += "".join(getattr(p, "text", "") or "" for p in (parts or []))
+    return out.strip() or None
+
+
+def _presented_json(text: str | None) -> dict | None:
+    """The form-design task's reply → dict. Plain JSON, tolerating a ```json fence."""
+    body = (text or "").strip()
+    if body.startswith("```"):
+        body = body.split("\n", 1)[-1].rsplit("```", 1)[0]
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 async def _present(reports: dict) -> list | None:
-    """Reports → user-friendly panels (None on failure → rule-based fallback)."""
-    data = await _run_presenter(reports)
-    if not data or not data.get("panels"):
+    """Reports → the AGENT-EMITTED A2UI panel(s), as `{root, components}` in wire form.
+    None on failure → caller uses the deterministic panels_fallback.
+
+    The agent decides the layout; the app only checks that what came back is legal A2UI.
+    `parse_panel` (a2ui-agent-sdk) does that against the real spec — unknown components, bad
+    `usageHint` values and dangling id references all raise, which is exactly the "malformed
+    LLM surface" case we want to fall back on rather than stream to the renderer."""
+    text = await _run_presenter(reports)
+    if not text:
         return None
-    return [
-        {"title": p["title"], "status": p["status"], "headline": p["headline"],
-         "lines": [(ln["text"], ln.get("resolve", "")) for ln in p.get("lines", [])]}
-        for p in data["panels"]
-    ]
+    try:
+        panel = parse_panel(text)
+    except Exception as e:
+        print(f"[app] presenter emitted invalid A2UI ({type(e).__name__}: {e}); fallback", flush=True)
+        return None
+    # A structurally-valid but CONTENT-EMPTY panel (every Text blank) renders as an invisible
+    # card — the LLM sometimes does this for a sparse report. The spec has no opinion on it, so
+    # reject it here and let panels_fallback show "<name> — <status>" instead.
+    if not panel or not any(a2ui_text(c).strip() for c in panel["components"]):
+        return None
+    return [panel]
 
 
 _FIELD_TYPES = {"text", "textarea", "number", "select"}
@@ -353,7 +376,7 @@ async def _design_fields(tokens: list, prompts: list, aggregate: dict, request: 
         "select_options": {"character": _TRADEMARK_OPTIONS} if _TRADEMARK_OPTIONS else {},
     }
     try:
-        data = await _run_presenter(payload)
+        data = _presented_json(await _run_presenter(payload))
     except Exception as e:
         print(f"[app] form designer failed ({type(e).__name__}: {e}); fallback specs", flush=True)
         return None
@@ -979,7 +1002,15 @@ async def _panel_for(name: str, report: dict) -> dict:
     except Exception as e:
         print(f"[app] stream presenter failed ({type(e).__name__}); fallback", flush=True)
     fb = panels_fallback({name: report})
-    return fb[0] if fb else {"title": title_from_name(name), "status": report.get("status", "?"), "headline": "—", "lines": []}
+    if fb:
+        return fb[0]
+    # last-resort minimal valid A2UI panel (wire form, same as everything else streamed)
+    title = f"{title_from_name(name)} — **{str(report.get('status', '?')).upper()}**"
+    return {"root": "card", "components": [
+        {"id": "card", "component": {"Card": {"child": "col"}}},
+        {"id": "col", "component": {"Column": {"children": {"explicitList": ["t"]}}}},
+        {"id": "t", "component": {"Text": {"text": {"literalString": title}, "usageHint": "h5"}}},
+    ]}
 
 
 def _legal_graph_event(author: str, report: dict) -> dict | None:
