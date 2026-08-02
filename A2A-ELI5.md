@@ -97,10 +97,31 @@ flowchart LR
   C --> G["🚫 Guard refuses"]
 ```
 
-So this isn't something we misconfigured, and it isn't something we *can* fix. **The building
-hands out an address its own guard has banned, and there's no setting to change it.**
+So this isn't something we misconfigured. **The building hands out an address its own guard has
+banned, and there's no setting to change it.** We looked for a switch. There isn't one.
 
 That's what we're reporting to Google.
+
+---
+
+## 🎉 But we found a way around it
+
+Here's the happy ending: **you don't have to use the card the robot hands you.**
+
+The ready-made toolkit will accept a card *you* write. So we wrote our own card, put the **side
+door** on it, and handed it to the toolkit instead.
+
+```mermaid
+flowchart LR
+  A["🏢 Building's card<br/>says FRONT door"] --> A2["📦 Toolkit follows it"] --> A3["🚫 refused"]
+  B["✍️ OUR card<br/>says SIDE door"] --> B2["📦 Same toolkit follows it"] --> B3["✅ works!"]
+```
+
+We tested both **in the real system, side by side, in the same minute**. The building's card got
+turned away. Ours got through and came back with a real answer.
+
+That means we *can* use the ready-made toolkit after all — we just have to write the address down
+ourselves first. About ten lines, instead of the several hundred in our own messenger.
 
 ---
 

@@ -78,6 +78,20 @@ def _secondary_addendum() -> str:
                              _ADDENDUM_FALLBACK, field="secondary_addendum_contract") or _ADDENDUM_FALLBACK)
 
 
+# Hops running on the NATIVE ADK client (VibeflixRemoteA2aAgent) instead of the poll-based
+# sender. Deliberately only the two FAST dispatch agents — measured 2026-08-02, in-engine:
+#   * a blocking send (which the native client uses) dies at ~180s with
+#     `400 FAILED_PRECONDITION` while the callee keeps working, so any hop that can run long
+#     (vendor_clearance → it fans into legal; contract_finalize; app → orchestrator) MUST stay
+#     on a2a_engine_send, which never makes a long request — it sends non-blocking and polls;
+#   * brand_style ~18s and deal_pricing ~9-20s clear well inside that window.
+# Native also needs VibeflixRemoteA2aAgent, not stock RemoteA2aAgent: stock builds its outgoing
+# message from ctx.session.events and never sees the brief passed to ctx.run_node (confirmed in
+# ADK source — run_node hands node_input to the scheduler, not to the session).
+# Empty this set to revert every hop to the poll sender.
+_NATIVE_A2A = {"brand_style_compliance_agent", "deal_pricing_agent"}
+
+
 def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
     base = os.environ.get(url_env)
     if not base:
@@ -86,6 +100,12 @@ def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
         )
     from vibeflix_common.cloud_auth import run_local
     if not run_local():
+        if name in _NATIVE_A2A:
+            # CLOUD + fast hop: the native ADK client, with our brief-override and the
+            # mtls repoint (the engine card advertises the plain host, which the gateway
+            # refuses). See vibeflix_common/remote_agent.py.
+            from vibeflix_common.remote_agent import VibeflixRemoteA2aAgent
+            return VibeflixRemoteA2aAgent(name=name, description=description, agent_card=base)
         # CLOUD: call the target engine's A2A endpoint DIRECTLY (registry
         # resolution 403s from a gateway-attached engine). base is the engine
         # resource URL from the env var. Uses the POLL-based sender — native
@@ -862,10 +882,19 @@ async def contract_finalize(ctx: Context, node_input):
                               "source": "finalize"}
         print(f"[orchestrator] contract_finalize: executed {lc.group(0)}", flush=True)
     else:
-        result["contract_error"] = "Contract finalization did not produce a contract id."
+        # Include what came BACK, not just that nothing matched. Measured 2026-08-02: audits
+        # finish "all workflows passed" with no contract while legal HAS executed one (six sat
+        # in the licensing registry), so the failure is vendor_clearance's reply omitting the
+        # id — not the contract failing to execute. Without the reply text in the error there is
+        # nothing to diagnose from: `contract_error` said only "did not produce a contract id",
+        # which is the one thing already obvious from the missing block in the report.
+        head = " ".join((raw or "").split())[:300] or "(empty reply)"
+        result["contract_error"] = (
+            "Contract finalization did not produce a contract id. "
+            f"vendor_clearance replied status={rep.get('status')!r}; reply head: {head}")
         print(f"[orchestrator] contract_finalize: NO contract (clearance status="
               f"{rep.get('status')!r} question={str(rep.get('question'))[:140]!r} "
-              f"needs={rep.get('needs')!r})", flush=True)
+              f"needs={rep.get('needs')!r}) reply_head={head!r}", flush=True)
     yield Event(output=result)
 
 

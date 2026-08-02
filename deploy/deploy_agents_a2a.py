@@ -311,9 +311,6 @@ AGENTS = {
     "orchestrator": {"env": ["MCP_LICENSING_URL", "BRAND_STYLE_A2A_URL",
                              "VENDOR_CLEARANCE_A2A_URL", "DEAL_PRICING_A2A_URL"],
                      "desc": "Sourcing orchestrator — dispatches the compliance workflows and finalizes contracts."},
-    # TEMPORARY — in-engine A2A transport probe. Remove with agents/a2a_probe/.
-    "a2a_probe": {"env": ["PROBE_TARGET"],
-                   "desc": "Temporary in-engine A2A transport probe."},
 }
 
 
@@ -393,13 +390,14 @@ def agent_card(name: str, desc: str):
     return AgentCard(
         name=f"vibeflix-{name.replace('_', '-')}",
         description=desc,
-        # ⚠️ NOT informational — a2a/client/transports/rest.py takes `self.url = agent_card.url`
-        # and appends `/v1/message:send`, so THIS is the host every standard A2A client calls.
-        # TEMPORARY (a2a_probe only): advertise the mtls host to test whether that alone is what
-        # the gateway needs. Production agents are unchanged on the plain host.
-        url=(f"https://{REGION}-aiplatform.mtls.googleapis.com/v1beta1/"
-             if name == "a2a_probe"
-             else f"https://{REGION}-aiplatform.googleapis.com/v1beta1/"),
+        # ⚠️ NOT informational in general — a2a/client/transports/rest.py does
+        # `self.url = agent_card.url` and appends `/v1/message:send`, so a standard A2A client
+        # calls whatever host this names. It does NOT matter here only because the A2aAgent
+        # template OVERWRITES it at engine start-up with the plain aiplatform host
+        # (templates/a2a.py:328) — which the Agent Gateway refuses, and which is why
+        # VibeflixRemoteA2aAgent repoints the RPC at the .mtls base after fetching the card.
+        # See eng-report/UPSTREAM-FR-a2a-client-gaps.md (measured in-engine 2026-08-02).
+        url=f"https://{REGION}-aiplatform.googleapis.com/v1beta1/",
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=True),
         default_input_modes=["text/plain"],

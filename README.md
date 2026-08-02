@@ -75,6 +75,35 @@ and it's not in the orchestrator's fan-out. Every box is its own container/insta
   brand_style → mcp_brand_style · vendor_clearance → mcp_licensing + mcp_market
 ```
 
+### A2A transport — the stock ADK client, and the two places it needs help
+
+Agent-to-agent calls use ADK's own **`RemoteA2aAgent`**, wrapped as
+`VibeflixRemoteA2aAgent` (`vibeflix_common/remote_agent.py`). The wrapper is a subclass, so
+every call site is idiomatic ADK — `ctx.run_node(agent, brief)` — and the two workarounds it
+carries are invisible to callers. Both exist for reasons **measured in production, from inside a
+gateway-attached engine** (2026-08-02):
+
+| Override | Why it is unavoidable |
+|---|---|
+| `_resolve_agent_card` → repoint at `.mtls` | The `A2aAgent` template **hardcodes the plain aiplatform host** into the card it serves (`templates/a2a.py:328`), overwriting whatever the deployer set — there is no flag. The Agent Gateway authorizes only the `.mtls` host: measured against three peer agents, plain → `403 Egress request is not authorized`, mtls → `200`. Standard clients follow `card.url`, so without this every A2A call from an engine is refused. |
+| `_construct_message_parts_from_session` → send the brief | Stock builds its outgoing message from `ctx.session.events` and never sees the brief passed to `ctx.run_node` (ADK's `run_node` hands `node_input` to the scheduler, not into the session). Without it, a hop silently receives session history instead of the brief — a plausible-looking wrong answer. |
+
+**Fast hops run the stock transport; long hops poll.** The stock client sends
+`blocking: true` — one long HTTP request — and Agent Runtime kills that at **~180s** with
+`400 FAILED_PRECONDITION` ("Reasoning Engine Execution failed", *Error Details empty*) **while
+the callee is still working normally**. The same `message:send` *without* blocking returns in
+0.9s with a task id, and polling `tasks/{id}` retrieves the completed result. So:
+
+```python
+brand_style = VibeflixRemoteA2aAgent("brand_style_compliance_agent", BRAND_URL)
+legal       = VibeflixRemoteA2aAgent("legal", LEGAL_URL, long_running=True)   # sends + polls
+```
+
+`long_running=True` changes only the pacing — same protocol, same card handling, same auth.
+Hops that can exceed the ceiling (`legal`, `contract_finalize`, `app → orchestrator`) set it;
+the fast dispatch agents (~9-20s) deliberately do not, so the demo exercises the prebuilt client.
+Full evidence and the upstream report: [`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
+
 ### The shared A2A task store (and why it exists)
 
 **Every A2A call is `POST message:send` then `GET /a2a/v1/tasks/{id}` until the task

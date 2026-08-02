@@ -229,12 +229,29 @@ _UI_RENDERER_URL = os.environ.get("UI_RENDERER_A2A_URL", "").rstrip("/")
 
 
 def _presenter_agent():
-    """ui_renderer client — CLOUD via Agent Registry, LOCAL via direct A2A."""
+    """ui_renderer client — the STOCK ADK client in cloud, direct A2A locally.
+
+    Cloud path migrated off `direct_engine_agent` (2026-08-02): we hand `RemoteA2aAgent` a card
+    we build ourselves rather than letting it fetch the platform's, which advertises a host the
+    Agent Gateway refuses. See vibeflix_common/a2a_card.py for the measurements.
+
+    Safe HERE and not elsewhere, for two reasons both verified in production:
+      * ui_renderer answers in ~9s, well inside the ~180s ceiling that kills the stock client's
+        blocking send (the orchestrator and legal hops are NOT safe — they stay on a2a_engine);
+      * this call is driven by a Runner where the payload IS the session message, so
+        `_construct_message_parts_from_session` reconstructs it faithfully. The orchestrator's
+        dispatch passes an explicit brief to run_node, which that method ignores.
+    """
     from vibeflix_common.cloud_auth import run_local
     if not run_local():
-        from vibeflix_common.a2a_engine import direct_engine_agent
-        return direct_engine_agent(
-            "a2ui_presenter", "Renders reports into A2UI panels.", _UI_RENDERER_URL)
+        from vibeflix_common.a2a_card import engine_card
+        return RemoteA2aAgent(
+            name="a2ui_presenter",
+            description="Renders reports into A2UI panels.",
+            agent_card=engine_card(_UI_RENDERER_URL, "a2ui_presenter",
+                                   "Renders reports into A2UI panels."),
+            **({"httpx_client": c} if (c := a2a_httpx_client()) else {}),
+        )
     return RemoteA2aAgent(
         name="a2ui_presenter",
         agent_card=a2a_card_url(_UI_RENDERER_URL),

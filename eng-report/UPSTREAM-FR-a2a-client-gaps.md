@@ -55,6 +55,46 @@ Grants were exactly what `grant_agent_iam.sh` gives a production agent (7 projec
 `iap.egressor` on 20 registered `GCP *` endpoints incl. all four `agentregistry` variants, and on
 all six agent endpoints), plus 5 minutes for IAP propagation.
 
+## ✅ WORKAROUND — verified in production, uses the stock framework
+
+**You do not have to accept the platform's card.** `RemoteA2aAgent` takes an `AgentCard`
+*object*, and `RestTransport` prefers an explicit url over the card's. Build the card yourself,
+point it at `.mtls`, and the documented ADK client works from inside a gateway-attached engine:
+
+```python
+from a2a.types import AgentCapabilities, AgentCard
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+
+card = AgentCard(
+    name="ui-renderer-via-mtls",
+    description="...",
+    url=f"https://{REGION}-aiplatform.mtls.googleapis.com/v1beta1/{ENGINE}/a2a",  # ← the fix
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=False),
+    default_input_modes=["text/plain"], default_output_modes=["text/plain"],
+    preferred_transport="HTTP+JSON", skills=[],
+)
+agent = RemoteA2aAgent(name="peer", description="...", agent_card=card,
+                       httpx_client=httpx.AsyncClient(auth=GoogleAuth()))
+```
+
+**Measured in the same probe run, same engine, same credentials, same target:**
+
+| client | card | result |
+|---|---|---|
+| `_genai` `on_message_send` | platform's (plain host) | ❌ 403 Egress not authorized |
+| `_genai` `on_message_send` (self-target) | platform's (plain host) | ❌ 403 Egress not authorized |
+| **stock `RemoteA2aAgent` + Runner** | **self-built (mtls host)** | ✅ **200 — 1127 chars of real A2UI** |
+
+That is a controlled A/B: the only variable is which host the card names.
+
+**Caveats before adopting it wholesale** — this proves the *transport*, not a drop-in replacement:
+- the in-engine test used a **fast** target (~9s). A long hop in-engine through `RemoteA2aAgent`
+  is untested (a 180s hop did work from a laptop).
+- **Finding 3** of `a2a-native-transport-findings.md` still applies:
+  `_construct_message_parts_from_session` discards the explicit brief passed to `run_node`, which
+  is what `contract_finalize` depends on. That is independent of transport.
+
 ## Requested fix
 
 **Primary:** make the template advertise the host the gateway authorizes — the `.mtls` endpoint —
@@ -116,6 +156,62 @@ Recorded so reviewers don't chase them. All were refuted by production testing.
 The failure that started all of this — `contract_finalize` returning `cleared` with no contract —
 is best explained by our own **Finding 3**: `RemoteA2aAgent._construct_message_parts_from_session`
 rebuilds the outgoing message from session events and **discards the explicit brief**.
+
+## FINDING D — a blocking `message:send` dies at ~180s, blaming the callee
+
+**Measured in-engine, 2026-08-02.** A `message:send` carrying
+`configuration: {blocking: true}` — which is what every stock a2a client sends — held for
+**180.2s** and then returned:
+
+```json
+{"error": {"code": 400, "status": "FAILED_PRECONDITION",
+  "message": "Reasoning Engine Execution failed.\n…\nError Details: "}}
+```
+
+No task, no state, and **`Error Details:` empty**. Meanwhile the target engine was working
+normally: 62 log lines, dispatching to three peers with trace propagation, writing to the task
+store, zero errors. The same request **without** `blocking` returns in **0.9s** with a
+`TASK_STATE_SUBMITTED` task, and polling `tasks/{id}` retrieves the completed result.
+
+Three separate runs landed at 180.4s / 180.7s / 180.2s, so the boundary is consistent. We cannot
+say whether it is a deadline, a proxy limit, or something in the blocking path — the platform
+does not say, and **no timeout/deadline field exists** on `ReasoningEngineSpec.deploymentSpec`
+(checked against the live v1beta1 discovery document: `agentGatewayConfig`, `agentServerMode`,
+`containerConcurrency`, `env`, `keepAliveProbe`, `maxInstances`, `minInstances`,
+`pscInterfaceConfig`, `resourceLimits`, `secretEnv` — nothing else).
+
+**Requested:** (a) don't report a healthy engine's execution as *failed* — the message sends
+users hunting a failure that never happened; (b) populate `Error Details`, or return a distinct
+status such as `DEADLINE_EXCEEDED`; (c) document the limit, or expose it as deployment config;
+(d) ideally, offer a non-blocking mode on the stock client so callers can poll.
+
+## What a user has to build to work around all of this
+
+Both defects (the plain-host card, and the 180s blocking ceiling) are absorbed in one subclass so
+call sites stay idiomatic — this is the shape any team on Agent Runtime will end up writing:
+
+```python
+class VibeflixRemoteA2aAgent(RemoteA2aAgent):
+    async def _resolve_agent_card(self):
+        card = await super()._resolve_agent_card()
+        card.url = self._mtls_base            # FINDING A: the served card names a host the
+        return card                           #            gateway refuses
+
+    def _construct_message_parts_from_session(self, ctx):
+        _, context_id = super()._construct_message_parts_from_session(ctx)
+        return self._parts_from(ctx.user_content), context_id   # brief, not session history
+
+    async def _run_async_impl(self, ctx):
+        if not self._long_running:
+            async for e in super()._run_async_impl(ctx):        # stock path
+                yield e
+            return
+        yield await self._send_and_poll(ctx)   # FINDING D: blocking dies at ~180s
+```
+
+`long_running=True` is needed on any hop that can exceed ~180s. In our mesh that is `legal`,
+`contract_finalize` and `app → orchestrator`; the fast dispatch hops (~9-20s) run the stock path
+unchanged.
 
 ## Why our workaround exists
 
