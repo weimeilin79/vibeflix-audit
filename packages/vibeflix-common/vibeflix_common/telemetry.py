@@ -41,10 +41,6 @@ def set_run_id(run_id: str) -> None:
     _RUN_ID.set(str(run_id or ""))
 
 
-def get_run_id() -> str:
-    return _RUN_ID.get("")
-
-
 def _node_run_id(args, kwargs=None) -> str:
     """The run id for a node, preferring the workflow Context over the ContextVar.
 

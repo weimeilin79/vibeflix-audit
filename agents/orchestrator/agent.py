@@ -35,7 +35,7 @@ from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
 from google.adk.workflow import Workflow, JoinNode, node
 from google.adk.agents.context import Context
-from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_KNOWN_PATH
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.events.event import Event
 
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC
@@ -76,15 +76,6 @@ def _volume_cap() -> int:
 def _secondary_addendum() -> str:
     return str(_registry_get("market_policy", "sourcing_caps",
                              _ADDENDUM_FALLBACK, field="secondary_addendum_contract") or _ADDENDUM_FALLBACK)
-
-
-# url_env → the agent's Agent-Registry displayName (cloud path). The registry
-# entries are "Vibeflix <name> agent" (deploy step 4a-ii).
-_REGISTRY_DISPLAY = {
-    "BRAND_STYLE_A2A_URL": "vibeflix-brand-style",
-    "VENDOR_CLEARANCE_A2A_URL": "vibeflix-vendor-clearance",
-    "DEAL_PRICING_A2A_URL": "vibeflix-deal-pricing",
-}
 
 
 def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
@@ -474,16 +465,6 @@ def _text_of(value) -> str:
     if parts:
         return "".join(getattr(p, "text", "") or "" for p in parts)
     return getattr(value, "text", "") or ""
-
-
-def _as_report(value) -> dict:
-    """Coerce a remote A2A agent's output (dict / JSON string / Content) to a dict."""
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    parsed = _parse_report_text(_text_of(value))
-    return parsed if parsed is not None else {}
 
 
 def _report_from_events(ctx: Context, author: str) -> dict:

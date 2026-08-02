@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { RefreshCw, HardDrive, ChevronDown, ChevronRight } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';

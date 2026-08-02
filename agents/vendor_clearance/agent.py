@@ -215,14 +215,6 @@ def _parse_report(text: str) -> dict:
     return {}
 
 
-def _request_dict(node_input) -> dict:
-    """The audit request (JSON), which arrives as the node's INPUT — a remote-agent
-    workflow node's ctx.state is empty (state doesn't propagate over A2A)."""
-    if hasattr(node_input, "parts"):
-        return _parse_report(_text_of(node_input))
-    return _parse_report(node_input) if isinstance(node_input, str) else {}
-
-
 def _tool_call_args(ctx: Context, tool_name: str) -> dict | None:
     """Args of the most recent call to `tool_name` in the event log — or None if the
     tool was never called. A FACT, not an inference."""

@@ -114,38 +114,6 @@ body.dark-mode {
 }
 
 /* Animations */
-@keyframes pulseGlowWarning {
-  0%, 100% {
-    border-color: rgba(var(--color-warning-rgb), 0.5);
-    box-shadow: 0 0 10px rgba(var(--color-warning-rgb), 0.2);
-  }
-  50% {
-    border-color: rgba(var(--color-warning-rgb), 1);
-    box-shadow: var(--shadow-neon-warning);
-  }
-}
-
-@keyframes pulseGlowDanger {
-  0%, 100% {
-    border-color: rgba(var(--color-danger-rgb), 0.5);
-    box-shadow: 0 0 10px rgba(var(--color-danger-rgb), 0.2);
-  }
-  50% {
-    border-color: rgba(var(--color-danger-rgb), 1);
-    box-shadow: var(--shadow-neon-danger);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
 @keyframes spin {
   to {
@@ -154,16 +122,6 @@ body.dark-mode {
 }
 
 /* Visual pulse for executing nodes in graph */
-@keyframes nodePulseActive {
-  0%, 100% {
-    border-color: rgba(var(--accent-blue-rgb), 0.4);
-    box-shadow: 0 0 4px rgba(var(--accent-blue-rgb), 0.2);
-  }
-  50% {
-    border-color: var(--accent-blue);
-    box-shadow: 0 0 12px rgba(var(--accent-blue-rgb), 0.6);
-  }
-}
 
 .animated-flow {
   animation: dashFlow 1.2s linear infinite;
@@ -223,44 +181,6 @@ body.dark-mode {
   letter-spacing: 0.05em;
 }
 
-/* Front & Top User Entry Dashboard */
-.top-user-entry {
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--glass-border);
-  padding: 1rem 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  z-index: 10;
-}
-
-.entry-row {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-
-.prompt-bar-container {
-  flex: 1;
-  display: flex;
-  background: var(--bg-primary);
-  border: 1px solid var(--glass-border);
-  border-radius: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  align-items: center;
-  transition: var(--transition-smooth);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-}
-
-body.dark-mode .prompt-bar-container {
-  box-shadow: none;
-}
-
-.prompt-bar-container:focus-within {
-  border-color: var(--accent-purple);
-  box-shadow: var(--shadow-neon);
-}
-
 .top-textarea {
   flex: 1;
   background: var(--bg-secondary);
@@ -287,19 +207,6 @@ body.dark-mode .prompt-bar-container {
   border-color: var(--accent-purple);
 }
 
-/* Inside the prompt bar the container already draws the border — keep the inner field bare. */
-.prompt-bar-container .top-textarea {
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  padding: 0;
-  min-height: 24px;
-}
-
-.action-bar {
-  display: flex;
-  gap: 0.75rem;
-}
 
 .preset-btn {
   background: var(--bg-tertiary);
@@ -342,15 +249,6 @@ body.dark-mode .prompt-bar-container {
   overflow: hidden;
 }
 
-.workspace-column {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  overflow-y: auto;
-  height: 100%;
-  padding-right: 0.25rem;
-}
-
 /* Canvas View Panel Cards */
 .canvas-panel {
   background: var(--bg-card);
@@ -372,150 +270,6 @@ body.dark-mode .prompt-bar-container {
   gap: 0.5rem;
   border-bottom: 1px solid var(--glass-border);
   padding-bottom: 0.5rem;
-}
-
-.mockup-display {
-  flex: 1;
-  border: 1px solid var(--glass-border);
-  border-radius: 0.5rem;
-  background: var(--bg-tertiary);
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 250px;
-  overflow: hidden;
-}
-
-.mockup-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  color: var(--text-muted);
-  text-align: center;
-  font-size: 0.8rem;
-}
-
-/* Overlays on mockup figurine box */
-.warning-overlay-box {
-  position: absolute;
-  border: 2px solid var(--color-warning);
-  background: rgba(245, 158, 11, 0.1);
-  animation: pulseGlowWarning 2s infinite;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.warning-overlay-box.danger {
-  border-color: var(--color-danger);
-  background: rgba(229, 9, 20, 0.15);
-  animation: pulseGlowDanger 2s infinite;
-}
-
-.warning-tooltip {
-  position: absolute;
-  top: -30px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #f59e0b;
-  color: black;
-  font-size: 0.65rem;
-  font-weight: 700;
-  padding: 0.2rem 0.4rem;
-  border-radius: 0.25rem;
-  white-space: nowrap;
-}
-
-.warning-overlay-box.danger .warning-tooltip {
-  background: var(--color-danger);
-  color: white;
-}
-
-/* Remediation Widget Inputs */
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
-
-.form-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  display: flex;
-  justify-content: space-between;
-}
-
-.form-select {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--glass-border);
-  color: var(--text-main);
-  padding: 0.6rem;
-  border-radius: 0.35rem;
-  outline: none;
-  font-size: 0.85rem;
-  font-family: var(--font-family-primary);
-}
-
-.volume-slider-container {
-  background: var(--bg-secondary);
-  border: 1px solid var(--glass-border);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-}
-
-.slider-control {
-  width: 100%;
-  accent-color: var(--accent-purple);
-  height: 4px;
-  background: var(--bg-tertiary);
-  border-radius: 2px;
-  outline: none;
-  margin: 0.5rem 0;
-  cursor: pointer;
-}
-
-.slider-cap-alert {
-  font-size: 0.7rem;
-  color: var(--color-danger);
-  margin-top: 0.5rem;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  background: rgba(var(--color-danger-rgb), 0.06);
-  padding: 0.4rem;
-  border-radius: 0.25rem;
-  border: 1px dashed rgba(var(--color-danger-rgb), 0.2);
-}
-
-/* Risk Alerts Cards */
-.risk-card {
-  background: rgba(var(--color-danger-rgb), 0.05);
-  border: 1px solid rgba(var(--color-danger-rgb), 0.2);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.risk-card.warning {
-  background: rgba(var(--color-warning-rgb), 0.05);
-  border-color: rgba(var(--color-warning-rgb), 0.2);
-}
-
-.risk-title {
-  font-weight: 700;
-  font-size: 0.8rem;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.risk-desc {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-top: 0.2rem;
 }
 
 /* Tab Selection and Contrast Matrix */
@@ -578,105 +332,6 @@ body.dark-mode .prompt-bar-container {
   color: var(--color-success);
 }
 
-/* Detailed Workflow Node Grid Graph */
-.workflow-graph-container {
-  background: var(--bg-card);
-  border: 1px solid var(--glass-border);
-  border-radius: 0.75rem;
-  padding: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--box-shadow-premium);
-}
-
-.graph-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  position: relative;
-}
-
-/* Flow Direction Arrows & Visual Loop Indicators */
-.arrow-flow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--glass-border);
-  font-size: 1.2rem;
-}
-
-.arrow-flow.active {
-  color: var(--accent-purple);
-  filter: drop-shadow(0 0 5px rgba(var(--accent-blue-rgb), 0.3));
-}
-
-.loop-feedback-line {
-  grid-column: 1 / span 2;
-  border: 1px dashed rgba(var(--accent-blue-rgb), 0.3);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-  height: 20px;
-  margin-top: -0.5rem;
-  margin-bottom: 0.5rem;
-  position: relative;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.loop-label {
-  font-size: 1.2rem;
-  color: var(--accent-blue);
-  background: var(--bg-primary);
-  padding: 4px 10px;
-  border-radius: 3px;
-  border: 1px solid rgba(var(--accent-blue-rgb), 0.2);
-  font-family: 'Outfit';
-  font-weight: bold;
-}
-
-/* Sub-Workflow Agent Box */
-.agent-node-card {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--glass-border);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  transition: var(--transition-smooth);
-}
-
-.agent-node-card.active {
-  border-color: var(--accent-purple);
-  box-shadow: var(--shadow-neon);
-  animation: nodePulseActive 2s infinite;
-}
-
-.agent-node-card.warning {
-  border-color: var(--color-warning);
-  box-shadow: var(--shadow-neon-warning);
-}
-
-.agent-node-card.success {
-  border-color: var(--color-success);
-  box-shadow: var(--shadow-neon-success);
-}
-
-.node-header {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  margin-bottom: 0.4rem;
-  display: flex;
-  justify-content: space-between;
-}
-
-.sub-workflow-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.5rem;
-}
-
 .sub-step {
   display: flex;
   align-items: center;
@@ -698,34 +353,6 @@ body.dark-mode .prompt-bar-container {
 
 .sub-step.completed {
   color: var(--color-success);
-}
-
-/* Logging Console */
-.console-panel {
-  background: #050608;
-  border: 1px solid var(--glass-border);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.75rem;
-  color: #a7f3d0;
-  max-height: 120px;
-  overflow-y: auto;
-}
-
-.log-line {
-  margin-bottom: 0.15rem;
-}
-
-.log-timestamp {
-  color: var(--accent-purple);
-  margin-right: 0.5rem;
-}
-
-.log-agent {
-  color: var(--accent-blue);
-  font-weight: bold;
-  margin-right: 0.5rem;
 }
 
 /* Live workflow-graph node pulse while an agent is running. */

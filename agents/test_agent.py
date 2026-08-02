@@ -28,7 +28,6 @@ os.environ.setdefault("MCP_BRAND_STYLE_URL", "http://127.0.0.1:9004/mcp")
 
 from google.adk.apps import App
 from google.adk.runners import InMemoryRunner
-from google.genai import types
 
 AGENTS = ("brand_style", "vendor_clearance", "deal_pricing")
 

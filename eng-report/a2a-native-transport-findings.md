@@ -142,9 +142,12 @@ with real regression risk and **zero** functional gain on request/response hops.
 
 ## Current code state (all uncommitted)
 
-- **Kept:** the card flag in `deploy/deploy_agents_a2a.py`; `VibeflixRemoteA2aAgent` (with the
-  brief-override and the streaming/limitation note) in
-  `packages/vibeflix-common/vibeflix_common/remote_agent.py`, dormant.
+- **Kept:** the card flag in `deploy/deploy_agents_a2a.py`.
+- **~~Kept~~ → DELETED (2026-08-01 dead-code cleanup):** `VibeflixRemoteA2aAgent` (with the
+  brief-override and the streaming/limitation note) sat dormant in
+  `packages/vibeflix-common/vibeflix_common/remote_agent.py` and was never wired into any
+  caller, so it went with the rest of the unused code. The findings below still stand — recover
+  the file from git history if native transport is revisited.
 - **Removed:** the `USE_REMOTE_A2A_AGENT` flag, the native dispatch branch, the native
   `contract_finalize` branch, and the `[dispatch-native]` debug prints from
   `agents/orchestrator/agent.py`; the deploy env passthrough.
@@ -177,4 +180,145 @@ curl -sN -X POST "$BASE/message:stream" \
 # Observe: 200 text/event-stream, a TASK_STATE_SUBMITTED event, then the connection closes
 # after the work window WITHOUT a TASK_STATE_COMPLETED event or the result artifact.
 # Contrast: message:send + GET tasks/{id} (poll) returns the completed report.
+```
+
+---
+
+# Appendix B — the Vertex SDK *does* ship an A2A client (2026-08-01)
+
+> **Filed upstream:** the gaps below are written up as actionable feature requests, with diagrams
+> and repro, in [`UPSTREAM-FR-a2a-client-gaps.md`](UPSTREAM-FR-a2a-client-gaps.md).
+> Non-technical summary for wider circulation: [`../A2A-ELI5.md`](../A2A-ELI5.md).
+
+**Added after re-reading this report.** The body above assumes the A2A transport had to be
+hand-rolled. That assumption is **wrong for one of the two SDK surfaces**, and the difference
+matters. Everything below was verified against the live `vibeflix-ui-renderer` engine
+(`4545326643400409088`) with the dependency set we already ship — **no ADK upgrade needed**.
+
+## The two surfaces are not equivalent
+
+| Surface | Module | On our `a2a-sdk 0.3.26` |
+|---|---|---|
+| `vertexai.agent_engines.get(...)` (legacy) | `vertexai/agent_engines/_agent_engines.py` | **Broken.** Nine a2a names imported in ONE `try/except`, taking `TransportProtocol` from `a2a.utils.constants` — a **1.x-only** location. The miss nulls all nine, so every A2A op is a `None` stub → `TypeError: 'NoneType' object is not callable`. Fails *silently* at import. |
+| `vertexai.Client(...).agent_engines.get(name=…)` (`_genai`) | `vertexai/_genai/_agent_engines_utils.py` | **Works.** Version-*detects* a2a-sdk: on 0.3 it imports `TransportProtocol` from `a2a.types`; on 1.x it pulls `TaskIdParams`/`TaskQueryParams` from `a2a.compat.v0_3.types`. |
+
+Both bind the engine's `register_operations()` — `on_message_send`, `on_get_task`,
+`on_cancel_task`, `handle_authenticated_agent_card` — as real methods on the returned handle.
+
+## Verified live (laptop + ADC → engine)
+
+```
+on_message_send(role=…, parts=[…], messageId=…, kind="message")
+   → 1 chunk in 8.7s:  Task(state=submitted) + TaskStatusUpdateEvent
+on_get_task(id=<task_id>)
+   → t+9.2s state=completed → full agent output incl. the <a2ui-json> artifact
+```
+
+That is exactly the `message:send` → `GET tasks/{id}` pair `a2a_engine.py` implements by hand.
+
+## What this changes — and what it doesn't
+
+- **Finding 6 stands.** `on_message_send` returned `submitted` and nothing further; only the
+  poll reached a terminal state. The **b-hybrid decision is unaffected**.
+- **Corrected:** "we must hand-roll the transport" is no longer true for the app→engine hop.
+  The SDK supplies both primitives. It does **not** supply the poll-to-terminal *loop*
+  (`on_get_task` is a single call), so the retry/backoff/terminal-state logic stays ours —
+  roughly 40 of `a2a_engine.py`'s 322 lines.
+- The legacy wrapper hard-raises `"Streaming is not supported in Agent Engine"` on cards with
+  `capabilities.streaming: true` (ours have it). The `_genai` path did **not** — it worked with
+  our card unmodified.
+
+## Why it still cannot replace `a2a_engine.py` for engine→engine
+
+`_genai`'s `_wrap_a2a_operation` builds its own client:
+
+```python
+a2a_agent_card.url = f"{base_url}/{api_version}/{self.api_resource.name}/a2a"
+config = ClientConfig(..., httpx_client=httpx.AsyncClient(
+    headers={"Authorization": f"Bearer {…_credentials.token}"}))   # single header
+```
+
+From a **gateway-attached engine** this mesh needs two things that conflict with the above,
+both measured and documented in `a2a_engine.py`:
+
+1. **The mtls host** — the gateway authorizes only the destination it has registered; the plain
+   host is refused `403 Egress request is not authorized`. → **Fixable**: `base_url` is
+   overridable, e.g. `vertexai.Client(http_options=HttpOptions(base_url="https://us-central1-aiplatform.mtls.googleapis.com"))` (confirmed accepted).
+2. **Dual auth** — `Proxy-Authorization` for the gateway *plus* `Authorization` for the target
+   endpoint. → **Not fixable from outside**: the `httpx.AsyncClient` and its single header are
+   constructed *inside* the wrapper. Sending only `Authorization` is the exact configuration
+   that produced the 401s documented in `a2a_engine.py`.
+
+Also note the SDK reads `_credentials.token` **once per call** with no re-mint, whereas
+`a2a_engine._headers()` refreshes per request and force-refreshes on a 401 — relevant given the
+engine credential-expiry history.
+
+**Verdict:** viable for **app→engine** today; **not** for **engine→engine** without patching the
+wrapper's client construction. Keep `a2a_engine.py`. Re-test if the wrapper ever accepts a
+caller-supplied `httpx_client`.
+
+## The documented pattern — and why it doesn't close the gap either
+
+[`agent-registry/authenticate-toolsets`](https://docs.cloud.google.com/agent-registry/authenticate-toolsets)
+documents A2A auth. Its sample is, in substance, what our (now deleted) `registry_client.py` +
+`remote_agent.py` did — a `GoogleAuth(httpx.Auth)` class refreshing ADC creds and setting
+`Authorization`, handed in via `httpx_client=`:
+
+```python
+registry = AgentRegistry(project_id=project_id, location=location)
+httpx_client = httpx.AsyncClient(auth=GoogleAuth(), timeout=httpx.Timeout(60.0))
+my_remote_agent = registry.get_remote_a2a_agent(agent_name=agent_name, httpx_client=httpx_client)
+```
+
+Both extension points exist in our installed **google-adk 2.3.0** (verified):
+
+```
+AgentRegistry.__init__(self, project_id=None, location=None,
+                       header_provider: Callable[[ReadonlyContext], Dict[str,str]] | None = None)
+AgentRegistry.get_remote_a2a_agent(self, agent_name, *, httpx_client: httpx.AsyncClient | None = None)
+```
+
+So **auth is fully extensible on this path** — a caller-supplied httpx client can carry
+`Proxy-Authorization` and re-mint on 401, exactly as `a2a_engine._headers()` does. But it still
+doesn't work for us, for two reasons this report already established and the doc doesn't touch:
+
+1. `get_remote_a2a_agent` returns a **`RemoteA2aAgent`** → Finding 4: pauses on `working`, cannot
+   poll a long-running task to terminal. Auth extensibility does not change transport semantics.
+2. Registry **resolution** from inside a gateway-attached engine calls `agentregistry.mtls`, which
+   the gateway filters → 403 (see `a2a_engine.py` header). The doc's sample also defaults
+   `location` to `"global"`; our registry is **regional** (`us-central1`).
+
+## The three-way picture
+
+| Path | Custom auth headers (Proxy-Authorization, re-mint) | Polls to terminal |
+|---|---|---|
+| ADK `AgentRegistry.get_remote_a2a_agent(httpx_client=…)` — the documented pattern | ✅ caller owns the httpx client; `header_provider` too | ❌ `RemoteA2aAgent` pauses on `working` |
+| Vertex `_genai` `agent_engines` → `on_message_send` + `on_get_task` | ❌ client built inside the wrapper; single `Authorization`; token read once per call | ✅ verified live |
+| **`vibeflix_common/a2a_engine.py`** | ✅ dual header, per-request refresh, 401 re-mint | ✅ |
+
+**Neither SDK surface provides both halves. Ours does.** That is a stronger argument for b-hybrid
+than the body of this report makes: the choice isn't "hand-rolled vs. SDK", it's that the two SDK
+paths each supply one half of what an in-engine, long-running A2A hop needs.
+
+## Undocumented by Google (worth filing)
+
+The [Agent Gateway overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/govern/gateways/agent-gateway-overview)
+describes the policy model — IAP as "the default enforcement layer", IAM-authorized destinations
+only, agent identities "secured by default … using mTLS and DPoP" — but documents **neither**
+`Proxy-Authorization` **nor** the plain-vs-`.mtls` host choice. Both of ours were found
+empirically (the 401 and the `403 Egress request is not authorized` recorded in `a2a_engine.py`),
+and both are load-bearing for any in-engine A2A call.
+
+> Not yet tested empirically: the `_genai` path invoked *from inside* a gateway-attached engine
+> (the analysis above is from the wrapper's source plus this report's own measured 403/401
+> findings), and a multi-minute hop — the verified poll completed in ~9s.
+
+```python
+# Reproduce the working app→engine path:
+import asyncio, vertexai
+eng = vertexai.Client(project="pokedemo-test", location="us-central1") \
+        .agent_engines.get(name="projects/789872749985/locations/us-central1/reasoningEngines/4545326643400409088")
+chunks = asyncio.run(eng.on_message_send(
+    role="user", parts=[{"kind": "text", "text": "{}"}], messageId="probe", kind="message"))
+task = asyncio.run(eng.on_get_task(id=chunks[0][0].id))   # poll until status.state == completed
 ```

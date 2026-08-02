@@ -311,6 +311,9 @@ AGENTS = {
     "orchestrator": {"env": ["MCP_LICENSING_URL", "BRAND_STYLE_A2A_URL",
                              "VENDOR_CLEARANCE_A2A_URL", "DEAL_PRICING_A2A_URL"],
                      "desc": "Sourcing orchestrator — dispatches the compliance workflows and finalizes contracts."},
+    # TEMPORARY — in-engine A2A transport probe. Remove with agents/_a2a_probe/.
+    "_a2a_probe": {"env": ["PROBE_TARGET"],
+                   "desc": "Temporary in-engine A2A transport probe."},
 }
 
 
@@ -421,21 +424,6 @@ def requirements(name: str) -> list[str]:
     lines += ["a2a-sdk==0.3.26", "cloudpickle==3.1.2",
               "google-cloud-aiplatform[agent_engines]>=1.130.0"]
     return lines
-
-
-def _check_sdk_compat():
-    """This script requires a2a-sdk>=1.0 (the vertexai A2aAgent template's
-    models) — but google-adk 2.3 requires a2a-sdk<1. The two cannot coexist:
-    resolving this needs a NEWER google-adk built against a2a-sdk 1.x
-    (see README: 'Three ways to deploy…' + the agents-cli probe plan)."""
-    import importlib.metadata as md
-    v = md.version("a2a-sdk")
-    if v.startswith("0."):
-        raise SystemExit(
-            f"a2a-sdk {v} is too old for the A2aAgent template (needs >=1.0).\n"
-            "Known deadlock: upgrading breaks google-adk 2.3. Next step is the\n"
-            "agents-cli lockfile probe / google-adk upgrade — do NOT pip-juggle."
-        )
 
 
 import threading

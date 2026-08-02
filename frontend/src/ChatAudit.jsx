@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Send, Satellite, RotateCcw, CheckCircle, AlertTriangle, HelpCircle, Lock, Upload, Share2 } from 'lucide-react';
 import { A2UIProvider, A2UIRenderer, useA2UI } from '@a2ui/react';
 import { injectStyles } from '@a2ui/react/styles';

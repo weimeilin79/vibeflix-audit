@@ -110,12 +110,6 @@ def render_instruction(role_description: str, ui_description: str = "") -> str:
     )
 
 
-def has_a2ui(text: str) -> bool:
-    """True if the response carries an `<a2ui-json>` block (vs. the plain-JSON form task)."""
-    from a2ui.schema.constants import A2UI_OPEN_TAG
-    return A2UI_OPEN_TAG in (text or "")
-
-
 def _unwrap_message(message):
     """Heal the ONE envelope slip we measured: a message emitted as a bare surfaceUpdate BODY.
 

@@ -32,7 +32,7 @@ from google.genai import types
 from google.adk.apps import App
 from google.adk.runners import Runner, InMemoryRunner
 
-from google.adk.agents.remote_a2a_agent import RemoteA2aAgent, AGENT_CARD_WELL_KNOWN_PATH
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
 from agents.orchestrator.agent import root_agent, _parse_report_text, _text_of, note_responder
 from agents.a2ui_surface import (

@@ -44,8 +44,6 @@ if not PROJECT:
 REGION = os.environ.get("REGION", "us-central1")
 BUCKET = os.environ.get("BUCKET", "vibeflix-artifacts")
 DISPLAY = os.environ.get("CORPUS_DISPLAY_NAME", "vibeflix-legal-kb")
-# Embedding model for the corpus (text-embedding-005 is a solid default).
-EMBED = os.environ.get("EMBEDDING_MODEL", "publishers/google/models/text-embedding-005")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DOCS = os.path.join(_HERE, "..", "resource", "legal", "docs")
