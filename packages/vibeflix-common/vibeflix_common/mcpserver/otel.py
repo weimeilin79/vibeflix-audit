@@ -12,7 +12,7 @@ packages aren't installed — the local compose mesh stays untouched.
 
 
 def setup_otel(service_name: str) -> bool:
-    from vibeflix_common.cloud_auth import run_local
+    from vibeflix_common.platform.cloud_auth import run_local
     if run_local():
         return False
     try:

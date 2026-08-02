@@ -72,7 +72,7 @@ Wiring is entirely by environment variable, so the same images run locally
 > diagnosis was wrong.** A bare `inject()` propagates whatever context is current, *including an
 > unsampled one* (`…-00`), and the callee honours that flag and drops nearly all of its own
 > spans. The remote parent was never the problem; the sampling bit was. Guarding on
-> *valid + sampled* (`vibeflix_common/a2a_engine.py`) gives, measured on one run: **one trace,
+> *valid + sampled* (`vibeflix_common/a2a/engine.py`) gives, measured on one run: **one trace,
 > 63 spans, 5 services, 56 agent spans** — richer than the 32-agent-span best case when every
 > engine traced itself in isolation.
 
@@ -106,7 +106,7 @@ client) — only the orchestrator's cross-audit memory is made durable.
 
 The MCP servers' "what's true" facts — approved media/sources, brand terms, style
 guidelines, exclusivity contracts, trademarks, and sourcing caps — are read from
-**Firestore** via `vibeflix_common.registry.registry_get`, falling back to the
+**Firestore** via `vibeflix_common.platform.registry.registry_get`, falling back to the
 hardcoded defaults in each server when `FIRESTORE_DATABASE` is unset. So the mesh
 runs with no Firestore, and setting one env var makes the registries live-editable
 without a redeploy (legal/market read per-request; brand_style at server start).

@@ -68,7 +68,7 @@ import httpx
 from a2a.server.tasks import InMemoryTaskStore, TaskStore
 from a2a.types import Task
 
-from vibeflix_common.cloud_auth import maybe_auth
+from vibeflix_common.platform.cloud_auth import maybe_auth
 
 _URL_ENV = "TASK_STORE_URL"
 

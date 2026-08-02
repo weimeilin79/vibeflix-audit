@@ -33,7 +33,7 @@ send() {  # send <engine_id> <brief>   → prints the agent's reply (truncated)
   GOOGLE_CLOUD_PROJECT=$PROJECT "$PY" - "$1" "$2" <<'PYEOF'
 import sys, asyncio, pathlib
 sys.path.insert(0, str(pathlib.Path.cwd() / "packages/vibeflix-common"))
-from vibeflix_common.a2a_engine import a2a_engine_send
+from vibeflix_common.a2a.engine import a2a_engine_send
 base = ("https://us-central1-aiplatform.googleapis.com/v1beta1/projects/789872749985"
         f"/locations/us-central1/reasoningEngines/{sys.argv[1]}")
 # 1800s. The full chain (brand + vendor ↔ legal Q&A round-trip + deal) runs well past the

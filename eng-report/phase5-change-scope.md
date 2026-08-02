@@ -1,10 +1,12 @@
 # Phase 5 — Native HITL Change Scope (for review)
 
-**Date:** 2026-07-31 · **Status:** proposed, building touch-point #1
-**Goal:** replace the report-status `needs_user` + whole-audit-resubmit HITL with real ADK
-`input_required` park/resume, over the **poll** transport (native `RemoteA2aAgent` can't poll long
-jobs — see `a2a-native-transport-findings.md`). Platform-side park/resume is de-risked (see memory
-`hitl-park-resume-spike`; exact wire format captured there).
+**Date:** 2026-07-31 · **Status:** ❌ **CLOSED — NOT ADOPTED.** See the CONCLUSION at the bottom;
+the design below was investigated, blocked at risk-1b, and all experiment code reverted. Kept as
+the record of *why* the mesh still uses report-based HITL.
+**Goal (as proposed):** replace the report-status `needs_user` + whole-audit-resubmit HITL with
+real ADK `input_required` park/resume, over the **poll** transport (native `RemoteA2aAgent` can't
+poll long jobs — see `a2a-native-transport-findings.md`). Platform-side park/resume is de-risked
+(see memory `hitl-park-resume-spike`; exact wire format captured there).
 
 ---
 
@@ -34,7 +36,7 @@ The human decision is at the leaf (**legal**). How the pause propagates up is th
   of returning `status:"needs_user"`. Keep `ask_vendor` (liaison), `done`, `answer` unchanged.
 - Effect: legal parks in `TASK_STATE_INPUT_REQUIRED`.
 
-**2. `packages/vibeflix-common/vibeflix_common/a2a_engine.py`** — poll transport learns park/resume.
+**2. `packages/vibeflix-common/vibeflix_common/a2a/engine.py`** — poll transport learns park/resume.
 - In the poll loop, recognize `TASK_STATE_INPUT_REQUIRED` as a distinct outcome: extract the pending
   function-call DataPart (`name`,`id`,`args`) + `task_id` + `context_id`; return a structured
   "parked" payload (not plain text).
@@ -91,6 +93,15 @@ Flow A liaison auto-answer; poll transport for all request/response; dispatch/fi
   the existing **report-based `needs_input` + re-submit** HITL for new-vendor (it already works).
   **Native HITL is not built into the mesh.**
 - **State:** all native-HITL experiment code reverted (legal tool+skill, vendor_clearance
-  tool+skill, vendor_clearance resumability) and redeployed clean. `remote_agent.py` remains
-  dormant. **Phase 6** (move the app's `_SESSIONS` → Firestore) is still worthwhile — it makes the
-  retained report-based HITL survive an app restart.
+  tool+skill, vendor_clearance resumability) and redeployed clean.
+
+### Follow-ups — both since resolved
+
+- **Phase 6 (move the app's `_SESSIONS` → Firestore): ✅ DONE.** Pending-HITL state now lives in
+  the `audit_sessions` collection (`agents/app.py`), so a paused audit survives an app restart and
+  is replica-safe; the in-memory dict remains the local-dev fallback. Validated end-to-end. This
+  was the piece that made the *retained* report-based HITL production-grade.
+- **`remote_agent.py` is no longer dormant.** This report left it as an unused library for a HITL
+  hop that was never built. It was briefly deleted as dead code (2026-08-01), then recovered from
+  git history and is now the mesh's A2A client for every orchestrator dispatch hop — for reasons
+  unrelated to HITL. See [`a2a-migration-plan.md`](a2a-migration-plan.md).

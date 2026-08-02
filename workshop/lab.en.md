@@ -905,7 +905,7 @@ The fix: keep tasks **outside** the replicas in a **shared task store** that any
 
 ### 📝 Look
 
-Read the header of `packages/vibeflix-common/vibeflix_common/task_store.py` (or `docs/02-architecture.md` → *the shared task store*) for the full story. The key line: the engines don't use ADK's default in-memory task store; they're wired to a `RemoteTaskStore` that reads/writes the app's Firestore-backed endpoints.
+Read the header of `packages/vibeflix-common/vibeflix_common/a2a/task_store.py` (or `docs/02-architecture.md` → *the shared task store*) for the full story. The key line: the engines don't use ADK's default in-memory task store; they're wired to a `RemoteTaskStore` that reads/writes the app's Firestore-backed endpoints.
 
 ### 💡 Concept — two kinds of memory: the session and the Memory Bank
 

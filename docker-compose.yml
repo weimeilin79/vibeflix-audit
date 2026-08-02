@@ -16,14 +16,14 @@
 # (the app runs the in-process UI-Render presenter, which calls Gemini).
 x-vertex-env: &vertex-env
   # Local mesh: plain http between containers, no credentials on any hop.
-  # The CLOUD deployment sets RUN_LOCAL=false → vibeflix_common.cloud_auth
+  # The CLOUD deployment sets RUN_LOCAL=false → vibeflix_common.platform.cloud_auth
   # attaches Google tokens to every MCP + A2A call (see deploy/instruction-*.md).
   RUN_LOCAL: "true"
   GOOGLE_CLOUD_PROJECT: pokedemo-test
   GOOGLE_CLOUD_LOCATION: global
   GOOGLE_GENAI_USE_VERTEXAI: "true"
   # Live mesh telemetry: workflow nodes + MCP tools publish started/completed
-  # events here (vibeflix_common.telemetry; unset → telemetry no-ops).
+  # events here (vibeflix_common.platform.telemetry; unset → telemetry no-ops).
   PUBSUB_TOPIC: ${PUBSUB_TOPIC:-vibeflix-mesh-events}
 
 # Mount local gcloud ADC into agent containers so Vertex calls authenticate.

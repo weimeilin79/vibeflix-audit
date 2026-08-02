@@ -3,8 +3,20 @@
 **Project:** vibeflix-audit (ADK multi-agent licensing mesh on Agent Runtime, `pokedemo-test`)
 **Date:** 2026-07-31
 **Author:** weimeilin
-**Status:** Decided — **b-hybrid**. Native transport confined to the future HITL hop; all
-request/response hops stay on the poll-based sender.
+**Status:** ⚠️ **SUPERSEDED IN PART (2026-08-02)** — historical record of the July-31 investigation.
+Its *platform* findings (SSE truncation, blocking ceiling, polling required for long hops) still
+hold. Its *conclusion* — "native is unusable, poll sender everywhere" — does **not**: the real
+blocker turned out to be the agent card's host, and three hops now run the stock ADK client in
+production. Read [`UPSTREAM-FR-a2a-client-gaps.md`](UPSTREAM-FR-a2a-client-gaps.md) first; it is
+the current account.
+
+> **What this report got wrong, and why it matters.** Every hop here was tested *from a laptop*
+> or reasoned from source. The card-host defect only bites a **gateway-attached engine**, so it
+> was invisible in that setup, and its 403s were attributed to auth and transport semantics
+> instead. Three of the conclusions below (dual-auth required, registry resolution blocked,
+> native unusable for request/response) were later refuted by in-engine measurement. They are
+> annotated inline as ❌ **RETRACTED**. This is the origin of the standing rule that an A2A or
+> gateway claim is not established until it is re-measured from inside an engine.
 
 ---
 
@@ -17,6 +29,15 @@ serve an A2A card) and then proved, in the cloud, that **native cannot do reques
 long-running hops on Agent Runtime** — not because of our code, but because of a **platform-level
 streaming gap**. Decision: **b-hybrid** — keep the poll-based sender for request/response, use
 native only where "pause on working" is actually desired (the HITL step).
+
+> **Correction (2026-08-02).** The long-hop conclusion survives; the blanket one does not.
+> "Native cannot do request/response" is true only **above ~180s**. Below that the stock client
+> works in-engine, once it is given a card naming the `.mtls` host — which the platform's own
+> card never does. Shipped: `app → ui_renderer` (stock `RemoteA2aAgent`), `orchestrator →
+> brand_style` and `orchestrator → deal_pricing` (`VibeflixRemoteA2aAgent`). The poll sender is
+> retained only for hops that can exceed the ceiling: `app → orchestrator`, `contract_finalize`,
+> `vendor_clearance → legal`. So the final shape is still a hybrid — but the line is drawn at
+> **hop duration**, not at **HITL vs request/response**.
 
 ---
 
@@ -44,7 +65,7 @@ registered the `handle_authenticated_agent_card` route and `{engine}/a2a/v1/card
 Added the flag; redeployed all 6 engines; verified all serve the card. This was a prerequisite
 for *any* native client and is worth keeping regardless of the transport decision.
 
-`VibeflixRemoteA2aAgent` (`packages/vibeflix-common/vibeflix_common/remote_agent.py`) is retained
+`VibeflixRemoteA2aAgent` (`packages/vibeflix-common/vibeflix_common/a2a/remote_agent.py`) is retained
 as a dormant library for the HITL hop. It subclasses `RemoteA2aAgent` and hides: our auth
 injection, the engine card-URL normalization, the mtls-host repoint, and a **brief-override** (see
 Finding 3).
@@ -77,8 +98,8 @@ the sent brief.
 ### 4. Brief-override exposed a deeper blocker — the POLLING gap
 With the override, finalize changed `cleared` → **`pending`** (native now *attempts* the finalize)
 but still executed no contract; legal never ran. Cause: `RemoteA2aAgent` hardcodes the a2a client
-to `polling=False` and treats a `submitted`/`working` task as a **pause**
-(`_add_mock_function_call`, `remote_a2a_agent.py:536-542`), instead of polling to terminal. Our
+to `polling=False` (`remote_a2a_agent.py:249`) and treats a `submitted`/`working` task as a **pause**
+(`_add_mock_function_call`, `remote_a2a_agent.py:526,542` (adk 2.3.0)), instead of polling to terminal. Our
 engines are **poll-based**: `message:send` returns immediately with a still-`working` task, and the
 result is retrieved by polling `GET tasks/{id}` (which is exactly what `a2a_engine_send` does). So
 native abandons any *long-running* hop at `pending`. Dispatch worked only because those agents
@@ -116,6 +137,12 @@ forwards only the opening `submitted` event and then the platform drops the conn
 
 ## Decision — b-hybrid (forced by the platform, not a preference)
 
+> ⚠️ **This decision was later revised — see the Correction in the TL;DR.** The table below is
+> still correct about *what the platform does*; it is wrong that this forces the poll sender onto
+> every request/response hop. The missing option is the one we eventually took: keep the stock
+> client and make it send **non-blocking, then poll** (`long_running=True`). That is "polling" in
+> the table's third row, but performed *by* the ADK client rather than instead of it.
+
 For Agent Runtime engines, only **one** consumption mode returns a completed long-running result:
 
 | consumer mode | long-running result? | who does it | verdict |
@@ -140,31 +167,52 @@ with real regression risk and **zero** functional gain on request/response hops.
 
 ---
 
-## Current code state (all uncommitted)
+## Code state — as of 2026-07-31 (superseded; see the next section for today)
 
 - **Kept:** the card flag in `deploy/deploy_agents_a2a.py`.
 - **~~Kept~~ → DELETED (2026-08-01 dead-code cleanup):** `VibeflixRemoteA2aAgent` (with the
   brief-override and the streaming/limitation note) sat dormant in
-  `packages/vibeflix-common/vibeflix_common/remote_agent.py` and was never wired into any
-  caller, so it went with the rest of the unused code. The findings below still stand — recover
-  the file from git history if native transport is revisited.
+  `packages/vibeflix-common/vibeflix_common/a2a/remote_agent.py` and was never wired into any
+  caller, so it went with the rest of the unused code.
 - **Removed:** the `USE_REMOTE_A2A_AGENT` flag, the native dispatch branch, the native
   `contract_finalize` branch, and the `[dispatch-native]` debug prints from
   `agents/orchestrator/agent.py`; the deploy env passthrough.
 - **Production:** poll-based sender everywhere (proven; executes contracts).
 
+## Code state — actual, 2026-08-02 (committed `ec50304`)
+
+`remote_agent.py` was **recovered from git history** (commit `d18c7c92`) and is now load-bearing,
+not dormant:
+
+| hop | transport | why |
+|---|---|---|
+| `app → ui_renderer` | stock `RemoteA2aAgent` + `a2a_card.engine_card()` | app is Cloud Run, not gateway-attached; hop is fast |
+| `orchestrator → brand_style` | `VibeflixRemoteA2aAgent` | ~18s; needs the mtls repoint + brief override |
+| `orchestrator → deal_pricing` | `VibeflixRemoteA2aAgent` | ~9-20s; same |
+| `app → orchestrator` | `a2a_engine_send` (poll) | whole audit, minutes — over the ~180s ceiling |
+| `contract_finalize` | `a2a_engine_send` (poll) | can run long |
+| `vendor_clearance → legal` | `a2a_engine_send` (poll) | multi-round clarification loop |
+
+`VibeflixRemoteA2aAgent` also gained `long_running=True`, which swaps the stock blocking send for
+the non-blocking send + poll behind an identical constructor and `ctx.run_node` call. **It has no
+production caller today** — the three long hops above call `a2a_engine_send` directly. It exists
+so a hop can be moved across the ceiling without changing its call site.
+
 ---
 
-## Forward plan
+## Forward plan — both phases are now CLOSED
 
-- **Phase 5 — native HITL (only place native is used):** legal emits a `LongRunningFunctionTool`
-  so its engine parks `input_required`; the park tunnels up via `run_node` through
-  vendor_clearance + orchestrator; the app holds `task_id`/`context_id` and resumes the same task
-  with a function-response instead of the `_SESSIONS` re-submit. NOTE: the same platform SSE gap
-  may affect how a parked state is observed — validate the park is retrievable via poll, not only
-  via stream, before building on it.
-- **Phase 6 — durability:** move the app's in-memory `_SESSIONS` pending-HITL state to Firestore so
-  a paused audit survives an app restart. Valuable independently of Phase 5.
+- **Phase 5 — native HITL: ❌ investigated, NOT adopted.** The park/resume mechanism itself works
+  (legal parked in `INPUT_REQUIRED` and resumed to execute `LC-928738`), but the mesh's real HITL
+  moment is new-vendor onboarding, which lives in vendor_clearance's **skill-driven reasoner run
+  via `ctx.run_node`** — there the LLM only sees the SkillToolset's management tools, so a
+  `LongRunningFunctionTool` is not callable (`Tool 'request_operator_input' not found`). The
+  existing report-based `needs_input` + re-submit HITL is retained. All experiment code was
+  reverted. Full write-up: [`phase5-change-scope.md`](phase5-change-scope.md).
+- **Phase 6 — durability: ✅ DONE.** The app's pending-HITL state moved from the in-memory
+  `_SESSIONS` dict to Firestore (collection `audit_sessions`, `agents/app.py`), so a paused audit
+  survives an app restart and is replica-safe; the dict remains as the local-dev fallback.
+  Validated end-to-end.
 
 ---
 
@@ -244,10 +292,16 @@ both measured and documented in `a2a_engine.py`:
 1. **The mtls host** — the gateway authorizes only the destination it has registered; the plain
    host is refused `403 Egress request is not authorized`. → **Fixable**: `base_url` is
    overridable, e.g. `vertexai.Client(http_options=HttpOptions(base_url="https://us-central1-aiplatform.mtls.googleapis.com"))` (confirmed accepted).
-2. **Dual auth** — `Proxy-Authorization` for the gateway *plus* `Authorization` for the target
-   endpoint. → **Not fixable from outside**: the `httpx.AsyncClient` and its single header are
-   constructed *inside* the wrapper. Sending only `Authorization` is the exact configuration
-   that produced the 401s documented in `a2a_engine.py`.
+   *(2026-08-02: accepted, but **it did not work** — the fetched card's interface entry still won
+   inside `ClientFactory`. Overriding `base_url` alone is not sufficient; you must supply the
+   `AgentCard` object. See FINDING A "Secondary" in the FR.)*
+2. ~~**Dual auth** — `Proxy-Authorization` for the gateway *plus* `Authorization` for the target
+   endpoint. → **Not fixable from outside**.~~
+   ❌ **RETRACTED 2026-08-02.** Measured in-engine: a **single** `Authorization` header on the
+   `.mtls` host returns **200**, against three peer agents, on both `message:send` and
+   `message:stream`. `Proxy-Authorization` is **not** required. The 401s attributed to it were
+   most likely the *missing* `Authorization` header that the same change also introduced. This
+   removes the blocker — the wrapper's single-header client is fine; only the **host** was wrong.
 
 Also note the SDK reads `_credentials.token` **once per call** with no re-mint, whereas
 `a2a_engine._headers()` refreshes per request and force-refreshes on a 401 — relevant given the
@@ -256,6 +310,13 @@ engine credential-expiry history.
 **Verdict:** viable for **app→engine** today; **not** for **engine→engine** without patching the
 wrapper's client construction. Keep `a2a_engine.py`. Re-test if the wrapper ever accepts a
 caller-supplied `httpx_client`.
+
+> **Corrected 2026-08-02.** The verdict held for the wrong reason. Engine→engine was blocked by
+> the **card's host**, not by the single `Authorization` header (see the retraction above), and it
+> is reachable today — not through `_genai`, but through ADK's `RemoteA2aAgent` handed a
+> self-built `AgentCard` pointing at `.mtls`. What genuinely still rules `_genai` out for
+> engine→engine is that its wrapper assigns `a2a_agent_card.url` from `base_url` while the fetched
+> card's interface entry takes precedence, so the host cannot be steered from outside.
 
 ## The documented pattern — and why it doesn't close the gap either
 
@@ -284,9 +345,16 @@ doesn't work for us, for two reasons this report already established and the doc
 
 1. `get_remote_a2a_agent` returns a **`RemoteA2aAgent`** → Finding 4: pauses on `working`, cannot
    poll a long-running task to terminal. Auth extensibility does not change transport semantics.
-2. Registry **resolution** from inside a gateway-attached engine calls `agentregistry.mtls`, which
-   the gateway filters → 403 (see `a2a_engine.py` header). The doc's sample also defaults
-   `location` to `"global"`; our registry is **regional** (`us-central1`).
+   *(Still true — but it only disqualifies hops that run **long**. Fast hops are fine, and three
+   now run on `RemoteA2aAgent` in production.)*
+2. ~~Registry **resolution** from inside a gateway-attached engine calls `agentregistry.mtls`,
+   which the gateway filters → 403.~~
+   ❌ **RETRACTED 2026-08-02.** Measured in-engine, `list_agents()` returned **10 agents** and
+   successfully built a `RemoteA2aAgent`. The original 403 was a **grant gap** — `iap.egressor`
+   was missing on the `gcp-agentregistry` endpoints (all four variants), which our own
+   `grant_agent_iam.sh` comments already admitted. The gateway does not filter the registry.
+   *(Unretracted: the doc's sample does default `location` to `"global"` while our registry is
+   regional — `us-central1`.)*
 
 ## The three-way picture
 
@@ -294,9 +362,12 @@ doesn't work for us, for two reasons this report already established and the doc
 |---|---|---|
 | ADK `AgentRegistry.get_remote_a2a_agent(httpx_client=…)` — the documented pattern | ✅ caller owns the httpx client; `header_provider` too | ❌ `RemoteA2aAgent` pauses on `working` |
 | Vertex `_genai` `agent_engines` → `on_message_send` + `on_get_task` | ❌ client built inside the wrapper; single `Authorization`; token read once per call | ✅ verified live |
-| **`vibeflix_common/a2a_engine.py`** | ✅ dual header, per-request refresh, 401 re-mint | ✅ |
+| **`vibeflix_common/a2a/engine.py`** | ✅ dual header, per-request refresh, 401 re-mint | ✅ |
 
-**Neither SDK surface provides both halves. Ours does.** That is a stronger argument for b-hybrid
+**Neither SDK surface provides both halves. Ours does.** *(Still true of the SDKs as shipped —
+but the gap is bridgeable: subclassing `RemoteA2aAgent` and overriding `_run_async_impl` to send
+non-blocking and poll gives you both halves without leaving the framework. That is what we
+eventually did.)* That is a stronger argument for b-hybrid
 than the body of this report makes: the choice isn't "hand-rolled vs. SDK", it's that the two SDK
 paths each supply one half of what an in-engine, long-running A2A hop needs.
 

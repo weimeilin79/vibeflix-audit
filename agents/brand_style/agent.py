@@ -20,11 +20,11 @@ from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from vibeflix_common.mcp_clients import mcp_toolset
-from vibeflix_common.models import gemini
-from vibeflix_common.schema_guard import make_schema_guard
-from vibeflix_common.image_input import require_image_before_model
-from vibeflix_common.tool_guard import make_toolset_health_guard
+from vibeflix_common.agent.mcp_clients import mcp_toolset
+from vibeflix_common.agent.models import gemini
+from vibeflix_common.agent.schema_guard import make_schema_guard
+from vibeflix_common.agent.image_input import require_image_before_model
+from vibeflix_common.agent.tool_guard import make_toolset_health_guard
 
 # Load this agent's Vertex AI / project configuration from its local .env.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -79,7 +79,7 @@ class BrandStyleReport(BaseModel):
 
 brand_style_agent = LlmAgent(
     name="brand_style_compliance_agent",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description=(
         "Verifies the submitted product artwork depicts the licensed "
         "character/trademark under audit, extracts its printed text and classifies "

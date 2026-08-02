@@ -836,7 +836,7 @@ export default function ChatAudit() {
       // A2A. A2A hands back its RESULT, not its internal step events — so the app can no
       // longer stream a `__plan__` + per-agent reports as they happen, and the graph
       // would sit empty until the run finished. The orchestrator publishes started/
-      // completed for each agent it dispatches (vibeflix_common.telemetry), so the graph
+      // completed for each agent it dispatches (vibeflix_common.platform.telemetry), so the graph
       // builds itself from the mesh feed instead. Same mechanism the legal node above
       // already used.
       if (e.node && !e.tool && e.source === 'orchestrator') {

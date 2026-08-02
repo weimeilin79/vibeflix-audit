@@ -26,11 +26,11 @@ from google.adk.workflow import Workflow, node
 from google.adk.agents.context import Context
 from google.adk.events.event import Event
 
-from vibeflix_common.mcp_clients import mcp_toolset
-from vibeflix_common.models import gemini
+from vibeflix_common.agent.mcp_clients import mcp_toolset
+from vibeflix_common.agent.models import gemini
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
 # when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.telemetry import instrument_node
+from vibeflix_common.platform.telemetry import instrument_node
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "deal-pricing-audit"
@@ -74,7 +74,7 @@ def _parse(text: str) -> dict:
 # ---- the pricing reasoner: rate card -> expected -> per-component compare ----
 pricing_reasoner = LlmAgent(
     name="pricing_reasoner",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Reasons the deal-pricing audit: expected vs agreed royalty / advance / MG.",
     instruction=(
         "You are the Deal Pricing reasoner for the Vibeflix pipeline. The deal is: character "
@@ -103,7 +103,7 @@ pricing_reasoner = LlmAgent(
 # ---- the resolver: adjudicate ONE unresolved discrepancy against the rules ----
 resolver = LlmAgent(
     name="pricing_resolver",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Adjudicates one unresolved pricing discrepancy against the rate-card rules.",
     instruction=(
         "You are given ONE unresolved pricing discrepancy plus the rate-card rules and deal "

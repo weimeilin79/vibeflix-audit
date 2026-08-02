@@ -33,12 +33,12 @@ from google.adk.workflow import Workflow, node
 from google.adk.agents.context import Context
 from google.adk.events.event import Event
 
-from vibeflix_common.mcp_clients import mcp_toolset
-from vibeflix_common.models import gemini
+from vibeflix_common.agent.mcp_clients import mcp_toolset
+from vibeflix_common.agent.models import gemini
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC (no-op
 # when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.cloud_auth import maybe_auth, resolve_a2a_rpc_url, run_local
-from vibeflix_common.telemetry import instrument_node, emit_event
+from vibeflix_common.platform.cloud_auth import maybe_auth, resolve_a2a_rpc_url, run_local
+from vibeflix_common.platform.telemetry import instrument_node, emit_event
 
 _SKILL_DIR = pathlib.Path(__file__).parent / "skills" / "vendor-clearance"
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -59,7 +59,7 @@ _LEGAL_URL = os.environ.get("LEGAL_A2A_URL", "").rstrip("/")
 async def _call_legal_cloud(brief: str) -> str:
     """CLOUD: call the legal engine's A2A endpoint DIRECTLY (LEGAL_A2A_URL is the
     engine resource URL). Registry resolution 403s from an attached engine."""
-    from vibeflix_common.a2a_engine import a2a_engine_send
+    from vibeflix_common.a2a.engine import a2a_engine_send
     return await a2a_engine_send(_LEGAL_URL, brief)
 
 
@@ -112,7 +112,7 @@ class ClearanceReport(BaseModel):
 # The clearance REASONER — conversational (no output_schema → no malformed finalizer).
 clearance_reasoner = LlmAgent(
     name="clearance_reasoner",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Reasons the vendor/character/territory/category clearance and vendor admin.",
     instruction=(
         "You are the Vendor & Licensing Clearance reasoner for the Vibeflix pipeline. The "
@@ -153,7 +153,7 @@ clearance_reasoner = LlmAgent(
 # and forth (Flow A) without ever leaving this service.
 vendor_liaison = LlmAgent(
     name="vendor_liaison",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Answers the legal agent's questions about a vendor from the licensing registry.",
     instruction=(
         "The legal clearance agent has asked a question about a vendor while drafting a "

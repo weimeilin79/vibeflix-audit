@@ -21,12 +21,12 @@ from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
 from google.adk.tools import skill_toolset
 
-from vibeflix_common.mcp_clients import mcp_toolset
-from vibeflix_common.models import gemini
+from vibeflix_common.agent.mcp_clients import mcp_toolset
+from vibeflix_common.agent.models import gemini
 # Live mesh telemetry: emit a step per tool call so the console's Workflow graph shows what
 # legal actually DOES (RAG doc search, amendment drafting, cert/customs/royalty/insurance
 # checks, contract upsert) as lit rows in its box. No-op when PUBSUB_TOPIC is unset.
-from vibeflix_common.telemetry import emit_event
+from vibeflix_common.platform.telemetry import emit_event
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -116,7 +116,7 @@ def _tool_completed(tool, args, tool_context, tool_response):
 
 legal_agent = LlmAgent(
     name="legal_clearance_agent",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Clears the legal work for a newly-onboarded vendor × category and "
                 "executes the licensing contract. In this demo only vendor_clearance "
                 "hands off to it, but any agent could.",

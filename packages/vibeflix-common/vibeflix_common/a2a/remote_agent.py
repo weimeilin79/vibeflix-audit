@@ -16,7 +16,7 @@ tunneling like any ADK agent. What it hides:
 
 A caller writes the SAME thing as the upstream sample, just with our env URL:
 
-    from vibeflix_common.remote_agent import VibeflixRemoteA2aAgent
+    from vibeflix_common.a2a.remote_agent import VibeflixRemoteA2aAgent
 
     legal_agent = VibeflixRemoteA2aAgent(
         name="legal",
@@ -58,7 +58,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.events.event import Event
 from google.genai import types as _genai_types
 
-from .cloud_auth import is_engine_url, maybe_auth
+from ..platform.cloud_auth import is_engine_url, maybe_auth
 
 _DEFAULT_TIMEOUT = 300.0
 _CARD_SUFFIX = "/a2a/v1/card"
@@ -117,7 +117,7 @@ class VibeflixRemoteA2aAgent(RemoteA2aAgent):
             return
 
         from google.genai import types as _t
-        from .a2a_engine import a2a_engine_send
+        from .engine import a2a_engine_send
 
         # Same brief extraction the override below uses, so both transports send the same thing.
         text = ""
@@ -230,7 +230,7 @@ class VibeflixRemoteA2aAgent(RemoteA2aAgent):
 # vendor_clearance/agent.py :: the legal node calls `_call_legal(brief)` -> a2a_engine_send.
 # The idiomatic swap keeps the caller's ctx (module-level agent, driven per call):
 #
-#     from vibeflix_common.remote_agent import VibeflixRemoteA2aAgent
+#     from vibeflix_common.a2a.remote_agent import VibeflixRemoteA2aAgent
 #     _legal_agent = VibeflixRemoteA2aAgent(name="legal", agent_card=_LEGAL_URL,
 #                                           description="Legal clearance over A2A.")
 #     ...

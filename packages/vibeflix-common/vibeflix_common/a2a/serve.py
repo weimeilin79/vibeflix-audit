@@ -10,7 +10,7 @@ Sourcing Orchestrator can call it remotely. Driven by environment:
                   (compose: the service name; Cloud Run: the *.run.app domain)
     A2A_PROTOCOL  http (default) or https (set https for Cloud Run)
 
-Run:  python -m agents.serve_a2a
+Run:  python -m vibeflix_common.a2a.serve
 """
 
 import asyncio
@@ -29,7 +29,7 @@ from google.adk.auth.credential_service.in_memory_credential_service import InMe
 from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
-from vibeflix_common.health import probe_mcp_from_env, banner
+from vibeflix_common.platform.health import probe_mcp_from_env, banner
 
 # `orchestrator` is here because it is an INDEPENDENT agent, not something the app
 # hosts: the app is a thin A2A client in BOTH worlds (compose container :8006 / the
@@ -110,7 +110,7 @@ def build_app():
     return a2a_app
 
 
-# Module-level app so `uvicorn agents.serve_a2a:app` also works.
+# Module-level app so `uvicorn vibeflix_common.a2a.serve:app` also works.
 app = build_app()
 
 

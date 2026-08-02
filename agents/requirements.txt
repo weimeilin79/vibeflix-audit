@@ -9,7 +9,7 @@ python-dotenv>=1.0.0
 # google-adk 2.3.0's McpToolset. 1.28.0 is the version verified in .venv.
 mcp>=1.0,<2
 # Pinned: --pre would otherwise pull a newer pre-release where McpToolset moved
-# (breaks vibeflix_common.mcp_clients). 2.3.0 is the version verified in .venv.
+# (breaks vibeflix_common.agent.mcp_clients). 2.3.0 is the version verified in .venv.
 # NO `gcp` extra here on purpose: it drags in the whole google-cloud-aiplatform tree
 # (pyarrow/bigquery/bigtable/dataplex, ~200 MB) and THIS file is installed by every agent
 # image. The agents get `vertexai` from the Agent Runtime env at runtime, so they don't
@@ -27,5 +27,5 @@ google-cloud-storage>=2.0.0
 # Audit history persistence (app.py) — collection `audit_history` in FIRESTORE_DATABASE.
 google-cloud-firestore>=2.16.0
 python-multipart>=0.0.9
-# Live mesh telemetry (vibeflix_common.telemetry -> Pub/Sub node/tool events).
+# Live mesh telemetry (vibeflix_common.platform.telemetry -> Pub/Sub node/tool events).
 google-cloud-pubsub>=2.21.0

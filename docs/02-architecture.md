@@ -120,7 +120,7 @@ cause of most of what *looked* broken elsewhere — slow runs, ~1,900 "error" sp
 blocked for 7 minutes, `recovery` re-running agents that had never failed.
 
 The fix: the engines keep their tasks **outside** the replicas, in a store hosted by the
-app (`vibeflix_common/task_store.py` → `/api/taskstore/{id}`). Any replica can now serve
+app (`vibeflix_common/a2a/task_store.py` → `/api/taskstore/{id}`). Any replica can now serve
 any task — misses drop to **0**, and a full audit goes **5m01s → 1m44s**.
 
 Why hosted by the app and not the *engines* hitting a database directly: the Agent Gateway

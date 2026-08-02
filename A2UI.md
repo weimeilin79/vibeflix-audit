@@ -42,7 +42,7 @@ Three parties, three jobs:
         │     emits <a2ui-json> beginRendering + surfaceUpdate  (the real v0.8 wire)
         │     instruction = SDK-generated schema + skills/render-a2ui/SKILL.md
         │        ▼
-        │   parse_panel()   (vibeflix_common/a2ui_format.py → a2ui-agent-sdk)
+        │   parse_panel()   (vibeflix_common/agent/a2ui_format.py → a2ui-agent-sdk)
         │     unwrap the blocks · heal the JSON · VALIDATE against the spec
         │        │ invalid / blank ──► panels_fallback ("<name> — <status>")
         │        ▼
@@ -65,7 +65,7 @@ be self-contained, and why the root component is never re-sent.
 
 | File | Role |
 |---|---|
-| `packages/vibeflix-common/vibeflix_common/a2ui_format.py` | **the A2UI contract**, wrapping `a2ui-agent-sdk`: `render_instruction` (build the agent's prompt), `parse_panel` (heal + validate), `rewrite_ids` (catalog-driven id namespacing), `text_of` |
+| `packages/vibeflix-common/vibeflix_common/agent/a2ui_format.py` | **the A2UI contract**, wrapping `a2ui-agent-sdk`: `render_instruction` (build the agent's prompt), `parse_panel` (heal + validate), `rewrite_ids` (catalog-driven id namespacing), `text_of` |
 | `agents/ui_renderer/agent.py` | the **author** — an `LlmAgent` with no tools and no `output_schema` |
 | `agents/ui_renderer/skills/render-a2ui/SKILL.md` | the **layout procedure** (what to build) + the second, non-A2UI task |
 | `agents/a2ui_surface.py` | the **surface** — scaffold, panel slotting, closing line, final clearance report, `panels_fallback` |

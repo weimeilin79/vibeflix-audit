@@ -132,7 +132,7 @@ for A in $AGENTS; do
 done
 
 # ── 1b. PUB/SUB PUBLISHER on the mesh topic ───────────────────────────────────
-# The agents publish node/tool started/completed events (vibeflix_common.telemetry) that
+# The agents publish node/tool started/completed events (vibeflix_common.platform.telemetry) that
 # drive the console's LIVE workflow graph and MCP tool LEDs (app: Pub/Sub → /api/mesh/events).
 # Without this the events are silently dropped and the console's graph + LEDs stay DARK,
 # with no error anywhere — the agent still runs fine, so it looks like a frontend bug.

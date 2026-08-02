@@ -120,7 +120,7 @@ it's on, forces its own access-token transport. **There is no value of the flag 
 for the session service:
 
 ```python
-# vibeflix_common/mcp_clients.py — runs at import, cloud only
+# vibeflix_common/agent/mcp_clients.py — runs at import, cloud only
 def _disable_adk_mcp_mtls():
     # ADK builds an mTLS transport that authenticates MCP with the agent ACCESS
     # token and replaces my httpx factory. My MCP servers are plain IAM Cloud Run,
@@ -159,7 +159,17 @@ different verifiers with different trust models:
 |---|---|---|---|
 | Agent → **MCP** (Cloud Run IAM) | audience-bound **ID token** | locally (JWT) | impersonate `MCP_INVOKER_SA` |
 | Agent → **Session** (Google API, mTLS) | cert-bound **access token** | remotely, cert-bound | `google.auth`, bound to SPIFFE cert |
-| Agent → **Agent** (A2A) | `Proxy-Authorization` + `Authorization` | gateway, then target | gateway token + minted target token |
+| Agent → **Agent** (A2A) | a single `Authorization`, **to the `.mtls` host** | gateway, then target | minted target token |
+
+> **Corrected 2026-08-02.** That last row used to read `Proxy-Authorization` + `Authorization`,
+> and the A2A client sent both. Measured in-engine against three peer agents, on both
+> `message:send` and `message:stream`: **`.mtls` + a single `Authorization` → 200.**
+> `Proxy-Authorization` is not required. What actually decides the outcome is the **host** — the
+> gateway authorizes `.mtls` and refuses the plain one with `403 Egress request is not
+> authorized`. The 401 that motivated adding the second header was most likely the *missing*
+> `Authorization`, which the same change also introduced. The extra header is harmless and still
+> sent; the claim that it was necessary is withdrawn. See
+> [`UPSTREAM-FR-a2a-client-gaps.md`](UPSTREAM-FR-a2a-client-gaps.md).
 
 ---
 
@@ -174,7 +184,8 @@ right verifier — the plumbing the platform's defaults left undone or actively 
   Cloud Run target.
 - A **monkeypatch of ADK internals** (`_get_mtls_transport → None`) to stop the framework overriding my auth.
 - A two-header A2A engine client, plus token-refresh mid-poll (a long legal escalation outlives a cached
-  token).
+  token). *(The second header turned out to be unnecessary — see the correction in §3. The
+  per-request re-mint is not: it is what lets a multi-minute hop outlive its token.)*
 - A cluster of **global env flags with cross-subsystem side effects** that must be set as a matched set and
   read back on every engine after every deploy.
 

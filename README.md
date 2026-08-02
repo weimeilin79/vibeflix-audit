@@ -30,7 +30,7 @@ The workspace decouples analytical logic from rendering layers to ensure clean d
 3. **Decoupled MCP Servers**: Structured as independent, containerizable domain servers:
    - `mcp_licensing`: Vendor registry, exclusivity contracts, and trademark records (see *Data sources & schemas*).
    - `mcp_market`: Global e-commerce scraper intelligence, Ledger capacity checkers, Governance telemetry logging.
-4. **Shared A2A Task Store**: every A2A call is `POST message:send` then `GET /a2a/v1/tasks/{id}` polled to completion — so the *task* is the unit of state the whole mesh runs on. Agent Runtime scales each engine to several replicas behind a load balancer with **no session affinity**, and the A2A server's default store is a dict **private to one replica**: the `POST` lands on replica *A*, the `GET` is balanced to *B*, and you get `404 Task not found` on **86.8% of polls** (measured: 1,228 / 1,415). That one fact was the hidden cause of most of what looked broken elsewhere — slow runs, ~1,900 "error" spans, a chat blocked for 7 minutes, and `recovery` re-running agents that had never failed. So the engines keep their tasks **outside** the replicas, in a store hosted by the app (`vibeflix_common/task_store.py` → `/api/taskstore/{id}`, wired via `A2aAgent(task_store_builder=…)`). Any replica can now serve any task: misses → **0**, a full audit **5m01s → 1m44s**.
+4. **Shared A2A Task Store**: every A2A call is `POST message:send` then `GET /a2a/v1/tasks/{id}` polled to completion — so the *task* is the unit of state the whole mesh runs on. Agent Runtime scales each engine to several replicas behind a load balancer with **no session affinity**, and the A2A server's default store is a dict **private to one replica**: the `POST` lands on replica *A*, the `GET` is balanced to *B*, and you get `404 Task not found` on **86.8% of polls** (measured: 1,228 / 1,415). That one fact was the hidden cause of most of what looked broken elsewhere — slow runs, ~1,900 "error" spans, a chat blocked for 7 minutes, and `recovery` re-running agents that had never failed. So the engines keep their tasks **outside** the replicas, in a store hosted by the app (`vibeflix_common/a2a/task_store.py` → `/api/taskstore/{id}`, wired via `A2aAgent(task_store_builder=…)`). Any replica can now serve any task: misses → **0**, a full audit **5m01s → 1m44s**.
 
    Why *behind the app* and not the engines hitting a database directly: the Agent Gateway governs **HTTP** egress and cannot match a gRPC channel or a raw TCP socket, which rules out the *engines* reaching Cloud SQL/Postgres or Redis ([G8](deploy/docs/GOTCHAS.md#g8--the-agent-gateway-governs-http-egress-only)). The **app**, though, backs these endpoints with **Firestore** (collection `a2a_tasks`), running each op in a worker thread — so the shared store is **durable** across a restart and no longer split-brains across app replicas. The endpoints stay gated by a shared secret (`TASK_STORE_KEY`) because the app is deliberately public; if the app is ever unreachable the engines degrade to per-replica memory with a loud warning rather than failing the run. (The app is still one instance ([G5](deploy/docs/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1)) for its *other* in-memory state, not the task store.)
 
@@ -78,7 +78,7 @@ and it's not in the orchestrator's fan-out. Every box is its own container/insta
 ### A2A transport — the stock ADK client, and the two places it needs help
 
 Agent-to-agent calls use ADK's own **`RemoteA2aAgent`**, wrapped as
-`VibeflixRemoteA2aAgent` (`vibeflix_common/remote_agent.py`). The wrapper is a subclass, so
+`VibeflixRemoteA2aAgent` (`vibeflix_common/a2a/remote_agent.py`). The wrapper is a subclass, so
 every call site is idiomatic ADK — `ctx.run_node(agent, brief)` — and the two workarounds it
 carries are invisible to callers. Both exist for reasons **measured in production, from inside a
 gateway-attached engine** (2026-08-02):
@@ -95,13 +95,24 @@ the callee is still working normally**. The same `message:send` *without* blocki
 0.9s with a task id, and polling `tasks/{id}` retrieves the completed result. So:
 
 ```python
-brand_style = VibeflixRemoteA2aAgent("brand_style_compliance_agent", BRAND_URL)
-legal       = VibeflixRemoteA2aAgent("legal", LEGAL_URL, long_running=True)   # sends + polls
+# agents/orchestrator/agent.py — one constructor for every hop, no transport branch
+_LONG_RUNNING_A2A = {"vendor_clearance_agent"}          # fans into legal's Q&A loop
+
+return VibeflixRemoteA2aAgent(name=name, description=description, agent_card=base,
+                              long_running=name in _LONG_RUNNING_A2A)
 ```
 
-`long_running=True` changes only the pacing — same protocol, same card handling, same auth.
-Hops that can exceed the ceiling (`legal`, `contract_finalize`, `app → orchestrator`) set it;
-the fast dispatch agents (~9-20s) deliberately do not, so the demo exercises the prebuilt client.
+`long_running=True` changes only the pacing — same protocol, same card handling, same auth, same
+`ctx.run_node`. That uniformity is the point: moving a hop across the ~180s ceiling is a boolean,
+not a different client.
+
+| hop | transport |
+|---|---|
+| `orchestrator → brand_style`, `→ deal_pricing` | stock blocking send (~9-20s) |
+| `orchestrator → vendor_clearance` | `long_running=True` — non-blocking send + poll |
+| `app → ui_renderer` | stock `RemoteA2aAgent` + a card we build (app is Cloud Run, so the plain host is fine) |
+| `contract_finalize`, `app → orchestrator`, `vendor_clearance → legal` | `a2a_engine_send` directly — these are one-shot sends from inside a tool or from outside the mesh, not `ctx.run_node` dispatches, so there is no agent for the subclass to be |
+
 Full evidence and the upstream report: [`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
 
 ### The shared A2A task store (and why it exists)
@@ -127,7 +138,7 @@ failed.
 
 **Fix:** keep the tasks *outside* the replicas. `vertexai`'s `A2aAgent` template accepts a
 `task_store_builder`, so every engine now shares one store hosted by the app
-(`vibeflix_common/task_store.py` → `PUT/GET/DELETE /api/taskstore/{id}`). Any replica can
+(`vibeflix_common/a2a/task_store.py` → `PUT/GET/DELETE /api/taskstore/{id}`). Any replica can
 now serve any task.
 
 | store | why not |
@@ -195,8 +206,10 @@ vibeflix/
 ├── packages/
 │   └── vibeflix-common/        # Shared package (installed by every service, so each
 │                               # agent/MCP image is self-contained & independently
-│                               # deployable): mcp_clients, schema_guard, image_input,
-│                               # memory, serve_a2a, registry. Extras: [agents] / [mcp].
+│                               # deployable). Four subpackages, grouped by who imports
+│                               # them — a2a/ (transport), agent/ (ADK building blocks),
+│                               # mcpserver/ (MCP-only), platform/ (both sides).
+│                               # Extras: [agents] / [mcp]. See docs/03-common-lib.md.
 ├── deploy/                     # Dockerfiles (app/agent/mcp) + Cloud Run / Agent Engine guide
 │                               #   + setup_legal_rag.py (provision the legal RAG corpus)
 ├── docker-compose.yml          # Local 10-service topology (+ legal :8005)
@@ -642,7 +655,7 @@ and hand-writes only what is genuinely ours (the surface scaffold and the panel 
 ```
 ui_renderer (LLM, :8004)  ──A2A──►  <a2ui-json> surfaceUpdate {components} # the AGENT emits A2UI
                                           │
-app.py ─► vibeflix_common/a2ui_format.py ─► heal + VALIDATE (a2ui-agent-sdk)  # spec-checked
+app.py ─► vibeflix_common/agent/a2ui_format.py ─► heal + VALIDATE (a2ui-agent-sdk)  # spec-checked
        └► agents/a2ui_surface.py         ─► slot into card{i} + stream (SSE)  # ids namespaced
                                           │
 browser ──► @a2ui/react + @a2ui/web_core ──► rendered panels                  # official RENDERER
@@ -654,7 +667,7 @@ browser ──► @a2ui/react + @a2ui/web_core ──► rendered panels        
   `Text`/`Card`/`Column`/`Divider`). We supply only the role + the layout procedure. No
   `output_schema`: A2UI blocks are a text format, and the model is given the schema in the
   prompt instead.
-- **Server (app) — validates, does not author.** `vibeflix_common/a2ui_format.py` wraps the
+- **Server (app) — validates, does not author.** `vibeflix_common/agent/a2ui_format.py` wraps the
   SDK: unwrap the blocks, heal damaged JSON, and validate against the spec (unknown
   components, bad `usageHint`, dangling id references all rejected → fallback).
   `agents/a2ui_surface.py` then owns only what is the app's business: the surface scaffold

@@ -15,7 +15,7 @@ mcp = FastMCP("Brand Style Compliance Registry")
 # Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
 # (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
 # registration, so new tools are instrumented automatically.
-from vibeflix_common.telemetry import instrument_fastmcp, emit_event
+from vibeflix_common.platform.telemetry import instrument_fastmcp, emit_event
 instrument_fastmcp(mcp, source="mcp_brand_style")
 
 
@@ -39,7 +39,7 @@ def _pipeline_step(name: str):
 # ===========================================================================
 # Internal deterministic checks (not exposed as tools — steps of the pipeline)
 # ===========================================================================
-from vibeflix_common.registry import registry_get
+from vibeflix_common.platform.registry import registry_get
 
 _spell = SpellChecker()
 
@@ -243,6 +243,6 @@ if __name__ == "__main__":
         )
         # Cloud-only OTel tracing (Cloud Trace + Application Topology node);
         # no-op locally and without the otel packages.
-        from vibeflix_common.otel import setup_otel
+        from vibeflix_common.mcpserver.otel import setup_otel
         setup_otel(os.environ.get("K_SERVICE", "mcp_brand_style"))
         mcp.run(transport=transport)

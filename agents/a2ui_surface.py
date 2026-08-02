@@ -1,7 +1,7 @@
 """Deterministic A2UI assembly (app-side): the audit surface + panel slotting.
 
 The remote UI-Render agent (its own :8004 A2A service) RENDERS the varied reports: it emits
-A2UI itself, which app.py validates against the spec (`vibeflix_common.a2ui_format`, backed by
+A2UI itself, which app.py validates against the spec (`vibeflix_common.agent.a2ui_format`, backed by
 the official a2ui-agent-sdk) and hands here as `{root, components}`. This module owns only the
 parts that are the APP's business, not the agent's:
 
@@ -19,7 +19,7 @@ release renamed them to updateComponents / createSurface). Everything streamed f
 incremental — the renderer patches components into the live surface by id.
 """
 
-from vibeflix_common.a2ui_format import rewrite_ids
+from vibeflix_common.agent.a2ui_format import rewrite_ids
 
 
 def _fmt(n) -> str:
@@ -120,7 +120,7 @@ def stream_panel(i, panel):
     """surfaceUpdate that fills panel slot `i` with the AGENT-EMITTED A2UI.
 
     `panel` is `{root, components}` — components already in WIRE form, straight from the
-    ui_renderer (parsed and validated against the spec by `vibeflix_common.a2ui_format`) or
+    ui_renderer (parsed and validated against the spec by `vibeflix_common.agent.a2ui_format`) or
     from `panels_fallback`. The app does NOT build the layout; it only slots the panel into
     position i: the panel takes the id `card{i}` (which the surface's root Column already
     lists) and every other id is namespaced `p{i}_…` so panels can't collide on the generic

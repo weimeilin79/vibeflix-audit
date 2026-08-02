@@ -35,7 +35,7 @@ AGENTS = ("brand_style", "vendor_clearance", "deal_pricing")
 async def run(agent_name: str, image: str, market: str, volume: int, image_uri: str) -> None:
     module = importlib.import_module(f"agents.{agent_name}.agent")
     agent = module.root_agent
-    from vibeflix_common.image_input import content_with_image
+    from vibeflix_common.agent.image_input import content_with_image
 
     app = App(name=f"test_{agent_name}", root_agent=agent)
     runner = InMemoryRunner(app=app)

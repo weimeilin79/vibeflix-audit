@@ -90,10 +90,11 @@ That is a controlled A/B: the only variable is which host the card names.
 
 **Caveats before adopting it wholesale** — this proves the *transport*, not a drop-in replacement:
 - the in-engine test used a **fast** target (~9s). A long hop in-engine through `RemoteA2aAgent`
-  is untested (a 180s hop did work from a laptop).
+  **fails** — see FINDING D. Anything that can exceed ~180s needs a non-blocking send plus poll.
 - **Finding 3** of `a2a-native-transport-findings.md` still applies:
-  `_construct_message_parts_from_session` discards the explicit brief passed to `run_node`, which
-  is what `contract_finalize` depends on. That is independent of transport.
+  `_construct_message_parts_from_session` discards the explicit brief passed to `run_node`. That
+  is independent of transport, and any hop dispatched via `ctx.run_node(agent, brief)` needs the
+  override.
 
 ## Requested fix
 
@@ -148,14 +149,22 @@ Recorded so reviewers don't chase them. All were refuted by production testing.
 |---|---|
 | Registry resolution 403s from a gateway-attached engine | ❌ **Refuted** — `list_agents()` in-engine returned 10 agents and built a `RemoteA2aAgent`. Our original 403 was a **grant gap** (`gcp-agentregistry`, all 4 variants), which our own IAM script's comments already admit. |
 | `Proxy-Authorization` is required for in-engine A2A | ❌ **Refuted** — mtls + `Authorization` alone → 200. |
-| `RemoteA2aAgent` can't complete a long-running hop | ❌ **Refuted** — a 180.4s orchestrator hop returned the full 7590-char result. |
-| A platform deadline truncates a blocking `message:send` | ❌ **Not reproduced** — held 180s. |
+| `RemoteA2aAgent` can't complete a long-running hop | ⚠️ **Refuted from a laptop, then RE-CONFIRMED in-engine.** The 180.4s / 7590-char success was a **laptop** run, which is not gateway-attached. In-engine the same hop returns **empty after ~180s**, and FINDING D below shows why. **The original claim stands for the environment that matters.** |
+| A platform deadline truncates a blocking `message:send` | ⚠️ **Superseded by FINDING D.** "Held 180s" was the laptop again. In-engine it does not merely hold — it **fails** at ~180s with `400 FAILED_PRECONDITION`. |
 | The gateway refuses `message:stream` | ❌ **Refuted** — raw SSE to `.mtls` → 200 on all three peers. |
 | The card's `capabilities.streaming: true` steers clients into a refused path | ❌ **Refuted** — a `streaming=False` target still 403'd. |
 
-The failure that started all of this — `contract_finalize` returning `cleared` with no contract —
-is best explained by our own **Finding 3**: `RemoteA2aAgent._construct_message_parts_from_session`
-rebuilds the outgoing message from session events and **discards the explicit brief**.
+> **Two of these retractions were themselves wrong**, and the reason is the same both times:
+> they were established from a **laptop**, which is not behind the Agent Gateway and does not hit
+> the ~180s ceiling. Only the four ❌ rows are safe. This is why every claim in this report is
+> now labelled with *where* it was measured.
+
+**On the failure that started all of this** — `contract_finalize` returning `cleared` with no
+contract — an earlier draft blamed our **Finding 3** (the brief-drop). **That attribution is
+withdrawn.** `contract_finalize` calls `a2a_engine_send` directly and never constructs a
+`RemoteA2aAgent`, so Finding 3 cannot reach it; and a rollback test reproduced the same
+no-contract audits on the pre-migration code. The contracts *do* execute (six in the licensing
+registry) — the id fails to reach the report. **Root cause still open.**
 
 ## FINDING D — a blocking `message:send` dies at ~180s, blaming the callee
 
@@ -209,13 +218,25 @@ class VibeflixRemoteA2aAgent(RemoteA2aAgent):
         yield await self._send_and_poll(ctx)   # FINDING D: blocking dies at ~180s
 ```
 
-`long_running=True` is needed on any hop that can exceed ~180s. In our mesh that is `legal`,
-`contract_finalize` and `app → orchestrator`; the fast dispatch hops (~9-20s) run the stock path
-unchanged.
+`long_running=True` is needed on any hop that can exceed ~180s; the fast dispatch hops (~9-20s)
+run the stock path unchanged. The point of folding it into the same class is that **the call site
+does not branch on transport** — same constructor, same `ctx.run_node`, one boolean:
+
+```python
+return VibeflixRemoteA2aAgent(name=name, description=description, agent_card=base,
+                              long_running=name in _LONG_RUNNING_A2A)
+```
+
+**Where it is actually used (2026-08-02).** All three orchestrator dispatch hops go through this
+one class: `brand_style` and `deal_pricing` on the stock path, `vendor_clearance` with
+`long_running=True` (it fans into legal's multi-round Q&A loop). Two callers remain on the raw
+`a2a_engine_send` helper rather than the subclass, because they are not `ctx.run_node` dispatches
+and have no agent to construct: `contract_finalize` (a one-shot engine→engine send inside a tool)
+and `app → orchestrator` (the app is Cloud Run, driving the mesh from outside).
 
 ## Why our workaround exists
 
-`vibeflix_common/a2a_engine.py` calls `{mtls}/v1beta1/{engine}/a2a/v1/message:send` directly and
+`vibeflix_common/a2a/engine.py` calls `{mtls}/v1beta1/{engine}/a2a/v1/message:send` directly and
 polls `tasks/{id}`. Given the defect above, **hardcoding the mtls URL is the only reason it works**
 — it never reads the card. The poll loop is a separate, independent robustness choice.
 

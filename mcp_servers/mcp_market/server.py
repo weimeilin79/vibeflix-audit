@@ -3,14 +3,14 @@ import json
 import time
 from mcp.server.fastmcp import FastMCP
 
-from vibeflix_common.registry import registry_get
+from vibeflix_common.platform.registry import registry_get
 
 mcp = FastMCP("Market Operations & Telemetry")
 
 # Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
 # (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
 # registration, so new tools are instrumented automatically.
-from vibeflix_common.telemetry import instrument_fastmcp
+from vibeflix_common.platform.telemetry import instrument_fastmcp
 instrument_fastmcp(mcp, source="mcp_market")
 
 @mcp.tool()
@@ -76,6 +76,6 @@ if __name__ == "__main__":
         )
         # Cloud-only OTel tracing (Cloud Trace + Application Topology node);
         # no-op locally and without the otel packages.
-        from vibeflix_common.otel import setup_otel
+        from vibeflix_common.mcpserver.otel import setup_otel
         setup_otel(os.environ.get("K_SERVICE", "mcp_market"))
         mcp.run(transport=transport)

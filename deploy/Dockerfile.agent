@@ -29,4 +29,4 @@ COPY agents/${AGENT}/ agents/${AGENT}/
 
 EXPOSE 8001
 # serve_a2a (from the package) builds the A2A app for $A2A_AGENT; honors $PORT.
-CMD ["sh", "-c", "uvicorn vibeflix_common.serve_a2a:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn vibeflix_common.a2a.serve:app --host 0.0.0.0 --port ${PORT}"]

@@ -20,7 +20,7 @@ COPY mcp_servers/${GROUP}/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
 # Shared package for the registry helper (registry-backed servers import
-# vibeflix_common.registry; firestore comes from the group's requirements above).
+# vibeflix_common.platform.registry; firestore comes from the group's requirements above).
 COPY packages/vibeflix-common ./vibeflix-common
 RUN pip install ./vibeflix-common --no-deps
 

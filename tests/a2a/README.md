@@ -30,7 +30,7 @@ brand_style returned `status: "success"`, `findings: []` and a plausible
 model was inventing the check names (they changed between runs). For a compliance
 demo, a fabricated "compliant" is the worst possible failure. So:
 
-- the agents now **fail closed** (`vibeflix_common/tool_guard.py`): if the MCP
+- the agents now **fail closed** (`vibeflix_common/agent/tool_guard.py`): if the MCP
   toolset can't reach its server, the model is never called and the agent returns
   `status: "error"` rather than a fake pass;
 - every layer here is judged from the **backend's** log, never from the reply.
@@ -58,7 +58,7 @@ Register and grant BOTH; we keep `global` (see deploy_agents_a2a.py COMMON_ENV).
 ### 2. ⚠️ The endpoint must advertise the URL you ACTUALLY CALL (this blocked layers 2–4)
 
 The `vibeflix-<agent>-agent` endpoints were registered advertising ONLY the **mtls** URL,
-while `vibeflix_common/a2a_engine.py` calls the **plain** host with a bearer token and no
+while `vibeflix_common/a2a/engine.py` calls the **plain** host with a bearer token and no
 client certificate. The gateway matches a destination against the *registered interface*:
 
 | call | result |
@@ -139,6 +139,6 @@ with the gRPC exporter (needs rebuild + verify).
 
 **OPEN — app (plain SA) → governed agents = 403 Egress.** Governed A2A egress
 appears to be honored for agent-identity principals, not plain service accounts.
-The app reaches engines by the DIRECT engine A2A path (`vibeflix_common/a2a_engine.py`),
+The app reaches engines by the DIRECT engine A2A path (`vibeflix_common/a2a/engine.py`),
 which is inbound to the target (not gateway egress) and works for any caller with
 aiplatform access. Layer 4 tests that path.

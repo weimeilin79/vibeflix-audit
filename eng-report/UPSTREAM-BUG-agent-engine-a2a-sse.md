@@ -2,9 +2,11 @@
 
 **For:** Vertex AI Agent Engine / Agent Runtime team, and the ADK (`google-adk`) team
 **Filed by:** vibeflix-audit (production ADK multi-agent mesh on Agent Engine)
-**Date:** 2026-07-31
+**Date:** 2026-07-31 · last verified 2026-08-02
+**Status:** OPEN upstream. Findings re-verified in-engine on 2026-08-02; the blocking-send
+behaviour is sharpened below and the impact scoped to *long-running* hops.
 **Severity:** High — breaks A2A runtime parity; forces every user to hand-roll polling; blocks
-native `RemoteA2aAgent` for request/response and native HITL on Agent Engine.
+native `RemoteA2aAgent` for long-running request/response and native HITL on Agent Engine.
 
 ---
 
@@ -60,9 +62,17 @@ Meanwhile `POST message:send` + `GET tasks/{id}` (poll) returns the completed re
 the work finished; only the **streamed** lifecycle is truncated to `submitted`.
 
 Related secondary observation: **blocking `message:send`** (a2a client `blocking=True`) also does
-not hold until terminal for long-running tasks — it returns a non-terminal `working` task once a
-platform-side window elapses. So neither non-poll consumption mode (streaming, blocking) yields a
-completed long-running result on Agent Engine. Only explicit polling works.
+not hold until terminal for long-running tasks. So neither non-poll consumption mode (streaming,
+blocking) yields a completed long-running result on Agent Engine. Only explicit polling works.
+
+> **Sharpened 2026-08-02, measured in-engine.** An earlier draft said the blocking send "returns a
+> non-terminal `working` task". It is worse than that: at **~180s** (three runs: 180.4 / 180.7 /
+> 180.2s) it returns **`400 FAILED_PRECONDITION` — "Reasoning Engine Execution failed", with
+> `Error Details:` empty** — while the target engine is working perfectly normally (62 log lines,
+> dispatching to three peers, zero errors). The same request *without* `blocking` returns in 0.9s
+> with a `TASK_STATE_SUBMITTED` task that polls to completion. So the blocking path does not just
+> fail to wait — **it reports a healthy engine as failed.** Full write-up: FINDING D of
+> [`UPSTREAM-FR-a2a-client-gaps.md`](UPSTREAM-FR-a2a-client-gaps.md).
 
 ---
 
@@ -117,9 +127,11 @@ truncation already occurs without it.)
 
 1. **Runtime parity is broken.** Identical agent + executor behaves differently on Agent Engine vs
    Cloud Run/local. Portable A2A code silently loses streaming when deployed to Agent Engine.
-2. **`RemoteA2aAgent` is unusable for request/response on Agent Engine.** With streaming truncated
-   *and* blocking timing out, the ADK client's only remaining option (treating a `working` task as
-   a HITL pause) yields a bogus `pending` for any long-running call — no result.
+2. **`RemoteA2aAgent` is unusable for *long-running* request/response on Agent Engine.** With
+   streaming truncated *and* blocking failing at ~180s, the ADK client's only remaining option
+   (treating a `working` task as a HITL pause) yields a bogus `pending` — no result.
+   *(Scoped 2026-08-02: hops that finish inside the ceiling work fine on the stock client — three
+   run in our production mesh. The defect bites duration, not request/response as a category.)*
 3. **Users must hand-roll polling.** To get a completed result we had to write a bespoke poll-based
    sender (`message:send` + `GET tasks/{id}` loop with token refresh, replica-404 handling, etc.).
    This is exactly the boilerplate the framework should own — it dirties application code and
@@ -127,6 +139,12 @@ truncation already occurs without it.)
 4. **Native HITL is blocked from being clean.** ADK's long-running-tool / `input_required` HITL is
    designed around `RemoteA2aAgent` consuming the task lifecycle. With the lifecycle truncated on
    Agent Engine, adopting native HITL is impossible without more custom transport work.
+5. **A second, independent defect compounds this one.** The `A2aAgent` template hardcodes the
+   **plain** aiplatform host into the card each engine serves, and the Agent Gateway authorizes
+   only the `.mtls` host — so from a gateway-attached engine *every* standard client is refused
+   `403` before any of the above even applies. Filed separately as FINDING A of
+   [`UPSTREAM-FR-a2a-client-gaps.md`](UPSTREAM-FR-a2a-client-gaps.md); fixing the SSE gap alone
+   would not make the stock client work engine-to-engine.
 
 ---
 
@@ -141,7 +159,7 @@ polling is required.
 **Secondary / defensive (ADK):** when `RemoteA2aAgent` is talking to a server whose stream ends
 without a terminal state, it should **fall back to polling `GET tasks/{id}` to a terminal state**
 rather than surfacing the last non-terminal (`working`) event as a completed/paused result. Today a
-non-terminal task is turned into a mock function call (`remote_a2a_agent.py:536-542`), which is
+non-terminal task is turned into a mock function call (`remote_a2a_agent.py:526,542` (adk 2.3.0)), which is
 correct for genuine `input_required` HITL but wrong for a still-running task — the two are
 indistinguishable to the client without polling.
 

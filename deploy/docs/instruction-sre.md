@@ -519,7 +519,7 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
 
 1. **A2A base URLs must use the PLAIN endpoint, NOT `mtls.googleapis.com`**:
    - Use `https://<region>-aiplatform.googleapis.com/v1beta1/<engine>`.
-   - ⚠️ An earlier revision of this runbook told you to use the **mtls** host. That is wrong and it breaks A2A: `vibeflix_common/a2a_engine.py` authenticates with a bearer access token and **no client certificate**, and an mTLS endpoint requires one — so it answers **`401 Unauthorized`**. Symptom: `[vendor_clearance] legal call failed: HTTPError: 401 Client Error: Unauthorized for url: https://…-aiplatform.mtls.googleapis.com/…/a2a/v1/message:send`, and the callee engine shows *zero* activity (it never saw the request).
+   - ⚠️ An earlier revision of this runbook told you to use the **mtls** host. That is wrong and it breaks A2A: `vibeflix_common/a2a/engine.py` authenticates with a bearer access token and **no client certificate**, and an mTLS endpoint requires one — so it answers **`401 Unauthorized`**. Symptom: `[vendor_clearance] legal call failed: HTTPError: 401 Client Error: Unauthorized for url: https://…-aiplatform.mtls.googleapis.com/…/a2a/v1/message:send`, and the callee engine shows *zero* activity (it never saw the request).
    - The plain host **and** its in-container private-IP form (`240.0.0.2`) are BOTH registered as interfaces on the `gcp-aiplatform` registry endpoint and granted `iap.egressor` to every agent principal, so gateway egress permits the plain host. (Registering only the mtls variant is what made the plain host look "blocked" in the first place.)
    - Rule of thumb: **mtls endpoints are for the Google client libraries** (which do present a client cert); **our raw `requests`/`httpx` A2A calls use the plain endpoint.**
    
@@ -546,7 +546,7 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
    engine→engine A2A (layers 2–4) for a whole session. The `vibeflix-<agent>-agent`
    endpoints were registered advertising only the **mtls** URL
    (`https://REGION-aiplatform.mtls.googleapis.com/v1beta1/<engine>`), while
-   `vibeflix_common/a2a_engine.py` calls the **plain** host with a bearer token and no
+   `vibeflix_common/a2a/engine.py` calls the **plain** host with a bearer token and no
    client certificate. The gateway matches the destination against the *registered
    interface*, so:
    - plain call → matches no agent endpoint → falls through to default-deny → **403**
@@ -612,7 +612,7 @@ If you observe `403 Forbidden` or `default_denied` errors during agent-to-agent 
      --format='value(textPayload)' | grep -oE 'HTTP Request: POST https://vibeflix-mcp[^"]*"HTTP/1.1 [0-9]{3}'
    ```
 
-   The agents now **fail closed** (`vibeflix_common/tool_guard.py`): if a required
+   The agents now **fail closed** (`vibeflix_common/agent/tool_guard.py`): if a required
    tool is absent from the LlmRequest, the model is never called and the agent
    returns `status: "error"` instead of a fake pass.
 

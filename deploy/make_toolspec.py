@@ -20,7 +20,7 @@ async def main(url: str):
         # Talking to a CLOUD MCP from wherever this runs — force token minting
         # (laptop auto-detect would otherwise skip auth → 403).
         os.environ["RUN_LOCAL"] = "false"
-    from vibeflix_common.cloud_auth import auth_headers
+    from vibeflix_common.platform.cloud_auth import auth_headers
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 

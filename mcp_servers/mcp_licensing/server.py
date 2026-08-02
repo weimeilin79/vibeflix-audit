@@ -31,7 +31,7 @@ mcp = FastMCP("Vendor & Licensing Clearance Registry")
 # Live mesh telemetry: every tool emits started/completed/failed onto PUBSUB_TOPIC
 # (no-op when unset) — drives the Workflow graph's tool LEDs. Hooked at
 # registration, so new tools are instrumented automatically.
-from vibeflix_common.telemetry import instrument_fastmcp
+from vibeflix_common.platform.telemetry import instrument_fastmcp
 instrument_fastmcp(mcp, source="mcp_licensing")
 
 # Seed data lives in data.py (keeps this file focused on the tools).
@@ -397,6 +397,6 @@ if __name__ == "__main__":
         )
         # Cloud-only OTel tracing (Cloud Trace + Application Topology node);
         # no-op locally and without the otel packages.
-        from vibeflix_common.otel import setup_otel
+        from vibeflix_common.mcpserver.otel import setup_otel
         setup_otel(os.environ.get("K_SERVICE", "mcp_licensing"))
         mcp.run(transport=transport)

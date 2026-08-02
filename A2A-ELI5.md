@@ -1,6 +1,6 @@
 # Why we wrote our own messenger — explained very simply
 
-This explains `vibeflix_common/a2a_engine.py`, with no jargon.
+This explains `vibeflix_common/a2a/engine.py`, with no jargon.
 Engineer version: [`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
 
 > **Updated 2026-08-02.** We finally ran the real test in production, and **most of what this page

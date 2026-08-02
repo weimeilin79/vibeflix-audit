@@ -13,7 +13,7 @@ import os
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
-from vibeflix_common.cloud_auth import (
+from vibeflix_common.platform.cloud_auth import (
     run_local, mcp_httpx_factory, prewarm_id_token, mcp_auth_header)
 
 # Env var holding the URL for each MCP server group.

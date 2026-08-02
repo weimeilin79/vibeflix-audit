@@ -81,23 +81,23 @@ start_a2a_agents() {
   A2A_PIDS=()
   A2A_AGENT=brand_style A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8001 \
     MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_brand_style.log 2>&1 &
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_brand_style.log 2>&1 &
   A2A_PIDS+=("$!")
   A2A_AGENT=vendor_clearance A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8002 \
     MCP_LICENSING_URL=http://127.0.0.1:9002/mcp MCP_MARKET_URL=http://127.0.0.1:9003/mcp \
     LEGAL_A2A_URL=http://127.0.0.1:8005 \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_vendor_clearance.log 2>&1 &
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_vendor_clearance.log 2>&1 &
   A2A_PIDS+=("$!")
   A2A_AGENT=deal_pricing A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8003 MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_deal_pricing.log 2>&1 &
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_deal_pricing.log 2>&1 &
   A2A_PIDS+=("$!")
   A2A_AGENT=ui_renderer A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8004 \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_ui_renderer.log 2>&1 &
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_ui_renderer.log 2>&1 &
   A2A_PIDS+=("$!")
   # Legal Clearance agent — independent + private to vendor_clearance.
   A2A_AGENT=legal A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8005 \
     MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
-    "$VENV/bin/python" -m agents.serve_a2a >/tmp/a2a_legal.log 2>&1 &
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_legal.log 2>&1 &
   A2A_PIDS+=("$!")
   for port in 8001 8002 8003 8004 8005; do
     for _ in $(seq 1 40); do

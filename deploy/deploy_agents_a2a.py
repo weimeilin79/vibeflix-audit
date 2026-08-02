@@ -368,7 +368,7 @@ def make_runner_builder(agent_name: str):
 
 def make_executor_builder(agent_name: str):
     def build_executor():
-        from vibeflix_common.a2a_compat import ensure
+        from vibeflix_common.a2a.compat import ensure
         ensure()  # engine-side: template imports need the shim too
         from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
         return A2aAgentExecutor(runner=make_runner_builder(agent_name))
@@ -378,7 +378,7 @@ def make_executor_builder(agent_name: str):
 def make_task_store_builder():
     """The engine's A2A tasks live in the APP, not in this replica's memory."""
     def build_task_store():
-        from vibeflix_common.task_store import RemoteTaskStore
+        from vibeflix_common.a2a.task_store import RemoteTaskStore
         return RemoteTaskStore()   # reads TASK_STORE_URL (in COMMON_ENV)
     return build_task_store
 
@@ -464,7 +464,7 @@ def _cleanup_vendored():
     concurrently (`deploy_agents_a2a.py a & deploy_agents_a2a.py b &`) had one
     process rmtree the shared root copy while the other was mid-copytree:
 
-        shutil.Error: [Errno 2] No such file or directory: .../vibeflix_common/a2a_compat.py
+        shutil.Error: [Errno 2] No such file or directory: .../vibeflix_common/a2a/compat.py
         FileNotFoundError: Package specified but not found: package='vibeflix_common'
 
     …and the deploy silently failed, leaving the engine on its OLD env/code.
@@ -507,7 +507,7 @@ def main():
         # task_store_builder: WITHOUT it the A2aAgent template falls back to
         # InMemoryTaskStore — a dict private to each replica — and `GET /a2a/v1/tasks/{id}`
         # 404s whenever the load balancer picks a replica other than the one that created
-        # the task (measured: 86.8% of polls). See vibeflix_common/task_store.py.
+        # the task (measured: 86.8% of polls). See vibeflix_common/a2a/task_store.py.
         app = A2aAgent(agent_card=agent_card(name, spec["desc"]),
                        agent_executor_builder=make_executor_builder(name),
                        task_store_builder=make_task_store_builder())

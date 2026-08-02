@@ -12,7 +12,7 @@ Design notes:
   without a SkillToolset because the presenter needs NO tools.
 - The A2UI CONTRACT (catalog, message schema, response rules) is NOT ours: the official
   `a2ui-agent-sdk` renders it into the instruction from the spec assets — see
-  vibeflix_common/a2ui_format.py. The skill says what to build; the SDK says what's legal.
+  vibeflix_common/agent/a2ui_format.py. The skill says what to build; the SDK says what's legal.
 - No tools, so we avoid the `set_model_response` "malformed function call" flakiness the
   tool-using agents hit. There is no `output_schema` either: the report task emits A2UI as
   `<a2ui-json>` blocks (a text format — structured output would forbid it), so BOTH tasks
@@ -24,12 +24,12 @@ import pathlib
 
 from google.adk.agents import LlmAgent
 from google.adk.skills import load_skill_from_dir
-from vibeflix_common.a2ui_format import render_instruction
-from vibeflix_common.models import gemini
+from vibeflix_common.agent.a2ui_format import render_instruction
+from vibeflix_common.agent.models import gemini
 # Live mesh telemetry: emit agent-level started/completed so the console's Workflow graph
 # shows the UI-render agent as its own box — lit when the app calls it, terminal when it
 # finishes. No-op when PUBSUB_TOPIC is unset (local/dev).
-from vibeflix_common.telemetry import emit_event
+from vibeflix_common.platform.telemetry import emit_event
 
 _SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" / "render-a2ui")
 
@@ -74,7 +74,7 @@ INSTRUCTION = f"{render_instruction(role_description=_ROLE, ui_description=_LAYO
 
 presenter_agent = LlmAgent(
     name="a2ui_presenter",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Renders any set of compliance-workflow reports into A2UI panels.",
     instruction=INSTRUCTION,
     output_key="presentation",

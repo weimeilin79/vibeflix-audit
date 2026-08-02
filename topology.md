@@ -52,7 +52,7 @@ The approved target state for the pokedemo-test deployment. Everything is
 > ingress can only govern `query`/`streamQuery` — which these engines do not even expose
 > (`api_mode=a2a_extension` ⇒ only `on_message_send`). What actually authorizes the app is
 > its own **project-level IAM** (`roles/aiplatform.user` + `roles/aiplatform.agentContextEditor`)
-> on a DIRECT A2A call (`vibeflix_common/a2a_engine.py`). The gateway governs **EGRESS only**
+> on a DIRECT A2A call (`vibeflix_common/a2a/engine.py`). The gateway governs **EGRESS only**
 > — agent→agent, agent→MCP, agent→Google API, agent→task store. That is still the whole
 > demo; it just isn't ingress.
 >
@@ -68,7 +68,7 @@ The approved target state for the pokedemo-test deployment. Everything is
 
 **Why:** the A2A task store used to be in-memory **per replica**, so `GET /a2a/v1/tasks/{id}`
 missed **86.8%** of the time. The engines now persist tasks in the app
-(`vibeflix_common/task_store.py`). Full story + the two load-bearing constraints (one app
+(`vibeflix_common/a2a/task_store.py`). Full story + the two load-bearing constraints (one app
 instance; the shared-secret gate):
 [G3](deploy/docs/GOTCHAS.md#g3--the-engines-are-deployed-twice-with-the-app-in-between) ·
 [G5](deploy/docs/GOTCHAS.md#g5--the-app-must-be---min-instances1---max-instances1) ·

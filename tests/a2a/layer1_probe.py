@@ -12,7 +12,7 @@ import os
 import sys
 
 sys.path.insert(0, "packages/vibeflix-common")
-from vibeflix_common.a2a_engine import a2a_engine_send  # noqa: E402
+from vibeflix_common.a2a.engine import a2a_engine_send  # noqa: E402
 
 # Engine ids + the project number are READ FROM deploy/agent_identities.json — never
 # hardcoded. They used to be literals from the original project, which meant this probe

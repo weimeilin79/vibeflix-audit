@@ -39,9 +39,9 @@ from agents.a2ui_surface import (
     panels_fallback, stream_initial, stream_panel, stream_report_line,
     stream_final_report, title_from_name,
 )
-from vibeflix_common.a2ui_format import parse_panel, text_of as a2ui_text
-from vibeflix_common.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
-from vibeflix_common.memory import (
+from vibeflix_common.agent.a2ui_format import parse_panel, text_of as a2ui_text
+from vibeflix_common.platform.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
+from vibeflix_common.agent.memory import (
     APP_NAME,
     build_session_service,
     build_memory_service,
@@ -152,9 +152,9 @@ def _orchestrator_agent():
     LOCAL: the compose container speaks JSON-RPC A2A (`serve_a2a`) → RemoteA2aAgent.
     a2a_engine_send() ONLY speaks the Agent-Runtime dialect, so it cannot be used locally.
     """
-    from vibeflix_common.cloud_auth import run_local
+    from vibeflix_common.platform.cloud_auth import run_local
     if not run_local():
-        from vibeflix_common.a2a_engine import direct_engine_agent
+        from vibeflix_common.a2a.engine import direct_engine_agent
         return direct_engine_agent(
             "orchestrator", "Runs the licensing audit workflow.", _ORCHESTRATOR_URL)
     return RemoteA2aAgent(
@@ -233,7 +233,7 @@ def _presenter_agent():
 
     Cloud path migrated off `direct_engine_agent` (2026-08-02): we hand `RemoteA2aAgent` a card
     we build ourselves rather than letting it fetch the platform's, which advertises a host the
-    Agent Gateway refuses. See vibeflix_common/a2a_card.py for the measurements.
+    Agent Gateway refuses. See vibeflix_common/a2a/card.py for the measurements.
 
     Safe HERE and not elsewhere, for two reasons both verified in production:
       * ui_renderer answers in ~9s, well inside the ~180s ceiling that kills the stock client's
@@ -242,9 +242,9 @@ def _presenter_agent():
         `_construct_message_parts_from_session` reconstructs it faithfully. The orchestrator's
         dispatch passes an explicit brief to run_node, which that method ignores.
     """
-    from vibeflix_common.cloud_auth import run_local
+    from vibeflix_common.platform.cloud_auth import run_local
     if not run_local():
-        from vibeflix_common.a2a_card import engine_card
+        from vibeflix_common.a2a.card import engine_card
         return RemoteA2aAgent(
             name="a2ui_presenter",
             description="Renders reports into A2UI panels.",
@@ -1274,7 +1274,7 @@ def health():
     return {"message": "ADK 2.0 Agent Mesh Backend is online."}
 
 
-# ---- Shared A2A task store (see vibeflix_common/task_store.py) ---------------
+# ---- Shared A2A task store (see vibeflix_common/a2a/task_store.py) ---------------
 # Agent Runtime runs each engine as SEVERAL replicas behind a load balancer, and the A2A
 # server's default task store is a dict PRIVATE TO ONE REPLICA. So `POST message:send`
 # created a task on replica [17] while `GET /tasks/{id}` was balanced to [19]/[22], which
@@ -1289,7 +1289,7 @@ def health():
 # Firestore round-trip never stalls the event loop or the browser SSE stream. This is slower
 # than the old in-process dict, on purpose: durability over hot-path latency. Firestore's
 # ~1-write/sec-per-document ceiling only bites a single HOT task; the engine side already
-# retries terminal writes (vibeflix_common/task_store.py), which absorbs the throttle.
+# retries terminal writes (vibeflix_common/a2a/task_store.py), which absorbs the throttle.
 # When FIRESTORE_DATABASE is unset (local dev) it falls back to an in-process dict, so the
 # compose mesh is unchanged.
 #
@@ -1446,7 +1446,7 @@ _MCP_TOOLS_CACHE: dict | None = None
 
 # ---- Live mesh telemetry bridge: Pub/Sub streaming pull → SSE ----------------
 # Agents/MCP servers publish node/tool events onto PUBSUB_TOPIC (see
-# vibeflix_common.telemetry); this bridge fans them out to every connected console
+# vibeflix_common.platform.telemetry); this bridge fans them out to every connected console
 # so the Workflow graph's tool LEDs and node states light up in real time.
 _MESH_QUEUES: set = set()
 _MESH_BRIDGE_STARTED = False
@@ -1624,7 +1624,7 @@ async def _probe_agent(svc: dict) -> dict:
             # GATEWAY under their own identity, so an app-side 403 here is
             # EXPECTED and must NOT gate readiness (it would false-negative).
             comp["ok"] = True
-            from vibeflix_common.health import _probe_one
+            from vibeflix_common.platform.health import _probe_one
             urls = [(k, os.environ[k]) for k in svc.get("mcp_envs", []) if os.environ.get(k)]
             results = await asyncio.gather(*(_probe_one(u) for _, u in urls), return_exceptions=True)
             comp["mcp"] = [

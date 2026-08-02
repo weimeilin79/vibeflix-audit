@@ -40,26 +40,30 @@ from google.adk.events.event import Event
 
 # Live mesh telemetry: every node emits started/completed onto PUBSUB_TOPIC
 # (no-op when unset) — lets the Workflow graph show the mesh working in real time.
-from vibeflix_common.telemetry import instrument_node, set_run_id
-from vibeflix_common.models import gemini
-from vibeflix_common.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url, is_engine_url
+from vibeflix_common.platform.telemetry import instrument_node, set_run_id
+from vibeflix_common.agent.models import gemini
+from vibeflix_common.platform.cloud_auth import a2a_httpx_client, maybe_auth, a2a_card_url, resolve_a2a_rpc_url, is_engine_url
 
 # Load the orchestrator's Vertex AI / project configuration from its local .env.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-# A2A transport is POLL-BASED here (a2a_engine_send / direct_engine_agent). Native ADK
-# RemoteA2aAgent was evaluated as a replacement and rejected for request/response hops: Agent
-# Runtime engines only reliably return a completed long-running result via POLLING — their
-# blocking message:send times out to a 'working' task and their message:stream SSE forwards
-# only the opening 'submitted' event before the platform drops the connection. Native's client
-# does neither (it treats 'working' as a HITL pause). See eng-report/a2a-native-transport-findings.md
-# and memory engine-a2a-card-flag. VibeflixRemoteA2aAgent is retained for the HITL hop only.
+# A2A transport: every dispatch hop uses the prebuilt ADK client (VibeflixRemoteA2aAgent, a
+# RemoteA2aAgent subclass). Two platform constraints are absorbed inside it rather than here:
+#   * the A2aAgent template hardcodes the PLAIN aiplatform host into the card each engine
+#     serves, and the Agent Gateway authorizes only the .mtls host → the subclass repoints it;
+#   * a blocking message:send dies at ~180s with 400 FAILED_PRECONDITION while the callee keeps
+#     working → long hops pass long_running=True, which sends non-blocking and polls instead.
+# message:stream is not an escape hatch: Agent Runtime's managed SSE layer forwards only the
+# opening 'submitted' event and then drops the connection.
+# See eng-report/UPSTREAM-FR-a2a-client-gaps.md (current) and a2a-native-transport-findings.md
+# (the superseded July-31 investigation), plus memory engine-a2a-card-flag.
+# contract_finalize below still calls a2a_engine_send directly — see the note at that call.
 
 # Sourcing policy comes from the LIVE registry (Firestore `market_policy/sourcing_caps`,
 # same doc mcp_market reads) — the hardcoded values are only the offline fallback, so
 # editing the registry changes the actual gate, not just mcp_market's tool. Read
 # per-run (in ingest/generate_report), never cached at import.
-from vibeflix_common.registry import registry_get as _registry_get
+from vibeflix_common.platform.registry import registry_get as _registry_get
 
 _VOLUME_CAP_FALLBACK = 25000
 _ADDENDUM_FALLBACK = "SC-7798-EU"
@@ -78,18 +82,16 @@ def _secondary_addendum() -> str:
                              _ADDENDUM_FALLBACK, field="secondary_addendum_contract") or _ADDENDUM_FALLBACK)
 
 
-# Hops running on the NATIVE ADK client (VibeflixRemoteA2aAgent) instead of the poll-based
-# sender. Deliberately only the two FAST dispatch agents — measured 2026-08-02, in-engine:
-#   * a blocking send (which the native client uses) dies at ~180s with
-#     `400 FAILED_PRECONDITION` while the callee keeps working, so any hop that can run long
-#     (vendor_clearance → it fans into legal; contract_finalize; app → orchestrator) MUST stay
-#     on a2a_engine_send, which never makes a long request — it sends non-blocking and polls;
-#   * brand_style ~18s and deal_pricing ~9-20s clear well inside that window.
-# Native also needs VibeflixRemoteA2aAgent, not stock RemoteA2aAgent: stock builds its outgoing
-# message from ctx.session.events and never sees the brief passed to ctx.run_node (confirmed in
-# ADK source — run_node hands node_input to the scheduler, not to the session).
-# Empty this set to revert every hop to the poll sender.
-_NATIVE_A2A = {"brand_style_compliance_agent", "deal_pricing_agent"}
+# Hops that can outlive Agent Runtime's ~180s blocking-request ceiling, so they send
+# non-blocking and poll instead of holding one request open. Measured in-engine 2026-08-02:
+# a blocking send — what the stock ADK client makes — dies at ~180s with
+# `400 FAILED_PRECONDITION` (Error Details EMPTY) while the callee keeps working normally.
+#   * vendor_clearance fans into legal's multi-round Q&A loop → can exceed it;
+#   * brand_style ~18s and deal_pricing ~9-20s clear well inside it.
+# Pacing is the ONLY difference between the hops: same class, same constructor, same
+# ctx.run_node. vibeflix_common/a2a/remote_agent.py absorbs it so this call site does not
+# branch on transport. Add a name here if its hop starts running long.
+_LONG_RUNNING_A2A = {"vendor_clearance_agent"}
 
 
 def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
@@ -98,21 +100,20 @@ def _remote_agent(name: str, description: str, url_env: str) -> RemoteA2aAgent:
         raise RuntimeError(
             f"A2A URL not configured: set {url_env} (e.g. http://{name}:8001)."
         )
-    from vibeflix_common.cloud_auth import run_local
+    from vibeflix_common.platform.cloud_auth import run_local
     if not run_local():
-        if name in _NATIVE_A2A:
-            # CLOUD + fast hop: the native ADK client, with our brief-override and the
-            # mtls repoint (the engine card advertises the plain host, which the gateway
-            # refuses). See vibeflix_common/remote_agent.py.
-            from vibeflix_common.remote_agent import VibeflixRemoteA2aAgent
-            return VibeflixRemoteA2aAgent(name=name, description=description, agent_card=base)
-        # CLOUD: call the target engine's A2A endpoint DIRECTLY (registry
-        # resolution 403s from a gateway-attached engine). base is the engine
-        # resource URL from the env var. Uses the POLL-based sender — native
-        # RemoteA2aAgent can't poll long-running engine tasks to completion
-        # (see the transport note above).
-        from vibeflix_common.a2a_engine import direct_engine_agent
-        return direct_engine_agent(name, description, base)
+        # CLOUD: the prebuilt ADK client for every hop. VibeflixRemoteA2aAgent is a
+        # RemoteA2aAgent subclass that hides the two things Agent Runtime forces on us:
+        # the mtls repoint (the engine's own card advertises the plain host, which the
+        # gateway refuses) and the brief override (stock rebuilds the outgoing message
+        # from ctx.session.events and never sees the brief passed to ctx.run_node).
+        from vibeflix_common.a2a.remote_agent import VibeflixRemoteA2aAgent
+        return VibeflixRemoteA2aAgent(
+            name=name,
+            description=description,
+            agent_card=base,
+            long_running=name in _LONG_RUNNING_A2A,
+        )
     # LOCAL: direct A2A to the compose service (unchanged).
     kwargs = {}
     client = a2a_httpx_client()
@@ -171,7 +172,7 @@ _DISPATCH_SKILL = load_skill_from_dir(pathlib.Path(__file__).parent / "skills" /
 
 workflow_dispatcher = LlmAgent(
     name="workflow_dispatcher",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Decides which compliance workflows the orchestrator should run for a request.",
     instruction=_DISPATCH_SKILL.instructions,
     output_schema=DispatchDecision,
@@ -188,7 +189,7 @@ workflow_dispatcher = LlmAgent(
 # NO write tools (create/update/reset/upsert) — a note must never mutate anything.
 _NOTE_TOOLS: list = []
 if os.environ.get("MCP_LICENSING_URL"):  # absent in standalone `adk web` runs → no tools
-    from vibeflix_common.mcp_clients import mcp_toolset as _mcp_toolset
+    from vibeflix_common.agent.mcp_clients import mcp_toolset as _mcp_toolset
     _NOTE_TOOLS = [_mcp_toolset("mcp_licensing", tool_filter=[
         "get_vendor", "find_vendors", "list_trademarks", "verify_trademark_record",
         "scan_global_exclusivity_clauses", "get_contract",
@@ -203,7 +204,7 @@ _NOTE_TOOLS.append(_lm.load_memory_tool if hasattr(_lm, "load_memory_tool") else
 
 note_responder = LlmAgent(
     name="note_responder",
-    model=gemini(),   # retries 429 with backoff — see vibeflix_common/models.py
+    model=gemini(),   # retries 429 with backoff — see vibeflix_common/agent/models.py
     description="Answers the operator's free-text note/question about an audit, or acks added context.",
     instruction=(
         "You are the Sourcing Orchestrator, replying to the operator's free-text note that "
@@ -867,7 +868,7 @@ async def contract_finalize(ctx: Context, node_input):
         # note at the top of this file). The generic _a2a_send 400s on the engine's mTLS card
         # fetch; it's only correct for local serve_a2a URLs.
         if is_engine_url(_vc_url):
-            from vibeflix_common.a2a_engine import a2a_engine_send
+            from vibeflix_common.a2a.engine import a2a_engine_send
             raw = await a2a_engine_send(_vc_url, brief)
         else:
             raw = await _a2a_send(_vc_url, brief)
