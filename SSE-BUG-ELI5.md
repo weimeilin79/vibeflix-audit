@@ -93,14 +93,20 @@ laptop, going straight to Google, with no guard in the middle. Same result.
 ```mermaid
 flowchart TD
   BUG["📻 radio only says 'Starting!'"]
-  BUG --> C1["The ready-made toolkit listens to the radio,<br/>hears 'Starting!', and gives up"]
-  BUG --> C2["Worse: it decides 'Starting'<br/>means 'waiting for a human' — a wrong answer,<br/>delivered confidently"]
-  BUG --> C3["So we had to write our own<br/>letter-and-check-back messenger"]
-  BUG --> C4["And a nicer 'pause and ask a person' feature<br/>can't be built on top"]
+  BUG --> C1["❌ Nobody can follow along live"]
+  BUG --> C2["❌ A nicer 'pause and ask a person' feature<br/>can't be built on top"]
+  BUG --> C3["✅ (but the letter-and-ticket way<br/>still works perfectly)"]
 ```
 
-The last one matters for the future: the polite way to have a robot stop and ask a human a
-question relies on hearing those live announcements. No announcements, no clean way to do it.
+The second one matters for the future: the polite way to have a robot stop and ask a human a
+question relies on hearing those live announcements. No announcements, no clean way to build it.
+
+> **🔎 A correction (2026-08-02).** An earlier version of this page also claimed the broken radio
+> was why the ready-made toolkits couldn't fetch answers at all, and why we had to write our own
+> messenger. **We tested that, and it was wrong** — a ready-made toolkit phoned a robot, waited
+> three whole minutes, and got the complete answer. The radio bug is real and worth reporting, but
+> it does **not** stop you getting results by the letter-and-ticket route. See
+> [`A2A-ELI5.md`](A2A-ELI5.md) for what actually went wrong.
 
 ---
 
@@ -124,3 +130,4 @@ signposted.
 
 > The robot shouts "Starting!", finishes the job perfectly, and never gets to announce the result —
 > because the radio station in the middle only broadcasts the first sentence and then goes quiet.
+> (You can still walk over and collect the answer, which is what we do.)

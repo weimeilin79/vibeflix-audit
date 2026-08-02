@@ -1,22 +1,23 @@
 # Why we wrote our own messenger — explained very simply
 
-This explains the thing in `vibeflix_common/a2a_engine.py`, with no jargon.
-If you want the version for engineers, read
-[`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
+This explains `vibeflix_common/a2a_engine.py`, with no jargon.
+Engineer version: [`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
+
+> **Updated 2026-08-02.** We finally ran the real test in production, and **most of what this page
+> used to say was wrong.** The corrections are kept in, because being wrong and finding out is the
+> most useful part of the story. 🔎
 
 ---
 
 ## The story
 
-Imagine our system is a **big office building full of robot helpers**.
-
-Each robot has one job. One checks that a picture follows the brand rules. One checks the vendor
-is allowed to make the toy. One checks the price is fair. A **boss robot** gives out the work and
-collects the answers.
+Our system is a **big office building full of robot helpers**. Each has one job — checking the
+brand rules, checking the vendor, checking the price — and a **boss robot** hands out work and
+collects answers.
 
 ```mermaid
 flowchart TD
-  BOSS["🤖 Boss robot<br/>(orchestrator)"]
+  BOSS["🤖 Boss robot"]
   A["🎨 Brand robot"]
   B["⚖️ Vendor robot"]
   C["💰 Price robot"]
@@ -25,155 +26,120 @@ flowchart TD
   BOSS --> C
 ```
 
-Here is the catch: **each robot lives in its own separate building.** They can't just turn around
-and talk. They have to send messages across town.
+Each robot lives in a **separate building**, so they send messages across town. And there's a
+**security guard** who only lets robots contact approved addresses.
 
 ---
 
-## Problem 1 — the phone company cuts off long calls
+## 🔎 Everything we believed, and what was actually true
 
-You'd think the boss robot could just **phone** the brand robot and stay on the line until it
-answers. That's what we tried first. And here's the important bit: **that is exactly what the
-robots are trying to do.** Staying on the line until the work is finished is the normal, polite,
-built-in behaviour. Nobody had to switch it on.
+We had a tidy explanation. We tested it properly. Almost all of it fell over.
 
-The problem is the **phone company** — the part Google runs, in between the two buildings. It has
-a rule: *no call may last very long.* When the timer runs out, the phone company cuts in and ends
-the call — **even though the robot was still working and about to answer.**
-
-```
-☎️  Boss: "Please check this picture."
-🤖  Brand robot: "Got it — working on it..." (still on the line, still working)
-⏰  Phone company: "Time's up!" *click*
-😐  Boss got no answer.
-     (the robot DID finish the job a minute later — nobody was listening)
-```
-
-So it depends entirely on **how long the job takes**:
-
-| Job | What happens |
+| What we believed | What the test showed |
 |---|---|
-| ⚡ quick (a few seconds) | finishes before the timer → you get the answer on the call ✅ |
-| 🐢 slow (a few minutes) | timer wins → call cut, **no answer** ❌ |
+| ☎️ "Long calls get cut off" | ❌ **Wrong.** A 3-minute call worked perfectly. |
+| 🚪 "The guard won't let us look up addresses" | ❌ **Wrong.** Looking up addresses works fine. We'd just forgotten to give ourselves a key once. |
+| 🪪 "You need two badges to get through" | ❌ **Wrong.** One badge is enough. |
+| 📻 "The guard bans live commentary" | ❌ **Wrong.** He allows it. |
+| 📣 "Our robots advertise the wrong service" | ❌ **Wrong.** Changing that didn't help either. |
+| 📮 "The ready-made toolkit can't do the job" | ✅ **True — but for a completely different reason.** |
 
-This is why it looked like everything worked at first! The quick robots answered fine. Only the
-slow one — the robot that writes the contract — kept coming back empty. Same setup, different
-speed.
+That last row is the real story.
 
-Two extra annoyances: the phone company **never says how long the limit is**, and there's **no way
-to ask for a longer call**. We looked everywhere for that setting. It doesn't exist.
+---
 
-So phoning is out for slow jobs. Instead we do it like **mail**:
+## The actual problem: every robot hands out the wrong address
+
+Each building has **two doors**: a front door and a side door. They both lead to the same robot.
 
 ```mermaid
 flowchart LR
-  S["1 Send the letter"] --> T["2 Get a ticket number"]
-  T --> C["3 Come back and ask:<br/>'is ticket #42 done yet?'"]
-  C -->|"not yet"| C
-  C -->|"done!"| R["4 Collect the answer"]
+  D1["🚪 Front door<br/>(plain)"] --> G1["🚫 Guard: NOT ALLOWED"]
+  D2["🚪 Side door<br/>(mtls)"] --> G2["✅ Guard: fine, go ahead"]
 ```
 
-Step 3 is called **polling** — just politely asking again and again until it's ready. It's boring,
-but it *works*. That's the important part.
+The guard only ever allows the **side door**. Always. We tested this against three different
+robots, in every way we could think of — the side door works, the front door never does.
 
----
-
-## Problem 2 — the security guard needs two badges
-
-Our building has a **security guard** at the door (this is the "gateway"). The guard is there on
-purpose — he stops robots from wandering off and talking to strangers. Good!
-
-But he makes the mail complicated. To deliver one letter you need **two badges**:
-
-| Badge | Who checks it |
-|---|---|
-| 🪪 **Badge 1** | the **security guard** — "are you allowed to leave and go there?" |
-| 🪪 **Badge 2** | the **other building's** front desk — "are you allowed in here?" |
-
-Show only one badge and you get turned away. And nobody wrote this down anywhere — we found it out
-by getting turned away over and over until we worked out what was missing.
-
-You also have to go to the **exact address on the guard's approved list**. There are two doors to
-the same building, and if you knock on the one that isn't on his list, he says no — even though
-it's the same building.
-
----
-
-## Problem 3 — the two ready-made toolkits each forgot one thing
-
-Google gives us two ready-made "mail robot" toolkits, so we shouldn't have to build our own.
-We tried both. **Each one is missing exactly one thing we need.**
+**Now the problem.** Every robot hands visitors a little **business card** with its address on it.
+And the card says… **the front door.** The one that never works.
 
 ```mermaid
-flowchart TD
-  subgraph K1["📦 Toolkit 1"]
-    A1["✅ can carry both badges"]
-    A2["❌ won't wait for slow robots<br/>hangs up after 'got it, starting!'"]
-    A3["❌ can't even find the address<br/>from inside our building"]
-  end
-  subgraph K2["📦 Toolkit 2"]
-    B1["✅ waits patiently (mail style)"]
-    B2["✅ knows the address"]
-    B3["❌ only carries ONE badge<br/>and won't let us add the second"]
-  end
-  subgraph OURS["🔧 What we built"]
-    C1["✅ both badges"]
-    C2["✅ waits patiently"]
-    C3["✅ knows the address"]
-  end
+flowchart LR
+  R["🤖 Robot hands you<br/>📇 a business card"]
+  R --> A["Card says:<br/>'come to the FRONT door'"]
+  A --> TK["📦 Toolkit politely<br/>follows the card"]
+  TK --> NO["🚫 Turned away. Every time."]
 ```
 
-**Toolkit 1** is happy to carry both badges — but it never goes back to collect the answer. Worse,
-it **misunderstands what happened**. When the call gets cut and the last thing it heard was "still
-working", it decides that must mean *"the robot has stopped and is waiting for a human to answer a
-question."* So it shrugs and reports "waiting for a person" — when really the robot was busy and
-finished fine.
+So the ready-made toolkit does exactly the right thing — reads the card, goes to the address on
+it — and gets refused. Forever.
 
-That's the nastiest part of the whole story: it doesn't crash, it doesn't complain. It hands you a
-calm, confident, **wrong** answer.
-
-And before any of that, it has to look up the address in a directory across town — which our
-security guard won't let it visit. So it usually fails before it even begins.
-
-**Toolkit 2** waits patiently and knows the address — it does the mail trick perfectly. But it
-makes its own badge, only ever *one* badge, and there's no slot to add the second one. It's sealed
-shut.
-
-So: neither toolkit works, and it's for **different reasons each time**. That's why we wrote our
-own little mail robot. It's about 320 lines. It carries two badges, knocks on the right door, and
-politely asks "done yet?" until the answer is ready.
+**Our own messenger works because it ignores the card.** It was hardcoded long ago to always use
+the side door. That wasn't clever planning; it just happens to be right.
 
 ---
 
-## Was it a mistake to build our own?
+## The part that makes this a real bug
 
-No — and we checked carefully, twice.
+We thought: *fine, we'll just print better business cards.* So we tried — we set one robot's card
+to say "side door".
 
-The way we built ours is the **same way Google's own instructions say to do it**. We're not being
-clever or going around anything. We're doing the documented thing; the ready-made toolkits just
-can't do it yet.
+**The building printed the front door anyway.** 🤯
+
+It turns out the card isn't written by us at all. The building's own system overwrites it every
+time the robot starts up, and always writes the front door — the one its own guard refuses.
+
+```mermaid
+flowchart LR
+  U["✍️ We write:<br/>'side door'"] --> SYS["🏢 Building overwrites it"]
+  SYS --> C["📇 Card says: FRONT door"]
+  C --> G["🚫 Guard refuses"]
+```
+
+So this isn't something we misconfigured, and it isn't something we *can* fix. **The building
+hands out an address its own guard has banned, and there's no setting to change it.**
+
+That's what we're reporting to Google.
 
 ---
 
-## What we're asking Google for
+## So why do we still have our own messenger?
 
-Any **one** of these would help — we don't need all of them:
+Honestly? **Less than we thought.**
 
-1. **Let Toolkit 2 take our badges.** Right now it makes its own, and only one. Let us hand it ours
-   instead. Then we delete most of our mail robot. *(Toolkit 1 already allows this — so it's
-   clearly a reasonable thing to allow.)*
-2. **Teach Toolkit 1 to go back and collect the answer**, and to stop confusing "still working"
-   with "waiting for a human". Those are very different things.
-3. **Let calls last longer** — or at least *tell us* how long they're allowed to last, so we know
-   which jobs can use the phone at all.
+- ✅ **Still useful:** it's sturdy. It renews expired passes mid-wait, copes when a building is
+  briefly unreachable, and keeps checking back until the answer is really ready.
+- ⚠️ **No longer a reason:** the phone, the badges, the address lookup — we were wrong about all
+  three. A ready-made toolkit can do those.
+- 🤔 **Honest answer:** we built it around problems that mostly weren't real. It works well and
+  we're keeping it for now, but we can't claim it was the only option.
 
-We'd also love them to **write the two-badge rule down**, so the next team doesn't spend days
-getting turned away at the door like we did.
+---
+
+## What we're actually asking Google for
+
+Only what we can prove:
+
+1. **Print the right address on the business card.** The building writes the front door onto
+   every robot's card, and its own guard bans the front door. This is the big one — and nobody
+   using the platform can fix it themselves.
+2. **Fix a toolkit that breaks silently** — it stops working with no error message at all, just a
+   confusing crash later.
+3. **Write down which door is the right one.** It appears in no documentation. We found it by
+   being turned away, repeatedly.
+
+---
+
+## The lesson worth keeping
+
+> We had a confident, tidy explanation for months. It was mostly wrong. One careful test in the
+> real system replaced four guesses with one small, fixable fact.
 
 ---
 
 ## The one-sentence version
 
-> Our robots are in different buildings, the phone company cuts off long calls before the answer
-> arrives, the security guard wants two badges — and neither ready-made mail robot can handle both
-> problems, so we wrote a small one that can, and we've asked Google to fix theirs.
+> Every robot hands out a business card printed by the building itself, showing a door the
+> building's own guard has banned — so the standard toolkit follows the card and gets turned away,
+> while our messenger works only because it ignores the card and uses the other door.

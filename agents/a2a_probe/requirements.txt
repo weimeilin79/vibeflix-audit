@@ -1,0 +1,18 @@
+# TEMPORARY probe agent — delete with the folder.
+# Mirrors agents/ui_renderer/requirements.txt (a known-good engine). `mcp` is what pulls in
+# starlette + sse-starlette, which the A2A RESTAdapter needs — omitting it is why the first
+# probe engine failed to boot with UserCodeControlPlaneError.
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+mcp>=1.0,<2
+# [agent-identity] is REQUIRED for AgentRegistry on an Agent-Identity engine — without it
+# the registry raises ImportError("Missing required dependencies for Agent Identity Auth
+# Manager") at CALL time, not at import. ui_renderer's requirements omit it; the app's carry it.
+google-adk[a2a,agent-identity]==2.3.0
+google-genai>=1.0.0
+aiohttp>=3.9.0
+google-cloud-firestore>=2.16.0
+google-cloud-pubsub>=2.21.0
+/app/agents/a2a_probe/_vendor/vibeflix-common

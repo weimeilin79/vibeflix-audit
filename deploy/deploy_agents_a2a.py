@@ -311,8 +311,8 @@ AGENTS = {
     "orchestrator": {"env": ["MCP_LICENSING_URL", "BRAND_STYLE_A2A_URL",
                              "VENDOR_CLEARANCE_A2A_URL", "DEAL_PRICING_A2A_URL"],
                      "desc": "Sourcing orchestrator — dispatches the compliance workflows and finalizes contracts."},
-    # TEMPORARY — in-engine A2A transport probe. Remove with agents/_a2a_probe/.
-    "_a2a_probe": {"env": ["PROBE_TARGET"],
+    # TEMPORARY — in-engine A2A transport probe. Remove with agents/a2a_probe/.
+    "a2a_probe": {"env": ["PROBE_TARGET"],
                    "desc": "Temporary in-engine A2A transport probe."},
 }
 
@@ -393,7 +393,13 @@ def agent_card(name: str, desc: str):
     return AgentCard(
         name=f"vibeflix-{name.replace('_', '-')}",
         description=desc,
-        url=f"https://{REGION}-aiplatform.googleapis.com/v1beta1/",  # informational
+        # ⚠️ NOT informational — a2a/client/transports/rest.py takes `self.url = agent_card.url`
+        # and appends `/v1/message:send`, so THIS is the host every standard A2A client calls.
+        # TEMPORARY (a2a_probe only): advertise the mtls host to test whether that alone is what
+        # the gateway needs. Production agents are unchanged on the plain host.
+        url=(f"https://{REGION}-aiplatform.mtls.googleapis.com/v1beta1/"
+             if name == "a2a_probe"
+             else f"https://{REGION}-aiplatform.googleapis.com/v1beta1/"),
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=True),
         default_input_modes=["text/plain"],
