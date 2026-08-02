@@ -30,23 +30,40 @@ and talk. They have to send messages across town.
 
 ---
 
-## Problem 1 — the robots are slow, and the phone hangs up
+## Problem 1 — the phone company cuts off long calls
 
-You'd think the boss robot could just **phone** the brand robot and wait on the line for the
-answer. That's what we tried first.
+You'd think the boss robot could just **phone** the brand robot and stay on the line until it
+answers. That's what we tried first. And here's the important bit: **that is exactly what the
+robots are trying to do.** Staying on the line until the work is finished is the normal, polite,
+built-in behaviour. Nobody had to switch it on.
 
-But the phone company (the part Google runs) has a bug. The call connects, the other robot says
-**"got it, I'm starting!"** — and then the line goes dead. You never hear the actual answer, even
-though the robot really did finish the work.
+The problem is the **phone company** — the part Google runs, in between the two buildings. It has
+a rule: *no call may last very long.* When the timer runs out, the phone company cuts in and ends
+the call — **even though the robot was still working and about to answer.**
 
 ```
 ☎️  Boss: "Please check this picture."
-☎️  Brand robot: "Got it, starting!"
-☎️  ...click. Line dead. 😐
-     (the robot DID finish — you just never heard it)
+🤖  Brand robot: "Got it — working on it..." (still on the line, still working)
+⏰  Phone company: "Time's up!" *click*
+😐  Boss got no answer.
+     (the robot DID finish the job a minute later — nobody was listening)
 ```
 
-So phoning is out. Instead we do it like **mail**:
+So it depends entirely on **how long the job takes**:
+
+| Job | What happens |
+|---|---|
+| ⚡ quick (a few seconds) | finishes before the timer → you get the answer on the call ✅ |
+| 🐢 slow (a few minutes) | timer wins → call cut, **no answer** ❌ |
+
+This is why it looked like everything worked at first! The quick robots answered fine. Only the
+slow one — the robot that writes the contract — kept coming back empty. Same setup, different
+speed.
+
+Two extra annoyances: the phone company **never says how long the limit is**, and there's **no way
+to ask for a longer call**. We looked everywhere for that setting. It doesn't exist.
+
+So phoning is out for slow jobs. Instead we do it like **mail**:
 
 ```mermaid
 flowchart LR
@@ -106,9 +123,17 @@ flowchart TD
   end
 ```
 
-**Toolkit 1** is happy to carry both badges — but it hangs up early, just like the phone. And
-before it even starts, it has to look up the address in a directory across town, which our
-security guard won't let it visit. So it fails before it begins.
+**Toolkit 1** is happy to carry both badges — but it never goes back to collect the answer. Worse,
+it **misunderstands what happened**. When the call gets cut and the last thing it heard was "still
+working", it decides that must mean *"the robot has stopped and is waiting for a human to answer a
+question."* So it shrugs and reports "waiting for a person" — when really the robot was busy and
+finished fine.
+
+That's the nastiest part of the whole story: it doesn't crash, it doesn't complain. It hands you a
+calm, confident, **wrong** answer.
+
+And before any of that, it has to look up the address in a directory across town — which our
+security guard won't let it visit. So it usually fails before it even begins.
 
 **Toolkit 2** waits patiently and knows the address — it does the mail trick perfectly. But it
 makes its own badge, only ever *one* badge, and there's no slot to add the second one. It's sealed
@@ -132,12 +157,15 @@ can't do it yet.
 
 ## What we're asking Google for
 
-Just **one** small fix — either one would do, we don't need both:
+Any **one** of these would help — we don't need all of them:
 
-1. **Let Toolkit 2 take our badges.** Right now it makes its own. Let us hand it ours instead.
-   Then we delete most of our mail robot. *(Toolkit 1 already allows this — so it's clearly a
-   reasonable thing to allow.)*
-2. **Teach Toolkit 1 to wait**, and let it find the address without the trip across town.
+1. **Let Toolkit 2 take our badges.** Right now it makes its own, and only one. Let us hand it ours
+   instead. Then we delete most of our mail robot. *(Toolkit 1 already allows this — so it's
+   clearly a reasonable thing to allow.)*
+2. **Teach Toolkit 1 to go back and collect the answer**, and to stop confusing "still working"
+   with "waiting for a human". Those are very different things.
+3. **Let calls last longer** — or at least *tell us* how long they're allowed to last, so we know
+   which jobs can use the phone at all.
 
 We'd also love them to **write the two-badge rule down**, so the next team doesn't spend days
 getting turned away at the door like we did.
@@ -146,6 +174,6 @@ getting turned away at the door like we did.
 
 ## The one-sentence version
 
-> Our robots are in different buildings, the phone line drops after "hello", the security guard
-> wants two badges, and neither ready-made mail robot can do both — so we wrote a small one that
-> can, and we've asked Google to fix theirs.
+> Our robots are in different buildings, the phone company cuts off long calls before the answer
+> arrives, the security guard wants two badges — and neither ready-made mail robot can handle both
+> problems, so we wrote a small one that can, and we've asked Google to fix theirs.

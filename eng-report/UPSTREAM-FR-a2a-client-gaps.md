@@ -12,7 +12,9 @@ the callee takes minutes — needs **three** properties at once:
 
 1. **injectable auth** (a gateway-attached caller must send `Proxy-Authorization` *and*
    `Authorization`, and re-mint on expiry),
-2. **poll-to-terminal** (Agent Runtime returns immediately with a still-`working` task),
+2. **a way to collect a result after the response is cut short** — see GAP-4: `message:send`
+   defaults to `blocking=True` and the a2a-sdk server honours it, but the managed layer ends the
+   HTTP response at an undocumented deadline and returns a non-terminal task,
 3. **in-engine resolution** (the caller must be able to find the target without an egress hop the
    gateway blocks).
 
@@ -44,14 +46,22 @@ flowchart LR
   subgraph T["Agent Engine (callee)"]
     B["brand_style"]
   end
-  O -- "1. message:send  (returns immediately: task=working)" --> B
-  O -- "2. GET tasks/{id}  ... repeat until terminal" --> B
+  O -- "1. message:send (blocking=True by default) — server HOLDS the line…" --> B
+  B -- "…until the managed layer truncates → task=working, no report" --> O
+  O -- "2. GET tasks/{id} — repeat until terminal" --> B
   B -- "3. completed + artifact" --> O
 ```
 
-Step 1 returns a non-terminal task **by design** — see the companion SSE bug: the managed layer
-forwards only the opening `submitted` event and then drops the stream, so **polling is the only
-mode that yields a completed long-running result.**
+**Step 1 is not fire-and-forget by design — it is a blocking call that gets cut short.**
+`MessageSendConfiguration.blocking` defaults to `True`, and the a2a-sdk server honours it
+(`default_request_handler.py`: `blocking = True  # Default to blocking behavior`). The agent is
+genuinely trying to hold the connection until terminal. The managed Agent Runtime HTTP layer ends
+the response first and hands back whatever the aggregator has — a non-terminal task. Step 2 exists
+only to recover the result the truncated step 1 was about to return.
+
+Streaming is not an escape hatch either: per the companion SSE bug, the managed layer forwards
+only the opening `submitted` event and then drops the stream. So **fetching the task afterwards is
+the only mode that yields a completed long-running result.**
 
 ## Where each path breaks
 
@@ -143,20 +153,62 @@ RemoteA2aAgent.from_engine(resource_name="projects/…/reasoningEngines/ID", htt
 
 ---
 
-## GAP-3 — `RemoteA2aAgent` cannot poll a long-running task to terminal
+## GAP-3 — `RemoteA2aAgent` cannot complete a request/response that outlives the hold window
 
 **Where:** `google/adk/agents/remote_a2a_agent.py` (~536-542); also visible in the registry
 fallback path, which constructs `AgentCapabilities(streaming=False, polling=False)`.
 
 **Why it blocks us.** The client is hardcoded to `polling=False` and treats a `submitted` /
-`working` task as a **pause** (it emits a mock function call), rather than polling `GET tasks/{id}`
-to a terminal state. Because Agent Runtime's `message:send` returns immediately with a
-still-`working` task, every long-running hop stalls at `pending`. Fast hops appear to work, which
-makes this look intermittent.
+`working` task as a **pause** (it emits a mock function call), rather than fetching
+`GET tasks/{id}` to a terminal state. Combined with GAP-4 — the managed layer truncating a
+*blocking* send — every hop whose work outlives the hold window stalls at `pending` and the caller
+receives a non-answer. Hops that finish inside the window return complete results, so the failure
+presents as intermittent rather than systematic: in our mesh the three dispatch agents worked
+natively while `contract_finalize` returned `cleared` with no contract, on identical code.
 
-**Requested change.** A `polling=True` mode that polls to terminal with backoff, and a way to
+**Requested change.** A `polling=True` mode that fetches to terminal with backoff, and a way to
 distinguish a genuine `input_required` pause (HITL — where pausing *is* correct) from "still
-working". Today those two are indistinguishable to the caller.
+working". Today those two are indistinguishable to the caller, which is the root of the silent
+wrong answer.
+
+---
+
+## GAP-4 — the request deadline that truncates a blocking send is neither configurable nor documented
+
+**What happens.** `MessageSendConfiguration.blocking` defaults to `True`; the a2a-sdk server
+implements it faithfully:
+
+```python
+blocking = True  # Default to blocking behavior
+if params.configuration and params.configuration.blocking is False:
+    blocking = False
+...
+await result_aggregator.consume_and_break_on_interrupt(consumer, blocking=blocking, ...)
+```
+
+The agent therefore *intends* to answer in one request/response. The managed Agent Runtime HTTP
+layer ends the response first and returns a non-terminal task. This is server-side, not a client
+timeout: the server actively **returns** a `working` task, and our direct SSE probe observed a
+server-side close ~24.9s into a longer job.
+
+**Why it blocks us.** The protocol's own blocking contract is silently overridden, so a compliant
+A2A client that trusts `blocking=True` gets a non-answer with no error. That is precisely how
+GAP-3 manifests as a wrong result rather than a failure.
+
+**No knob exists.** Searched every Agent Engine config type in
+`google-cloud-aiplatform 1.159.0`: `CreateAgentEngineConfig` exposes `min_instances`,
+`max_instances`, `resource_limits`, `container_concurrency`, `keep_alive_probe` (container
+*liveness*, not a request deadline), and no timeout/deadline field. A scan of every
+agent-engine type for `timeout|deadline|duration` matched only unrelated objects (prompts,
+datasets, custom-job `Scheduling`). The only lever available is making the agent finish *faster*
+(more cpu/concurrency) so it fits under an unknown limit.
+
+**Requested change (any one of these):**
+1. **Honour `blocking=True`** for the request's lifetime, or
+2. **expose the deadline** as deployment config (e.g. `request_timeout` on the deployment spec), or
+3. at minimum **document its value**, so callers can reason about which hops may use blocking at
+   all — and return an explicit "deadline exceeded, poll for the result" signal rather than a bare
+   non-terminal task that is indistinguishable from a HITL pause.
 
 ---
 
