@@ -222,4 +222,4 @@ concerns, the workarounds in this report are load-bearing.
 
 *vibeflix-audit · token & auth postmortem · both root causes fixed and verified in production ·
 workarounds live in `packages/vibeflix-common/vibeflix_common/`: `mcp_clients.py` · `cloud_auth.py` ·
-`a2a_engine.py`. See also `deploy/docs/instruction-sre.md`.*
+`a2a/engine.py`. See also `deploy/docs/instruction-sre.md`.*

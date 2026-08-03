@@ -860,13 +860,17 @@ async def contract_finalize(ctx: Context, node_input):
           f"({vendor} × {character} × {category} × {territory})", flush=True)
     _vc_url = os.environ.get("VENDOR_CLEARANCE_A2A_URL", "")
     try:
-        # Engine→engine one-shot. The proven POLL-based engine sender (dual Authorization +
-        # Proxy-Authorization, token refresh, task poll — same path the app uses to reach the
-        # orchestrator). Native RemoteA2aAgent was evaluated here and rejected: this finalize is
-        # LONG-RUNNING (vendor_clearance → legal → execute contract), and native can't poll it to
-        # completion — it returns a 'pending' task and no contract executes (see the transport
-        # note at the top of this file). The generic _a2a_send 400s on the engine's mTLS card
-        # fetch; it's only correct for local serve_a2a URLs.
+        # Engine→engine one-shot, so it calls the poll sender DIRECTLY rather than going through
+        # VibeflixRemoteA2aAgent like the dispatch hops do. The reason is structural, not
+        # transport: there is no `ctx` and no agent here — this is a plain call inside a tool, not
+        # a `ctx.run_node(agent, brief)` dispatch, so there is nothing for the subclass to be.
+        # (It is NOT because "native can't poll a long hop" — that was the old reason and it is
+        # obsolete: VibeflixRemoteA2aAgent(long_running=True) polls exactly like this call does,
+        # and vendor_clearance's own dispatch hop uses it. This finalize IS long-running —
+        # vendor_clearance → legal → execute contract — which is why the poll path is required
+        # either way.)
+        # The generic _a2a_send 400s on the engine's mTLS card fetch; it's only correct for
+        # local serve_a2a URLs.
         if is_engine_url(_vc_url):
             from vibeflix_common.a2a.engine import a2a_engine_send
             raw = await a2a_engine_send(_vc_url, brief)
