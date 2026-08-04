@@ -5,7 +5,8 @@ This is the simple version of
 It's a bug we found in Google's platform and reported to them.
 
 Related simple explainers: [`A2A-ELI5.md`](A2A-ELI5.md) (why we wrote our own messenger) ·
-[`TOKEN-AUTH-ELI5.md`](TOKEN-AUTH-ELI5.md) (the badges).
+[`TOKEN-AUTH-ELI5.md`](TOKEN-AUTH-ELI5.md) (the badges) ·
+[`PLAYGROUND-BUG-ELI5.md`](PLAYGROUND-BUG-ELI5.md) (the notebook with the wrong name).
 
 ---
 

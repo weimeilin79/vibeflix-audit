@@ -3,6 +3,10 @@
 This explains `vibeflix_common/a2a/engine.py`, with no jargon.
 Engineer version: [`eng-report/UPSTREAM-FR-a2a-client-gaps.md`](eng-report/UPSTREAM-FR-a2a-client-gaps.md).
 
+Related simple explainers: [`SSE-BUG-ELI5.md`](SSE-BUG-ELI5.md) (the radio that only announces the
+start) · [`TOKEN-AUTH-ELI5.md`](TOKEN-AUTH-ELI5.md) (the badges) ·
+[`PLAYGROUND-BUG-ELI5.md`](PLAYGROUND-BUG-ELI5.md) (the notebook with the wrong name).
+
 > **Updated 2026-08-02.** We finally ran the real test in production, and **most of what this page
 > used to say was wrong.** The corrections are kept in, because being wrong and finding out is the
 > most useful part of the story. 🔎

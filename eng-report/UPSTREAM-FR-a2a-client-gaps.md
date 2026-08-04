@@ -1,9 +1,22 @@
-# Upstream Bug — the A2aAgent template advertises a host the Agent Gateway refuses
+# Upstream Bugs — five gaps in A2A on Agent Runtime
 
 **Filed by:** vibeflix-audit (ADK multi-agent mesh on Agent Runtime, `pokedemo-test`)
-**Date:** 2026-08-02 · Supersedes two earlier drafts of this file, both of which were wrong.
+**Date:** 2026-08-02, updated 2026-08-04 · Supersedes two earlier drafts of this file, both wrong.
 **Severity:** High — **no standard A2A client can make an agent-to-agent call** from a
 gateway-attached engine, and the cause is not user-configurable.
+
+| # | Finding | Component |
+|---|---|---|
+| **A** | The `A2aAgent` template advertises a host the Agent Gateway refuses (the headline bug, below) | Agent Runtime template |
+| **B** | Legacy `vertexai.agent_engines` A2A ops silently become `None` | `google-cloud-aiplatform` |
+| **C** | `AgentRegistry` needs `google-adk[agent-identity]`, and only says so at call time | `google-adk` |
+| **D** | A blocking `message:send` dies at ~180s, reporting a healthy engine as failed | Agent Runtime serving |
+| **E** | The console Playground hands the engine a session the engine must reject | Console + `google-adk` |
+
+**The pattern is the point.** Every one is a defect *between two Google components* — template vs
+gateway, SDK vs SDK, console vs ADK — and every one appears only once you deploy with the
+`A2aAgent` template. Individually each is a papercut; together they mean the documented,
+prebuilt A2A path does not work on Agent Runtime without user-space workarounds.
 
 ## The defect in one paragraph
 
@@ -132,7 +145,7 @@ measurement.)*
 
 ---
 
-# Two independent findings, both measured
+# The other findings, each measured independently
 
 ## FINDING B — legacy `vertexai.agent_engines` A2A ops silently become `None`
 
@@ -218,6 +231,79 @@ does not say, and **no timeout/deadline field exists** on `ReasoningEngineSpec.d
 users hunting a failure that never happened; (b) populate `Error Details`, or return a distinct
 status such as `DEADLINE_EXCEEDED`; (c) document the limit, or expose it as deployment config;
 (d) ideally, offer a non-blocking mode on the stock client so callers can poll.
+
+## FINDING E — the console Playground hands the engine a session the engine must reject
+
+**Measured 2026-08-04**, orchestrator engine `3932837094078021632`. Clicking **Run** in the Agent
+Engine console Playground fails **every time, on every A2A-deployed engine**, with:
+
+```
+ValueError: Session 1997178965374009344 does not belong to user A2A_USER_1997178965374009344.
+```
+
+### The chain — three Google components, no user code involved
+
+| # | What happens | Evidence |
+|---|---|---|
+| 1 | The Playground **pre-creates a session** under its own fixed identity | `GET …/sessions/1997178965374009344` → `"userId": "vais-query-reasoning-engine"`, `createTime 14:03:12.736078Z` |
+| 2 | The Playground then calls the engine over A2A, passing **that session's id as the A2A `context_id`** | engine log: `POST /api/a2a/v1/message:send` from a Google IP, `context_id: 1997178965374009344` |
+| 3 | ADK **discards the caller** and synthesizes a user id from the context id | **Source**: `a2a/converters/request_converter.py:76` → `return f'A2A_USER_{request.context_id}'` |
+| 4 | `_prepare_session` looks the session up under that synthetic id | **Source**: `a2a/executor/a2a_agent_executor.py:356` → `get_session(user_id=…, session_id=…)` |
+| 5 | `VertexAiSessionService` enforces ownership and raises | **Source**: `sessions/vertex_ai_session_service.py:249` compares, `:251` raises |
+
+The failure landed at `14:03:24.595` — **12 seconds after step 1**, in the same request flow. The
+task was then written to the task store as `state=failed`.
+
+```mermaid
+flowchart LR
+  P["🖥️ Console Playground"] -->|"1 · create session<br/>owner = vais-query-reasoning-engine"| S["📁 session 1997…344"]
+  P -->|"2 · message:send<br/>context_id = 1997…344"| E["⚙️ engine"]
+  E -->|"3 · ADK derives owner<br/>A2A_USER_1997…344"| C{"owner matches?"}
+  S --> C
+  C -->|"❌ vais-query-reasoning-engine<br/>≠ A2A_USER_1997…344"| X["ValueError · task failed"]
+```
+
+### Why this is deterministic, not flaky
+
+`GOOGLE_CLOUD_AGENT_ENGINE_ID` is injected by Agent Runtime into every engine, so every engine
+builds its `Runner` with `VertexAiSessionService` — the only session service that enforces
+ownership. Any engine deployed with the `A2aAgent` template therefore fails this way 100% of the
+time. In our mesh that is all six.
+
+### ⚠️ This is NOT a "wrong user" bug — and that matters for the fix
+
+The obvious reading is that the Playground should pass the *human's* identity instead of a service
+identity. **That would not fix it.** ADK does not compare against the caller at all; it compares
+against a value it derives from the context id. A human identity mismatches
+`A2A_USER_{context_id}` exactly as a service identity does. The real defect is structural: **ADK's
+A2A path treats the context id as the sole authority on session ownership, so the only session it
+will ever accept is one it created itself** — and the Playground hands it one it didn't.
+
+This is also why our own app is unaffected: it generates a fresh `context_id`, no session
+pre-exists, `get_session` 404s → returns `None` → ADK creates the session under
+`A2A_USER_{context_id}`, and owner and requester agree by construction. Verified: a full
+production audit over the same path runs clean.
+
+### Requested fix — any one of these, all Google-side
+
+1. **Don't pre-create the session.** Let the Playground send a fresh `context_id` and let the
+   engine create the session, exactly as any other A2A client does. Provably sufficient — it is
+   precisely what our app does.
+2. **Conform to the convention.** If the Playground must pre-create, create it as
+   `A2A_USER_{session_id}`.
+3. **Populate the authenticated caller into the A2A call context** (best). ADK's `_get_user_id`
+   *prefers* `request.call_context.user.user_name` and only falls back to the synthetic id when
+   that is absent. The managed A2A server never populates it. Fixing this resolves the bug **and**
+   makes session identity meaningful instead of synthetic.
+
+### Separate concern, worth its own look
+
+Even setting the failure aside, the Playground drives engines as the **shared fixed identity**
+`vais-query-reasoning-engine` rather than as the signed-in human. Every console user's sessions
+therefore land under one identity, so Playground-driven runs have no per-user isolation and no
+attribution. That is a weakness independent of this bug, and option 3 above fixes both.
+
+---
 
 ## What a user has to build to work around all of this
 

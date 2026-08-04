@@ -6,7 +6,8 @@ Two things broke in production. Both are fixed. This explains what happened and 
 hard to see.
 
 Related simple explainers: [`A2A-ELI5.md`](A2A-ELI5.md) ·
-[`SSE-BUG-ELI5.md`](SSE-BUG-ELI5.md).
+[`SSE-BUG-ELI5.md`](SSE-BUG-ELI5.md) ·
+[`PLAYGROUND-BUG-ELI5.md`](PLAYGROUND-BUG-ELI5.md) (the notebook with the wrong name).
 
 ---
 

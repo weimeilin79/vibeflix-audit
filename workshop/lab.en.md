@@ -196,7 +196,9 @@ Before building anything, take a minute on the repo layout so you know where thi
 vibeflix-audit/
 ├── agents/          # the 6 ADK agents (brand_style, deal_pricing, vendor_clearance, legal, orchestrator, ui_renderer)
 ├── mcp_servers/     # the 3 MCP tool servers (mcp_brand_style, mcp_licensing, mcp_market)
-├── packages/        # vibeflix_common — shared helpers (auth, A2A, MCP clients, the task store)
+├── packages/        # vibeflix_common — shared helpers, in 4 subpackages named for who imports them:
+│                    #   a2a/ (transport)  agent/ (ADK building blocks)
+│                    #   mcpserver/ (MCP-only)  platform/ (auth, telemetry — used by both)
 ├── deploy/          # deploy + verify scripts, Terraform modules, and your .env
 │   └── verify/      # the per-step verify scripts (step1.sh … step8.sh)
 ├── frontend/        # the React console (the A2UI renderer)
@@ -663,7 +665,13 @@ The way ADK models "an agent running somewhere else that I can call" is a **remo
 
 **How A2A works.** A2A is a small HTTP contract every ADK agent speaks. Each agent publishes an **agent card** at a well-known URL, describing what it is and how to reach it. To call one, you `POST` a message to its `message:send` endpoint, which returns a **task id**; you then `GET .../tasks/{id}` and poll until the task is done, and read the result. The *task* is the unit of work — which is exactly why the shared task store from Step 5 matters.
 
-**How a remote agent works in ADK.** You don't hand-write those HTTP calls. ADK gives you **`RemoteA2aAgent`**: construct it with the target's agent-card URL, and from then on you invoke it like any local sub-agent (`ctx.run_node(remote, input)`). Under the covers it does the send-and-poll over A2A and hands you back the result. The orchestrator uses this for its fan-out. `vendor_clearance → legal` does the same thing with a direct, fresh-context call (so legal starts clean each time), but the model is identical: **treat an agent running in another engine as a step you can call.**
+**How a remote agent works in ADK.** You don't hand-write those HTTP calls. ADK gives you **`RemoteA2aAgent`**: construct it with the target's agent card, and from then on you invoke it like any local sub-agent (`ctx.run_node(remote, input)`). It makes the A2A call for you and hands you back the result. The orchestrator uses this for its fan-out. `vendor_clearance → legal` does the same thing with a direct, fresh-context call (so legal starts clean each time), but the model is identical: **treat an agent running in another engine as a step you can call.**
+
+> ⚠️ **Two things this mesh had to add on top of stock `RemoteA2aAgent`** — you'll meet both in Step 5, and they're the kind of detail that costs a day if nobody tells you:
+> - **The agent card names the wrong host.** Agent Runtime's A2A template hardcodes the *plain* `…-aiplatform.googleapis.com` host into the card each engine serves — but the Agent Gateway (Step 7) authorizes only the `.mtls` host, and refuses the plain one with `403 Egress request is not authorized`. Since every standard A2A client just follows `card.url`, you have to **build the card yourself** and point it at `.mtls`. That's what `vibeflix_common/a2a/card.py` is for.
+> - **Stock sends *blocking*, not send-and-poll.** Despite A2A being a send-then-poll protocol, the stock client holds one long HTTP request open — and Agent Runtime kills that at **~180s** with `400 FAILED_PRECONDITION` *while the callee is still happily working*. Fast hops never notice; a long one fails confusingly. So hops that can run long send non-blocking and poll instead.
+>
+> Both are hidden inside `VibeflixRemoteA2aAgent` (`vibeflix_common/a2a/remote_agent.py`), a subclass, so every call site stays ordinary ADK. See `eng-report/UPSTREAM-FR-a2a-client-gaps.md` for the measurements.
 
 
 ### 📝 The handoff as its own step
@@ -890,6 +898,22 @@ await ctx.run_node(_AGENTS[agent_name], _brief_from_state(ctx))
 
 `_AGENTS[...]` is a **`RemoteA2aAgent`** (built by `_remote_agent(...)`) — the ADK stand-in for an agent running in another engine (the ones you deployed in Steps 2–4). So a single orchestrator run fans out into **three simultaneous A2A calls** to three separate engines.
 
+Look at `_remote_agent(...)` and notice what it *doesn't* do: it never branches on transport. All three specialists are built with the same constructor, and one boolean decides pacing:
+
+```python
+# agents/orchestrator/agent.py
+_LONG_RUNNING_A2A = {"vendor_clearance_agent"}   # fans into legal's Q&A loop — can run long
+
+        return VibeflixRemoteA2aAgent(
+            name=name,
+            description=description,
+            agent_card=base,
+            long_running=name in _LONG_RUNNING_A2A,
+        )
+```
+
+`brand_style` (~18s) and `deal_pricing` (~9–20s) finish well inside the ~180s blocking ceiling, so they take the stock path. `vendor_clearance` can exceed it — it fans out into legal's multi-round question loop — so it sends non-blocking and polls. Same class, same `ctx.run_node`, one flag: **moving a hop across that ceiling is a boolean, not a different client.**
+
 ### 💡 Concept — the shared A2A task store
 
 That fan-out is exactly where a subtle, brutal bug lives. Every A2A call is two HTTP requests: `POST message:send` (start the task), then `GET /tasks/{id}` polled until it's done. But **Agent Runtime runs each engine as several replicas with no session affinity** — so:
@@ -1016,6 +1040,7 @@ It confirms the orchestrator engine is deployed with an agent identity. The end-
 - An ADK **Workflow** is a **graph** of nodes and edges; you declare the flow, ADK walks it.
 - An edge to a **tuple** is a **fan-out** (parallel); a **`JoinNode`** waits for all branches.
 - Fan-out over A2A needs a **shared task store** (here, Firestore-backed) or replica load-balancing 404s most of your polls.
+- A remote agent is **one class for every hop**; only the *pacing* differs. Anything that can run past Agent Runtime's **~180s blocking ceiling** sends non-blocking and polls (`long_running=True`) — a boolean at the call site, not a second transport.
 - A **session** (`VertexAiSessionService`) is the memory of **one run** — it powers HITL resume and crash survival; a **Memory Bank** (`VertexAiMemoryBankService`, orchestrator-only) is the memory **across runs** — written once by `contract_finalize`, read by `note_responder`'s `load_memory`.
 - **Resumability** (`ResumabilityConfig(is_resumable=True)`) lets a re-invoked run replay finished nodes from cache and re-run the pending ones instead of restarting — which is why `rerun_on_resume` nodes must be **idempotent**.
 
