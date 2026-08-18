@@ -19,6 +19,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
 
+# On a re-run in a fresh tab, ~/.bashrc hasn't been re-sourced yet, so a terraform we installed
+# on an earlier run isn't on PATH. Pick it up FIRST — before preflight (which would otherwise
+# report the Cloud Shell placeholder) and before section 4 (which would re-download it).
+[ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
+
 # ── 1. Environment check: every CLI + credential the workshop needs ──────────
 # Delegated to preflight.sh so there is ONE tool checklist in the repo. --pre-init skips the
 # two things init.sh is about to create itself (terraform, deploy/.env). Preflight exits
@@ -76,10 +81,6 @@ echo "  ✓ Installed agent + legal-RAG deps and the vibeflix-common package (ed
 # nothing. Test for a real version string, not for presence. Install into ~/bin (which persists
 # across Cloud Shell sessions, unlike `apt install`) and prepend it so it beats the placeholder.
 tf_works() { terraform version 2>/dev/null | head -n1 | grep -q '^Terraform v'; }
-
-# Re-run in a fresh tab (before ~/.bashrc is re-sourced) and ~/bin isn't on PATH yet — pick up
-# a terraform we installed on an earlier run rather than downloading it again.
-[ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
 
 if tf_works; then
   echo "▶ Reusing terraform $(terraform version | head -n1 | awk '{print $2}')"

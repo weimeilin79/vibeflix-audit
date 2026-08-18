@@ -15,6 +15,9 @@ FAIL=0; WARN=0
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 bad()  { printf "  \033[31m✗\033[0m %s\n" "$1"; FAIL=1; }
 warn() { printf "  \033[33m!\033[0m %s\n" "$1"; WARN=1; }
+# note() is informational only — expected state, nothing for you to do. Deliberately does NOT
+# set WARN: a "!" in this list means "this can bite you mid-deploy", and these can't.
+note() { printf "  \033[36mℹ\033[0m %s\n" "$1"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -64,10 +67,10 @@ if have terraform; then
   TFV=$(terraform version 2>/dev/null | head -1 | awk '{print $2}')
   case "${TFV:-}" in
     v*) ok "terraform $TFV" ;;
-    *)  [ "$PRE_INIT" = 1 ] && warn "terraform on PATH is a Cloud Shell placeholder — init.sh will install a real one into ~/bin" \
+    *)  [ "$PRE_INIT" = 1 ] && note "terraform — Cloud Shell's copy is a placeholder; init.sh installs a real one into ~/bin in a moment" \
           || bad "terraform on PATH is not runnable (Cloud Shell ships an exit-0 placeholder) — run ./init.sh to install it; if you just did, this shell needs:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
   esac
-elif [ "$PRE_INIT" = 1 ]; then warn "terraform not installed yet — init.sh will install it into ~/bin"
+elif [ "$PRE_INIT" = 1 ]; then note "terraform — init.sh installs it into ~/bin in a moment"
 else bad "terraform not found — run ./init.sh, or install it: https://developer.hashicorp.com/terraform/install"; fi
 
 # jq — grant_agent_iam.sh / setup_gateway.sh parse agent_identities.json with it.
@@ -98,7 +101,7 @@ fi
 echo
 echo "── Config ──────────────────────────────────────────────────────"
 if [ "$PRE_INIT" = 1 ] && [ ! -f "$HERE/.env" ]; then
-  ok "deploy/.env — init.sh will write it next"
+  note "deploy/.env — init.sh writes it in a moment"
 elif [ -f "$HERE/.env" ]; then
   ok "deploy/.env present"
   grep -qE "^PROJECT=" "$HERE/.env" && ok "PROJECT set in deploy/.env" \
