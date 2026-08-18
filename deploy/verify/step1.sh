@@ -29,7 +29,7 @@ for S in licensing market brand-style; do
   gcloud alpha agent-registry services describe "vibeflix-mcp-$S" \
     --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
     && ok "vibeflix-mcp-$S registered in the Agent Registry" \
-    || bad "vibeflix-mcp-$S not registered — run ./deploy/setup_gateway.sh registry"
+    || bad "vibeflix-mcp-$S not registered — re-run ./workshop/setup.sh (step 9/9 registers them)"
 done
 
 finish "Step 1"
