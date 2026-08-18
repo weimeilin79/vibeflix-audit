@@ -40,6 +40,29 @@ REGION = _ENV.get("REGION", "us-central1")
 ONLY = sys.argv[1] if len(sys.argv) > 1 else None
 assert PROJECT, "set PROJECT in deploy/.env"
 
+def gateway_exists() -> bool:
+    """True when the Agent Gateway exists and this caller can read it.
+
+    `agent_gateway_config` may only name a gateway that is actually there. On a fresh
+    project the gateway is created LATER (workshop Step 7 / setup_gateway.sh gateway), so
+    attaching to it here fails the whole deploy with:
+
+        400 FAILED_PRECONDITION  Permission denied to get Agent Gateway '…/vibeflix-gateway'
+
+    — which reads like an IAM problem but is really "it does not exist yet" (GCP masks a
+    missing resource as PERMISSION_DENIED). So probe first and deploy without governed
+    egress when it is absent; re-running this script after Step 7 attaches it.
+    """
+    import subprocess
+    cmd = ["gcloud", "alpha", "network-services", "agent-gateways", "describe",
+           "vibeflix-gateway", "--location", REGION, "--project", PROJECT]
+    try:
+        subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def get_run_url(service_name: str, optional: bool = False) -> str:
     """URL of a Cloud Run service, or "" if it isn't deployed.
 
@@ -123,6 +146,13 @@ _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
 # fall back to a per-replica store and say so loudly. Pass 2, after the app is up, sets it.
 _ENV.setdefault("TASK_STORE_URL",
                 get_run_url("vibeflix-app", optional=True).removesuffix("/mcp"))
+
+# Probed ONCE here, not per-agent: deploy_one() runs in a thread pool, and this shells out.
+GATEWAY_READY = gateway_exists()
+if not GATEWAY_READY:
+    print("   \u2139 Agent Gateway 'vibeflix-gateway' doesn't exist yet — deploying WITHOUT"
+          " governed egress.\n"
+          "     Create it later (setup_gateway.sh gateway), then re-run this script to attach it.")
 
 if identities:
     # A2A hops use the MTLS aiplatform endpoint — the URL the agent endpoints are
@@ -530,12 +560,14 @@ def main():
             "env_vars": env,
             "requirements": requirements(name),
             "extra_packages": ["agents", _vendored_common()],
-            "agent_gateway_config": {
+        }
+        # Governed egress — only if the gateway is there (see gateway_exists()).
+        if GATEWAY_READY:
+            config["agent_gateway_config"] = {
                 "agent_to_anywhere_config": {
                     "agent_gateway": f"projects/{PROJECT}/locations/{REGION}/agentGateways/vibeflix-gateway"
                 }
-            },
-        }
+            }
         if display in existing:
             print(f"── updating {display} ({existing[display]})…")
             engine = client.agent_engines.update(name=existing[display], agent=app, config=config)

@@ -1252,6 +1252,22 @@ One command runs all four sub-steps. It uses **preview** gcloud surfaces, so if 
 > ⏱️ IAM and gateway changes take **2–5 minutes** to propagate. If a call is still denied right
 > after, wait before assuming it's broken.
 
+### 💻 Attach the engines to the gateway
+
+The gateway exists **now** — it didn't when you deployed the engines in Steps 2–5, so they were
+deployed without it (each deploy said so: *"Agent Gateway doesn't exist yet — deploying WITHOUT
+governed egress"*). An engine's gateway attachment is part of its deployment spec, so redeploy
+them once to pick it up:
+
+```bash
+source ./env.sh
+python deploy/deploy_agents_a2a.py        # no arg = all six engines
+```
+
+This is the same two-pass shape you saw with `TASK_STORE_URL` in Step 6: something an engine
+needs is created *after* the engine, so the engine is redeployed once the thing exists. Until
+this pass, the agents' egress isn't governed by the gateway.
+
 ### 👀 Verify
 
 ```bash
