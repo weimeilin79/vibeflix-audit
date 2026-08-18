@@ -108,7 +108,7 @@ what each layer adds.
 ### The environment
 
 - Everything runs in **your own Google Cloud project** (billing enabled).
-- **Cloud Shell** is the easiest place to work — `gcloud`, `terraform`, and `python3` are
+- **Cloud Shell** is the easiest place to work — `gcloud` and `python3` are
   already there. A local shell works too if you have those tools.
 - You deploy **real** managed services: Cloud Run (MCP servers + the app), **Agent Runtime** (the
   agents), Firestore, Pub/Sub. Step 8 includes teardown so you don't leave anything running.
@@ -166,7 +166,7 @@ It's also the foundation of the mesh's security. Think of the registry as the se
 
 ### 💻 Open Cloud Shell
 
-Everything in this workshop runs in **Cloud Shell**, which already has `gcloud`, `terraform`, `python3`, and `git` installed.
+Everything in this workshop runs in **Cloud Shell**, which already has `gcloud`, `python3`, and `git` installed. (It no longer ships `terraform` — `init.sh` installs that for you in a moment.)
 
 👉 In the [Google Cloud console](https://console.cloud.google.com), click **Activate Cloud Shell** — the terminal-shaped icon at the top right. A terminal opens along the bottom of the page.
 
@@ -222,28 +222,27 @@ export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(p
 
 ### 💻 Initialize your environment
 
-Run the init script. It points gcloud at your project (prompting for the id if it isn't set yet) and writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`:
+Run the init script. It does the whole "get ready" step for you:
+
+- **checks your environment first** — every CLI the workshop needs (`gcloud` + its alpha/beta components, `python3`, `jq`, `curl`, `unzip`, `openssl`, `git`), that you're authenticated, and that application-default credentials exist. If something's missing it stops *before* creating anything, so you fix one thing and re-run.
+- points gcloud at your project (prompting for the id if it isn't set yet)
+- creates the Python virtual environment `.venv` and installs every dependency — the agent requirements, the legal-RAG requirements, and the shared `vibeflix-common` package
+- installs `terraform` into `~/bin` if Cloud Shell doesn't have a working one (it ships a placeholder that only prints install instructions)
+- writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`
 
 ```
 ./init.sh
 ```
 
-Enter your Google Cloud Project ID if it prompts you. Re-running it is safe: it won't overwrite an existing `deploy/.env`.
+Enter your Google Cloud Project ID if it prompts you. It takes a few minutes, most of it installing Python packages.
 
+> 🔁 **Every script in this workshop is safe to re-run.** If one stops on an error, fix what it
+> reports and run the same command again — completed work is detected and skipped, not repeated.
+> That applies to `init.sh`, `setup.sh`, and each `deploy/` script behind them.
 
-### 💻 Install the Python dependencies
+Every workshop command that needs Python uses this `.venv` — the deploy scripts call `.venv/bin/python` directly, so you never have to activate it yourself.
 
-The seeding and the agent-deploy scripts run Python, so create a virtual environment and install the dependencies once:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r agents/requirements.txt -r deploy/requirements-legal-rag.txt
-pip install -e packages/vibeflix-common
-```
-
-Every workshop command that needs Python uses this `.venv` — the deploy scripts call `.venv/bin/python` directly, so you don't have to keep it activated in later steps.
+Re-running is safe: it reuses an existing `.venv` and terraform, and won't overwrite an existing `deploy/.env`.
 
 ### 💻 Setup the foundations + all 3 MCP servers
 

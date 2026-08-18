@@ -5,8 +5,12 @@
 # so a from-scratch deploy doesn't die halfway on a missing dependency. Exits non-zero if a
 # REQUIRED item is missing (fix those before starting); warnings (!) are advisory.
 #
-#   ./deploy/preflight.sh
+#   ./deploy/preflight.sh              full check — run before deploying
+#   ./deploy/preflight.sh --pre-init   the subset init.sh needs (skips what init.sh creates:
+#                                      terraform and deploy/.env)
 set -uo pipefail
+PRE_INIT=0
+[ "${1:-}" = "--pre-init" ] && PRE_INIT=1
 FAIL=0; WARN=0
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 bad()  { printf "  \033[31m✗\033[0m %s\n" "$1"; FAIL=1; }
@@ -42,12 +46,9 @@ if have gcloud; then
   ACCT=$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)
   [ -n "$ACCT" ] && ok "gcloud authenticated ($ACCT)" \
     || bad "gcloud not authenticated — run: gcloud auth login"
-  # Application Default Credentials (the python SDKs + terraform use ADC). A STALE
-  # quota project here silently breaks the RAG bucket-ownership check — flag it.
+  # Application Default Credentials (the python SDKs + terraform use ADC).
   if gcloud auth application-default print-access-token >/dev/null 2>&1; then
     ok "application-default credentials present"
-    QP=$(gcloud config get-value billing/quota_project 2>/dev/null)
-    [ -n "$QP" ] && [ "$QP" != "(unset)" ] && warn "ADC quota project = $QP — make sure this project still EXISTS (a deleted one breaks the RAG SDK)"
   else
     bad "ADC missing — run: gcloud auth application-default login"
   fi
@@ -56,15 +57,27 @@ else
 fi
 
 # terraform (deploy/terraform/{agents,mcp})
-if have terraform; then ok "terraform $(terraform version 2>/dev/null | head -1 | awk '{print $2}')"
-else bad "terraform not found — https://developer.hashicorp.com/terraform/install"; fi
+# NOTE: Cloud Shell ships a PLACEHOLDER at /usr/bin/terraform that prints install instructions
+# and exits 0. `have terraform` passes, `terraform apply` does nothing, and foundations silently
+# never gets created. So check for a real "Terraform vX.Y.Z" version line, not for presence.
+if have terraform; then
+  TFV=$(terraform version 2>/dev/null | head -1 | awk '{print $2}')
+  case "${TFV:-}" in
+    v*) ok "terraform $TFV" ;;
+    *)  [ "$PRE_INIT" = 1 ] && warn "terraform on PATH is a Cloud Shell placeholder — init.sh will install a real one into ~/bin" \
+          || bad "terraform on PATH is not runnable (Cloud Shell ships an exit-0 placeholder) — run ./init.sh to install it; if you just did, this shell needs:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
+  esac
+elif [ "$PRE_INIT" = 1 ]; then warn "terraform not installed yet — init.sh will install it into ~/bin"
+else bad "terraform not found — run ./init.sh, or install it: https://developer.hashicorp.com/terraform/install"; fi
 
 # jq — grant_agent_iam.sh / setup_gateway.sh parse agent_identities.json with it.
 have jq      && ok "jq"      || bad "jq not found — 'brew install jq' or 'apt-get install jq'"
 # openssl — generates TASK_STORE_KEY.
 have openssl && ok "openssl" || bad "openssl not found (needed to generate TASK_STORE_KEY)"
-# curl — verify_deployment.sh probes the MCP/app endpoints.
+# curl — verify_deployment.sh probes the MCP/app endpoints; init.sh fetches terraform with it.
 have curl    && ok "curl"    || bad "curl not found"
+# unzip — init.sh unpacks the terraform release with it.
+have unzip   && ok "unzip"   || bad "unzip not found — 'apt-get install unzip' or 'brew install unzip'"
 # git — you cloned the repo; used for the vendored-common copy step.
 have git     && ok "git"     || warn "git not found (expected in a clone)"
 
@@ -84,7 +97,9 @@ fi
 
 echo
 echo "── Config ──────────────────────────────────────────────────────"
-if [ -f "$HERE/.env" ]; then
+if [ "$PRE_INIT" = 1 ] && [ ! -f "$HERE/.env" ]; then
+  ok "deploy/.env — init.sh will write it next"
+elif [ -f "$HERE/.env" ]; then
   ok "deploy/.env present"
   grep -qE "^PROJECT=" "$HERE/.env" && ok "PROJECT set in deploy/.env" \
     || bad "PROJECT not set in deploy/.env"
@@ -94,13 +109,15 @@ fi
 
 echo
 if [ "$FAIL" = 1 ]; then
-  echo "❌ Missing REQUIRED items above — install/fix the ✗ lines, then re-run preflight."
+  echo "❌ Missing REQUIRED items above — install/fix the ✗ lines, then re-run."
   echo "   Do NOT start the deploy until this passes."
   exit 1
 elif [ "$WARN" = 1 ]; then
   echo "⚠️  Ready, with warnings — skim the ! lines (they can bite mid-deploy). Then, in the"
-  echo "   repo root: create the Python venv (runbook Step 0) and start the deploy."
+  if [ "$PRE_INIT" = 1 ]; then echo "   repo root: continuing with ./init.sh…"
+  else echo "   repo root: run ./init.sh (venv + deps + terraform + .env), then start the deploy."; fi
   exit 0
 else
-  echo "✅ All prerequisites present. Next: create the Python venv (runbook Step 0), then deploy."
+  if [ "$PRE_INIT" = 1 ]; then echo "✅ Environment looks good — continuing with ./init.sh…"
+  else echo "✅ All prerequisites present. Next: ./workshop/setup.sh"; fi
 fi

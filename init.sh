@@ -6,26 +6,32 @@
 #     ./init.sh
 #
 # It consolidates the whole "get ready" step:
-#   1. confirms you're authenticated to gcloud
+#   1. checks the environment has every CLI the workshop needs (delegates to deploy/preflight.sh
+#      --pre-init, so the tool checklist lives in exactly ONE place) and that you're authenticated
 #   2. resolves your project id, points gcloud at it, and records it to ~/project_id.txt
 #   3. defaults the region to us-central1 (override with REGION=… ./init.sh)
 #   4. creates the Python venv (.venv) and installs every dependency
-#   5. writes deploy/.env — the config file every workshop script reads
+#   5. installs terraform into ~/bin if it's missing (Cloud Shell no longer ships it)
+#   6. writes deploy/.env — the config file every workshop script reads
 #
-# Idempotent: safe to re-run. It reuses an existing .venv and won't clobber an existing .env.
+# Idempotent: safe to re-run. It reuses an existing .venv and terraform, and won't clobber
+# an existing .env.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
 
-# ── 1. gcloud auth sanity check ──────────────────────────────────────────────
-echo "▶ Checking gcloud authentication…"
-ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1)"
-if [ -z "$ACCOUNT" ]; then
-  echo "  ✗ No active gcloud account. Authenticate first, then re-run:" >&2
-  echo "      gcloud auth login" >&2
-  echo "      gcloud auth application-default login   # ADC — needed for deploys + the RAG setup" >&2
+# ── 1. Environment check: every CLI + credential the workshop needs ──────────
+# Delegated to preflight.sh so there is ONE tool checklist in the repo. --pre-init skips the
+# two things init.sh is about to create itself (terraform, deploy/.env). Preflight exits
+# non-zero if anything REQUIRED is missing, and `set -e` stops us here — nothing has been
+# created yet, so re-running after a fix is clean.
+echo "▶ Checking your environment…"
+./deploy/preflight.sh --pre-init || {
+  echo >&2
+  echo "  ✗ Environment isn't ready — fix the ✗ lines above and re-run ./init.sh" >&2
   exit 1
-fi
-echo "  ✓ Authenticated as: $ACCOUNT"
+}
+ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1)"
+echo
 
 # ── 2. Resolve the project id: arg > ~/project_id.txt > $PROJECT_ID > gcloud config > prompt ──
 PROJECT_ID="${1:-${PROJECT_ID:-}}"
@@ -64,7 +70,43 @@ echo "▶ Installing dependencies (a few minutes)…"
 .venv/bin/pip install --quiet -e packages/vibeflix-common
 echo "  ✓ Installed agent + legal-RAG deps and the vibeflix-common package (editable)."
 
-# ── 4. Write deploy/.env (idempotent) ────────────────────────────────────────
+# ── 4. terraform (Cloud Shell no longer pre-installs it) ─────────────────────
+# Cloud Shell ships a PLACEHOLDER at /usr/bin/terraform that prints install instructions and
+# exits 0 — so a plain `command -v terraform` check passes and `terraform apply` silently does
+# nothing. Test for a real version string, not for presence. Install into ~/bin (which persists
+# across Cloud Shell sessions, unlike `apt install`) and prepend it so it beats the placeholder.
+tf_works() { terraform version 2>/dev/null | head -n1 | grep -q '^Terraform v'; }
+
+# Re-run in a fresh tab (before ~/.bashrc is re-sourced) and ~/bin isn't on PATH yet — pick up
+# a terraform we installed on an earlier run rather than downloading it again.
+[ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
+
+if tf_works; then
+  echo "▶ Reusing terraform $(terraform version | head -n1 | awk '{print $2}')"
+else
+  TF_VER="${TF_VER:-1.9.8}"
+  case "$(uname -s)" in Darwin) TF_OS=darwin ;; *) TF_OS=linux ;; esac
+  case "$(uname -m)" in aarch64|arm64) TF_ARCH=arm64 ;; *) TF_ARCH=amd64 ;; esac
+  TF_ZIP="terraform_${TF_VER}_${TF_OS}_${TF_ARCH}.zip"
+  command -v unzip >/dev/null 2>&1 || { echo "  ✗ need 'unzip' to install terraform" >&2; exit 1; }
+  echo "▶ Installing terraform $TF_VER into ~/bin…"
+  echo "    https://releases.hashicorp.com/terraform/${TF_VER}/${TF_ZIP}"
+  mkdir -p "$HOME/bin"
+  curl -fsSL -o "/tmp/$TF_ZIP" "https://releases.hashicorp.com/terraform/${TF_VER}/${TF_ZIP}"
+  unzip -qo "/tmp/$TF_ZIP" terraform -d "$HOME/bin"
+  rm -f "/tmp/$TF_ZIP"
+  export PATH="$HOME/bin:$PATH"
+  tf_works || { echo "  ✗ terraform still not runnable after install" >&2; exit 1; }
+  echo "  ✓ terraform $(terraform version | head -n1 | awk '{print $2}') → $HOME/bin/terraform"
+  # Persist the PATH for later Cloud Shell tabs (guarded — appended at most once).
+  if ! grep -q 'vibeflix: terraform on PATH' "$HOME/.bashrc" 2>/dev/null; then
+    printf '\n# vibeflix: terraform on PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
+    echo "  ✓ Added ~/bin to PATH in ~/.bashrc (new tabs pick it up automatically)."
+    TF_NEEDS_PATH=1
+  fi
+fi
+
+# ── 5. Write deploy/.env (idempotent) ────────────────────────────────────────
 ENV_FILE="deploy/.env"
 if [ -f "$ENV_FILE" ]; then
   echo "▶ $ENV_FILE already exists — leaving it untouched (delete it to regenerate)."
@@ -86,4 +128,11 @@ echo "✅ Init done."
 echo "   • Authenticated: $ACCOUNT"
 echo "   • Project:       $PROJECT_ID   (Region: $REGION, saved to ~/project_id.txt)"
 echo "   • venv:          .venv         (activate for your own shell with:  source .venv/bin/activate)"
+echo "   • terraform:     $(command -v terraform)"
+if [ -n "${TF_NEEDS_PATH:-}" ]; then
+  echo
+  echo "   ⚠️  terraform was just installed to ~/bin. In THIS shell, run:"
+  echo "         export PATH=\"\$HOME/bin:\$PATH\""
+  echo "       (new tabs get it automatically.)"
+fi
 echo "   • Next:          ./workshop/setup.sh"

@@ -5,12 +5,19 @@
 #   preflight → enable APIs → foundations (Artifact Registry + telemetry topic)
 #   → buckets → Firestore (+ seed) → Pub/Sub subscription → 3 MCP servers on Cloud Run.
 #
+# Run ./init.sh FIRST — it owns the venv, the Python dependencies, terraform, and deploy/.env.
 # Idempotent — safe to re-run. Reads deploy/.env for PROJECT / REGION.
 # On a FRESH workshop project, leave REQUEST_IMAGE_BUCKET / APPROVED_ASSETS_BUCKET UNSET in
 # deploy/.env so the project-prefixed defaults are used everywhere.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 [ -f deploy/.env ] && { set -a; . deploy/.env; set +a; }
+# init.sh installs terraform to ~/bin (Cloud Shell no longer ships it, and ~/bin survives
+# a session restart where `apt install` doesn't). A script can't change its parent's PATH, so
+# pick it up here — otherwise the tab you run this in wouldn't see a terraform you just
+# installed. Prepended so it beats Cloud Shell's exit-0 placeholder at /usr/bin/terraform.
+# Exported, so the preflight + terraform steps below inherit it.
+[ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
 : "${PROJECT:?set PROJECT in deploy/.env (copy deploy/.env.example first)}"
 REGION="${REGION:-us-central1}"
 echo "▶ Workshop setup — project=$PROJECT region=$REGION"
@@ -18,13 +25,21 @@ echo "▶ Workshop setup — project=$PROJECT region=$REGION"
 echo "▶ 1/9 preflight (tools + auth)"
 ./deploy/preflight.sh || { echo "Fix the ✗ items above, then re-run."; exit 1; }
 
-echo "▶ 2/9 Python venv + dependencies (used by the seeding + agent-deploy scripts)"
-[ -d .venv ] || python3 -m venv .venv
+echo "▶ 2/9 checking the venv from ./init.sh"
+# init.sh OWNS the venv, the dependencies, and terraform — this script only asserts they're
+# there. Re-installing here would be a second, drifting copy of the install (it used to be one:
+# it omitted the --pre that the pre-GA ADK needs). Same rule as the topic at 7/9: one owner.
+[ -x .venv/bin/python ] || {
+  echo "ERROR: no .venv — run ./init.sh first (it creates the venv and installs everything)." >&2
+  exit 1
+}
+.venv/bin/python -c 'import vibeflix_common' 2>/dev/null || {
+  echo "ERROR: .venv exists but is missing dependencies — re-run ./init.sh." >&2
+  exit 1
+}
 # shellcheck disable=SC1091
 source .venv/bin/activate
-pip install -q --upgrade pip
-pip install -q -r agents/requirements.txt -r deploy/requirements-legal-rag.txt
-pip install -q -e packages/vibeflix-common
+echo "  ✓ .venv ready ($(.venv/bin/python -V 2>&1))"
 
 echo "▶ 3/9 enable APIs"
 gcloud services enable --project="$PROJECT" \
