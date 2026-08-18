@@ -50,6 +50,10 @@ export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
 # deploy itself still targets $REGION from deploy/.env. Different things — both correct.
 export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
 export GOOGLE_GENAI_USE_VERTEXAI=true
+# Point local runs at the SAME seeded registries the workshop created in Step 1. Without this
+# the MCP servers silently use their hardcoded fallback data, so editing Firestore appears to
+# do nothing locally. registry_get() still falls back if Firestore is unreachable.
+export FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-vibeflix-registry}"
 # init.sh installs terraform here when Cloud Shell doesn't ship a working one.
 [ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
 # agents-cli lives in its own venv. APPENDED, not prepended: .venv/bin must keep owning

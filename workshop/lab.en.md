@@ -254,7 +254,8 @@ source ./env.sh
 It points **this shell** at the project's virtual environment and exports what the scripts and
 agents read — `PROJECT_ID`, `PROJECT_NUMBER`, `REGION`, and the Vertex AI settings.
 
-👉 **Run it once in every terminal tab you open.** Each Cloud Shell tab starts clean, so a tab
+👉 **Run it once in every terminal tab you open** — after `cd ~/vibeflix-audit`, since a new tab
+starts in your home directory, not the repo. Each Cloud Shell tab starts clean, so a tab
 that hasn't sourced it will run Cloud Shell's *system* Python instead of the project's. That
 Python has a different, incompatible set of Google libraries, and the failure looks like a
 mysterious `ImportError` deep inside a library — not like "you used the wrong Python."
@@ -380,7 +381,7 @@ The pattern to notice: the model does one fuzzy thing (read the image), and dete
 
 ### Build & deploy brand_style
 
-The deploy script finds the MCP server URLs for you, so deploying your first agent is a single command:
+The deploy script finds the MCP server URLs for you, so deploying your first agent is two commands:
 
 ```bash
 source ./env.sh
@@ -388,36 +389,110 @@ python deploy/deploy_agents_a2a.py brand_style
 python deploy/collect_agent_identities.py
 ```
 
-This packages the agent folder, deploys it to **Agent Runtime** as its own engine that serves A2A automatically, and turns on its **agent identity**. The second command writes `deploy/agent_identities.json` — the address book mapping each agent to its engine and its identity principal. Everything that follows (granting access, calling the agent) reads it, so it's refreshed after every deploy. This deploymenet may takes a few minutes.
+The first packages the agent folder, deploys it to **Agent Runtime** as its own engine that serves A2A automatically, and turns on its **agent identity**.
+
+> ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
+> uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
+> ahead to **💻 Try it in the ADK Dev UI**, a couple of sections below: that part runs entirely
+> on your own machine and needs nothing from this deploy. Come back to this tab when the two
+> commands have finished, then carry on with **💻 Grant the agent its own access**.
+
+### 💡 Concept — `agent_identities.json`, the mesh's address book
+
+The second command is the one worth understanding, because everything after it depends on the file it writes.
+
+Deploying an agent produces two facts that **only exist after the deploy**, and that nobody can predict beforehand:
+
+- **where it lives** — its engine id, minted by Agent Runtime
+- **who it is** — its *identity principal*, the first-class identity it runs as
+
+`collect_agent_identities.py` asks Vertex AI for every `vibeflix-*` engine in your project and records both, one entry per agent:
+
+```json
+{
+  "vibeflix-brand-style": {
+    "engine":    "projects/<YOUR_PROJECT_NUMBER>/locations/us-central1/reasoningEngines/1234…",
+    "principal": "principal://…/reasoningEngines/1234…"
+  }
+}
+```
+
+That file is how the rest of the workshop finds things:
+
+| who reads it | what it needs |
+|---|---|
+| `grant_agent_access.sh` | the **principal**, to grant roles to the right identity |
+| the next agent you deploy | the **engine** of its peers, to build its A2A URLs |
+| `setup_gateway.sh registry` | the **engine**, to register each agent as a callable destination |
+| you, in a moment | the **engine**, to talk to your agent directly |
+
+So it's regenerated after **every** deploy: a fact that didn't exist a minute ago now has to be written down for the next step to use.
+
+This is also why deploying is a *two-pass* affair later in the workshop: agents that call each
+other can't all know each other's addresses on the first pass, because the addresses don't exist
+yet. Deploy, collect, deploy again.
 
 ### 💻  Grant the agent its own access
 
-The engine exists now, but with no permissions. Grant project roles on **its own identity**, and the ability to reach the IAM-gated MCP servers:
+The engine exists now, but its identity can do nothing at all. This grants it exactly what it needs:
 
 ```bash
 ./deploy/grant_agent_access.sh brand-style
 ```
 
-This is **least privilege in action**: each agent grants its *own* access as it's deployed, keyed to its *own* principal — no blanket "any agent can do anything." 
+**Who can now reach what.** Two different things get granted, and they work differently.
+
+**1 — What the agent itself may do.** These roles go on `vibeflix-brand-style`'s *own* principal, nobody else's:
+
+| role | what it buys |
+|---|---|
+| `aiplatform.user` | call Gemini — without it the agent can't think |
+| `aiplatform.agentContextEditor` | write its **own** sessions. Miss this one and every task poll 401s and the agent hangs forever |
+| `aiplatform.agentDefaultAccess` | the baseline access an engine needs to run on Agent Runtime |
+| `agentregistry.viewer` | read the Agent Registry — the list of permitted destinations |
+| `browser`, `serviceusage.serviceUsageConsumer` | resolve project metadata and call enabled APIs |
+| `logging.logWriter`, `monitoring.metricWriter` | emit its traces and metrics |
+| `pubsub.publisher` on `vibeflix-mesh-events` | publish the events that light up the live graph in Step 8 |
+
+**2 — How it reaches the MCP servers.** This one is indirect, and the reason is worth understanding: **an agent identity is not a service account.** Cloud Run's IAM check wants an OIDC token from a service account, and an agent principal has none to offer. So there's one shared service account in the middle:
+
+```
+  vibeflix-brand-style                vibeflix-mcp-invoker            the 3 MCP servers
+  (agent principal)                   (service account)               (Cloud Run, IAM-gated)
+         │                                     │                              │
+         │  serviceAccountTokenCreator         │  roles/run.invoker           │
+         └────────── may impersonate ─────────►└────────── may call ─────────►│
+```
+
+The agent impersonates the invoker SA, mints an OIDC token with it, and calls the MCP server with that. Cloud Run sees a service account it trusts. Nothing is opened to the public — try the MCP URL yourself and you still get a **403**, exactly as in Step 1.
+
+This is **least privilege in action**: each agent grants its *own* access as it's deployed, keyed to its *own* principal — no blanket "any agent can do anything."
+
+> Note what is **not** granted here: this agent cannot call any *other agent*. Agent-to-agent
+> egress is governed by the Agent Gateway, which you set up in Step 7. Until then, each agent can
+> reach Gemini and the tool servers, and nothing else.
 
 
 ### 💻 Try it in the ADK Dev UI
 
-While we wait for the deploymenet to the cloud, run brand_style on your machine and poke at it in **ADK's web playground**. First bring the three MCP servers up locally (they listen on `127.0.0.1:9002-9004` using your `.venv`):
+While the cloud deploy runs, run brand_style on your machine and poke at it in **ADK's web playground**. First bring the three MCP servers up locally (they listen on `127.0.0.1:9002-9004` using your `.venv`):
 
-👉💻 In a **second Cloud Shell tab**, point the agent at the local brand-style MCP and launch the ADK Dev UI:
+👉💻 In a **second Cloud Shell tab**, start the three local MCP servers:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./run_local.sh mcp
 ```
 
 👉💻 In a **third Cloud Shell tab**, point the agent at the local brand-style MCP and launch the ADK Dev UI:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 export RUN_LOCAL=true
 export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
-adk web agents/brand_style
+adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/brand_style
 ```
 
 You should see the server start up:
@@ -579,6 +654,12 @@ python deploy/deploy_agents_a2a.py deal_pricing
 python deploy/collect_agent_identities.py
 ```
 
+> ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
+> uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
+> ahead to **💻 Try it in the ADK Dev UI**, a couple of sections below: that part runs entirely
+> on your own machine and needs nothing from this deploy. Come back to this tab when the two
+> commands have finished, then carry on with the grant below.
+
 Then grant it its own access (project roles on its principal + reach to the MCP servers):
 
 ```bash
@@ -591,10 +672,11 @@ Then grant it its own access (project roles on its principal + reach to the MCP 
 Like brand_style, you can run deal_pricing locally and drive it from the playground. With the MCP servers up (`./run_local.sh mcp` — start it again if you stopped it), launch the Dev UI in a second Cloud Shell tab, pointed at the local licensing MCP:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 export RUN_LOCAL=true
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
-adk web agents/deal_pricing
+adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/deal_pricing
 ```
 
 Open it via **Web Preview → Change port → 8000**, pick **deal_pricing**, and paste the underpriced deal:
@@ -776,6 +858,12 @@ python deploy/deploy_agents_a2a.py vendor_clearance
 python deploy/collect_agent_identities.py
 ```
 
+> ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
+> uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
+> ahead to **💻 Try it in the ADK Dev UI**, a couple of sections below: that part runs entirely
+> on your own machine and needs nothing from this deploy. Come back to this tab when the two
+> commands have finished, then carry on with the grants below (two agents deploy here, so this one is the longest wait).
+
 Then grant each its own access:
 
 ```bash
@@ -790,6 +878,7 @@ Then grant each its own access:
 This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call). Start it in one tab:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 export RUN_LOCAL=true
 ./run_local.sh mesh
@@ -798,12 +887,13 @@ export RUN_LOCAL=true
 In a **second Cloud Shell tab**, launch the Dev UI for vendor_clearance, pointed at the local MCP servers **and** the local `legal` service:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 export RUN_LOCAL=true
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 export MCP_MARKET_URL=http://127.0.0.1:9003/mcp
 export LEGAL_A2A_URL=http://127.0.0.1:8005
-adk web agents/vendor_clearance
+adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/vendor_clearance
 ```
 
 Open it via **Web Preview → Change port → 8000**, pick **vendor_clearance**, and **onboard a vendor to a new category** — onboarding is what triggers the handoff to legal:
