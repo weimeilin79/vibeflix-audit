@@ -385,9 +385,10 @@ The deploy script finds the MCP server URLs for you, so deploying your first age
 ```bash
 source ./env.sh
 python deploy/deploy_agents_a2a.py brand_style
+python deploy/collect_agent_identities.py
 ```
 
-This packages the agent folder, deploys it to **Agent Runtime** as its own engine that serves A2A automatically, and turns on its **agent identity**. This deploymenet may takes a few minutes.
+This packages the agent folder, deploys it to **Agent Runtime** as its own engine that serves A2A automatically, and turns on its **agent identity**. The second command writes `deploy/agent_identities.json` — the address book mapping each agent to its engine and its identity principal. Everything that follows (granting access, calling the agent) reads it, so it's refreshed after every deploy. This deploymenet may takes a few minutes.
 
 ### 💻  Grant the agent its own access
 
@@ -452,7 +453,8 @@ It confirms the `brand_style` engine is deployed **with an agent identity**. To 
 ```bash
 source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-brand-style"].engine' deploy/agent_identities.json)
-agents-cli run --url "$ENGINE" --mode adk \
+agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
+  --mode adk --app-name brand_style \
   "Audit this mock-up. image: gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png, character: grogu, market: NA"
 ```
 
@@ -574,6 +576,7 @@ Same one command as before — the deploy script finds `mcp_licensing`'s URL aut
 ```bash
 source ./env.sh
 python deploy/deploy_agents_a2a.py deal_pricing
+python deploy/collect_agent_identities.py
 ```
 
 Then grant it its own access (project roles on its principal + reach to the MCP servers):
@@ -614,7 +617,8 @@ underpriced deal from the concept above and watch it reason:
 ```bash
 source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-deal-pricing"].engine' deploy/agent_identities.json)
-agents-cli run --url "$ENGINE" --mode adk \
+agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
+  --mode adk --app-name deal_pricing \
   "Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, \
 volume: 30000, net_unit_price: 18. Agreed terms — royalty_rate: 0.10, advance: 8000, mg: 30000."
 ```
@@ -769,6 +773,7 @@ Now deploy legal, then vendor_clearance (deploy **in this order** — vendor_cle
 source ./env.sh
 python deploy/deploy_agents_a2a.py legal
 python deploy/deploy_agents_a2a.py vendor_clearance
+python deploy/collect_agent_identities.py
 ```
 
 Then grant each its own access:
@@ -825,7 +830,8 @@ HITL question), onboard a vendor to a new category — vendor_clearance will han
 ```bash
 source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-vendor-clearance"].engine' deploy/agent_identities.json)
-agents-cli run --url "$ENGINE" --mode adk \
+agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
+  --mode adk --app-name vendor_clearance \
   "Onboard vendor VND-1008 for grogu vinyl figures in NA."
 ```
 
@@ -1050,6 +1056,7 @@ Deploy it last of the agents — it auto-discovers the three specialists' A2A UR
 ```bash
 source ./env.sh
 python deploy/deploy_agents_a2a.py orchestrator
+python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh orchestrator
 ```
 
@@ -1123,6 +1130,7 @@ The app calls the UI Renderer, so deploy it first, and grant its access like any
 ```bash
 source ./env.sh
 python deploy/deploy_agents_a2a.py ui_renderer
+python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh ui-renderer
 ```
 

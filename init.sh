@@ -70,10 +70,18 @@ fi
 # shell anyway, and the workshop invokes tools as `.venv/bin/python …`.
 echo "▶ Installing dependencies (a few minutes)…"
 .venv/bin/python -m pip install --upgrade pip --quiet
-# --pre: the ADK 2.0 Workflow API is pre-GA (see the header of agents/requirements.txt); the
-# version caps/pins in that file keep --pre from pulling anything too new.
-.venv/bin/pip install --pre --quiet -r agents/requirements.txt \
-  -r deploy/requirements-legal-rag.txt -r deploy/requirements-deploy.txt
+# Install the LOCK when it's there: every attendee then gets byte-identical versions, instead
+# of re-resolving the `>=` ranges and drifting apart week to week. deploy/requirements.lock.txt
+# documents how to regenerate it. The unlocked path stays as a fallback for a fresh checkout
+# that hasn't got one (and needs --pre, since ADK 2.0 is pre-GA).
+if [ -f deploy/requirements.lock.txt ]; then
+  echo "   using deploy/requirements.lock.txt ($(grep -c '==' deploy/requirements.lock.txt) pinned packages)"
+  .venv/bin/pip install --quiet -r deploy/requirements.lock.txt
+else
+  echo "   ! no lock file — resolving from the requirements files (versions may drift)"
+  .venv/bin/pip install --pre --quiet -r agents/requirements.txt \
+    -r deploy/requirements-legal-rag.txt -r deploy/requirements-deploy.txt
+fi
 .venv/bin/pip install --quiet -e packages/vibeflix-common
 echo "  ✓ Installed agent + legal-RAG + deploy deps and the vibeflix-common package (editable)."
 
@@ -114,15 +122,19 @@ fi
 # .venv: it needs google-cloud-aiplatform>=1.120 and a2a-sdk~=0.3.22, and agents/requirements.txt
 # keeps that dependency tree OUT of the agent venv on purpose (see its header). Sharing one venv
 # would silently re-resolve the pinned google-adk. So it gets its own; env.sh puts it on PATH.
-if [ -x .venv-tools/bin/agents-cli ]; then
-  echo "▶ Reusing agents-cli in .venv-tools"
+# PINNED so the whole room runs the same CLI. Override with AGENTS_CLI_VER=… ./init.sh
+AGENTS_CLI_VER="${AGENTS_CLI_VER:-1.4.0}"
+_have_cli="$(.venv-tools/bin/pip show google-agents-cli 2>/dev/null | awk '/^Version:/{print $2}')"
+if [ "$_have_cli" = "$AGENTS_CLI_VER" ]; then
+  echo "▶ Reusing agents-cli $AGENTS_CLI_VER in .venv-tools"
 else
-  echo "▶ Installing agents-cli (isolated in .venv-tools)…"
-  python3 -m venv .venv-tools
+  echo "▶ Installing agents-cli $AGENTS_CLI_VER (isolated in .venv-tools)…"
+  [ -d .venv-tools ] || python3 -m venv .venv-tools
   .venv-tools/bin/python -m pip install --upgrade pip --quiet
-  .venv-tools/bin/pip install --quiet google-agents-cli
-  echo "  ✓ agents-cli installed → .venv-tools/bin/agents-cli"
+  .venv-tools/bin/pip install --quiet "google-agents-cli==$AGENTS_CLI_VER"
+  echo "  ✓ agents-cli $AGENTS_CLI_VER → .venv-tools/bin/agents-cli"
 fi
+unset _have_cli
 
 # ── 6. Write deploy/.env (idempotent) ────────────────────────────────────────
 ENV_FILE="deploy/.env"
