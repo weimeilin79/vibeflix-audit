@@ -12,7 +12,8 @@
 #   3. defaults the region to us-central1 (override with REGION=… ./init.sh)
 #   4. creates the Python venv (.venv) and installs every dependency
 #   5. installs terraform into ~/bin if it's missing (Cloud Shell no longer ships it)
-#   6. writes deploy/.env — the config file every workshop script reads
+#   6. installs agents-cli into its own venv (.venv-tools), isolated from the pinned agent deps
+#   7. writes deploy/.env — the config file every workshop script reads
 #
 # Idempotent: safe to re-run. It reuses an existing .venv and terraform, and won't clobber
 # an existing .env.
@@ -107,7 +108,22 @@ else
   fi
 fi
 
-# ── 5. Write deploy/.env (idempotent) ────────────────────────────────────────
+# ── 5. agents-cli (isolated, in .venv-tools) ─────────────────────────────────
+# The lab talks to a deployed engine with `agents-cli`. It is deliberately NOT installed into
+# .venv: it needs google-cloud-aiplatform>=1.120 and a2a-sdk~=0.3.22, and agents/requirements.txt
+# keeps that dependency tree OUT of the agent venv on purpose (see its header). Sharing one venv
+# would silently re-resolve the pinned google-adk. So it gets its own; env.sh puts it on PATH.
+if [ -x .venv-tools/bin/agents-cli ]; then
+  echo "▶ Reusing agents-cli in .venv-tools"
+else
+  echo "▶ Installing agents-cli (isolated in .venv-tools)…"
+  python3 -m venv .venv-tools
+  .venv-tools/bin/python -m pip install --upgrade pip --quiet
+  .venv-tools/bin/pip install --quiet google-agents-cli
+  echo "  ✓ agents-cli installed → .venv-tools/bin/agents-cli"
+fi
+
+# ── 6. Write deploy/.env (idempotent) ────────────────────────────────────────
 ENV_FILE="deploy/.env"
 if [ -f "$ENV_FILE" ]; then
   echo "▶ $ENV_FILE already exists — leaving it untouched (delete it to regenerate)."

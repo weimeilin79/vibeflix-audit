@@ -228,6 +228,7 @@ Run the init script. It does the whole "get ready" step for you:
 - points gcloud at your project (prompting for the id if it isn't set yet)
 - creates the Python virtual environment `.venv` and installs every dependency — the agent requirements, the legal-RAG requirements, and the shared `vibeflix-common` package
 - installs `terraform` into `~/bin` if Cloud Shell doesn't have a working one (it ships a placeholder that only prints install instructions)
+- installs `agents-cli` — the tool you'll use to talk to a deployed agent — into its own small virtual environment, kept separate from the agent dependencies
 - writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`
 
 ```
@@ -240,9 +241,30 @@ Enter your Google Cloud Project ID if it prompts you. It takes a few minutes, mo
 > reports and run the same command again — completed work is detected and skipped, not repeated.
 > That applies to `init.sh`, `setup.sh`, and each `deploy/` script behind them.
 
-Every workshop command that needs Python uses this `.venv` — the deploy scripts call `.venv/bin/python` directly, so you never have to activate it yourself.
-
 Re-running is safe: it reuses an existing `.venv` and terraform, and won't overwrite an existing `deploy/.env`.
+
+### 💻 Prepare your shell — `source ./env.sh`
+
+Every step below that runs `python` or `adk` starts with one line:
+
+```bash
+source ./env.sh
+```
+
+It points **this shell** at the project's virtual environment and exports what the scripts and
+agents read — `PROJECT_ID`, `PROJECT_NUMBER`, `REGION`, and the Vertex AI settings.
+
+👉 **Run it once in every terminal tab you open.** Each Cloud Shell tab starts clean, so a tab
+that hasn't sourced it will run Cloud Shell's *system* Python instead of the project's. That
+Python has a different, incompatible set of Google libraries, and the failure looks like a
+mysterious `ImportError` deep inside a library — not like "you used the wrong Python."
+
+Sourcing it twice does no harm, so every code block below includes the line and each one is
+safe to copy-paste on its own.
+
+> Note the `source`. Running `./env.sh` instead does nothing useful — a script can't change the
+> shell that launched it, which is why this one is *sourced* rather than executed. It will tell
+> you if you get it the wrong way round.
 
 ### 💻 Setup the foundations + all 3 MCP servers
 
@@ -361,6 +383,7 @@ The pattern to notice: the model does one fuzzy thing (read the image), and dete
 The deploy script finds the MCP server URLs for you, so deploying your first agent is a single command:
 
 ```bash
+source ./env.sh
 python deploy/deploy_agents_a2a.py brand_style
 ```
 
@@ -390,10 +413,8 @@ While we wait for the deploymenet to the cloud, run brand_style on your machine 
 👉💻 In a **third Cloud Shell tab**, point the agent at the local brand-style MCP and launch the ADK Dev UI:
 
 ```bash
-source .venv/bin/activate
+source ./env.sh
 export RUN_LOCAL=true
-export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
-export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
 export MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp
 adk web agents/brand_style
 ```
@@ -429,6 +450,7 @@ The cloud deploy from the *Build & deploy* step takes a few minutes. Once it rep
 It confirms the `brand_style` engine is deployed **with an agent identity**. To watch it actually work, talk to it directly — point it at the default mock-up and see it read the image, then call the deterministic tool:
 
 ```bash
+source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-brand-style"].engine' deploy/agent_identities.json)
 agents-cli run --url "$ENGINE" --mode adk \
   "Audit this mock-up. image: gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png, character: grogu, market: NA"
@@ -550,7 +572,8 @@ Both sub-agents are ordinary `LlmAgent`s, but they never talk to the outside wor
 Same one command as before — the deploy script finds `mcp_licensing`'s URL automatically:
 
 ```bash
-.venv/bin/python deploy/deploy_agents_a2a.py deal_pricing
+source ./env.sh
+python deploy/deploy_agents_a2a.py deal_pricing
 ```
 
 Then grant it its own access (project roles on its principal + reach to the MCP servers):
@@ -565,10 +588,8 @@ Then grant it its own access (project roles on its principal + reach to the MCP 
 Like brand_style, you can run deal_pricing locally and drive it from the playground. With the MCP servers up (`./run_local.sh mcp` — start it again if you stopped it), launch the Dev UI in a second Cloud Shell tab, pointed at the local licensing MCP:
 
 ```bash
-source .venv/bin/activate
+source ./env.sh
 export RUN_LOCAL=true
-export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
-export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 adk web agents/deal_pricing
 ```
@@ -591,6 +612,7 @@ It confirms the `deal_pricing` engine is deployed with an agent identity. Then s
 underpriced deal from the concept above and watch it reason:
 
 ```bash
+source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-deal-pricing"].engine' deploy/agent_identities.json)
 agents-cli run --url "$ENGINE" --mode adk \
   "Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, \
@@ -744,8 +766,9 @@ Its instruction ties them together: given a clearance brief, follow the skill (l
 Now deploy legal, then vendor_clearance (deploy **in this order** — vendor_clearance auto-discovers legal's A2A URL from `agent_identities.json`):
 
 ```bash
-.venv/bin/python deploy/deploy_agents_a2a.py legal
-.venv/bin/python deploy/deploy_agents_a2a.py vendor_clearance
+source ./env.sh
+python deploy/deploy_agents_a2a.py legal
+python deploy/deploy_agents_a2a.py vendor_clearance
 ```
 
 Then grant each its own access:
@@ -762,19 +785,16 @@ Then grant each its own access:
 This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call). Start it in one tab:
 
 ```bash
+source ./env.sh
 export RUN_LOCAL=true
-export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
-export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
 ./run_local.sh mesh
 ```
 
 In a **second Cloud Shell tab**, launch the Dev UI for vendor_clearance, pointed at the local MCP servers **and** the local `legal` service:
 
 ```bash
-source .venv/bin/activate
+source ./env.sh
 export RUN_LOCAL=true
-export GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)
-export GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true
 export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 export MCP_MARKET_URL=http://127.0.0.1:9003/mcp
 export LEGAL_A2A_URL=http://127.0.0.1:8005
@@ -803,6 +823,7 @@ It confirms both engines are deployed with agent identities. To see the handoff 
 HITL question), onboard a vendor to a new category — vendor_clearance will hand off to legal:
 
 ```bash
+source ./env.sh
 ENGINE=$(jq -r '.["vibeflix-vendor-clearance"].engine' deploy/agent_identities.json)
 agents-cli run --url "$ENGINE" --mode adk \
   "Onboard vendor VND-1008 for grogu vinyl figures in NA."
@@ -1027,7 +1048,8 @@ Deploy it last of the agents — it auto-discovers the three specialists' A2A UR
 `agent_identities.json`:
 
 ```bash
-.venv/bin/python deploy/deploy_agents_a2a.py orchestrator
+source ./env.sh
+python deploy/deploy_agents_a2a.py orchestrator
 ./deploy/grant_agent_access.sh orchestrator
 ```
 
@@ -1099,7 +1121,8 @@ the one app container to keep the workshop simple, which is why it runs pinned t
 The app calls the UI Renderer, so deploy it first, and grant its access like any other agent:
 
 ```bash
-.venv/bin/python deploy/deploy_agents_a2a.py ui_renderer
+source ./env.sh
+python deploy/deploy_agents_a2a.py ui_renderer
 ./deploy/grant_agent_access.sh ui-renderer
 ```
 
@@ -1132,7 +1155,8 @@ Here's a subtlety worth understanding. The engines need the app's URL (for `TASK
 
 
 ```bash
-.venv/bin/python deploy/deploy_agents_a2a.py        # no arg = redeploy all engines (pass 2)
+source ./env.sh
+python deploy/deploy_agents_a2a.py        # no arg = redeploy all engines (pass 2)
 ```
 
 Skip this and the engines log `[task-store] … falling back to the per-replica store`, and you're

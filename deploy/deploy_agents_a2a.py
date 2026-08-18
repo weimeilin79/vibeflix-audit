@@ -40,16 +40,25 @@ REGION = _ENV.get("REGION", "us-central1")
 ONLY = sys.argv[1] if len(sys.argv) > 1 else None
 assert PROJECT, "set PROJECT in deploy/.env"
 
-def get_run_url(service_name: str) -> str:
+def get_run_url(service_name: str, optional: bool = False) -> str:
+    """URL of a Cloud Run service, or "" if it isn't deployed.
+
+    optional=True is for services that legitimately don't exist yet (the app, on a fresh
+    project's first pass). Those print a one-line note instead of gcloud's raw ERROR +
+    CalledProcessError dump, which reads like a crash in the middle of a normal deploy.
+    """
     import subprocess
     cmd = ["gcloud", "run", "services", "describe", service_name,
            "--platform", "managed", "--region", REGION, "--project", PROJECT,
            "--format", "value(status.url)"]
     try:
-        url = subprocess.check_output(cmd).decode().strip()
+        url = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
         return f"{url}/mcp" if url else ""
     except Exception as e:
-        print(f"Error getting URL for {service_name}: {e}")
+        if optional:
+            print(f"   ℹ {service_name} isn't deployed yet — continuing without it.")
+        else:
+            print(f"Error getting URL for {service_name}: {e}")
         return ""
 
 import json
@@ -113,7 +122,7 @@ _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
 # EMPTY on the first pass of a fresh project (the app doesn't exist yet) — the engines then
 # fall back to a per-replica store and say so loudly. Pass 2, after the app is up, sets it.
 _ENV.setdefault("TASK_STORE_URL",
-                get_run_url("vibeflix-app").removesuffix("/mcp"))
+                get_run_url("vibeflix-app", optional=True).removesuffix("/mcp"))
 
 if identities:
     # A2A hops use the MTLS aiplatform endpoint — the URL the agent endpoints are
