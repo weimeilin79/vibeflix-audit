@@ -511,7 +511,34 @@ Pick **brand_style** and ask it to audit the default mock-up — for example:
 
 > Audit `gs://<your-project>-request-image/vendor_request_refine.png` for grogu vinyl figures in NA.
 
-Watch it read the text and medium from the image, call `run_brand_audit`, and fill in the `BrandStyleReport`. This local loop is the fastest way to iterate on an agent before you ship it.
+Watch it read the text and medium from the image, call `run_brand_audit`, and fill in the `BrandStyleReport`:
+
+```json
+{
+  "status": "compliant",
+  "extracted": {
+    "text": [],
+    "medium": "vinyl figures",
+    "image_uri": "gs://<your-project>-request-image/vendor_request_refine.png"
+  },
+  "checks_run": ["asset_source", "typo", "printed_medium"],
+  "findings": []
+}
+```
+
+**Read that reply as two halves, because it's the concept from the top of this section made concrete.**
+
+`extracted` is the **model's** work — it looked at the artwork and reported what it saw: the medium is *vinyl figures*, and there's no printed text on this mock-up (`text: []`). Ask it twice and the wording could differ slightly. That's the non-deterministic half, and it's exactly the part the intern used to do by eye.
+
+Everything else is the **tool's** work. `checks_run` lists the three deterministic checks the MCP server ran, in its own fixed order, and `status` is its verdict — `compliant`, `flagged`, or `rejected`. The model didn't decide that and can't override it. Same inputs, same answer, every time. `findings` is empty here because nothing failed; each failed check appends an entry naming the element, the issue type, and a severity.
+
+> 🔎 **Try breaking it.** Change the image link to something outside your buckets — say
+> `gs://some-random-bucket/x.png` — and re-run. You'll get `"status": "rejected"` with
+> `checks_run: ["asset_source"]`: **only one check ran.** The asset-source gate runs first and
+> short-circuits the rest, so unapproved artwork is never even inspected. That ordering is a
+> policy decision baked into the tool, not something the model chose.
+
+This local loop is the fastest way to iterate on an agent before you ship it.
 
 👉💻 When you're finished exploring, shut the local servers down: press `Ctrl+C` in the `adk web` tab, and again in the `./run_local.sh mcp` tab.
 
