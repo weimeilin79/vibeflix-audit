@@ -23,7 +23,7 @@
 # pre-releases only where a package has no stable release at all.
 #
 # Does NOT cover: the agents' own manifests (agents/<name>/requirements.txt, installed by Agent
-# Runtime IN THE CLOUD), terraform, or agents-cli — those are pinned in init.sh.
+# Runtime IN THE CLOUD) or terraform — that is pinned in init.sh.
 #
 a2a-sdk==0.3.26
     # via

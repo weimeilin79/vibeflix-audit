@@ -6,7 +6,8 @@ It's a bug we found in Google's platform and reported to them.
 
 Related simple explainers: [`A2A-ELI5.md`](A2A-ELI5.md) (why we wrote our own messenger) ·
 [`SSE-BUG-ELI5.md`](SSE-BUG-ELI5.md) (the radio that only announces the start) ·
-[`TOKEN-AUTH-ELI5.md`](TOKEN-AUTH-ELI5.md) (the badges).
+[`TOKEN-AUTH-ELI5.md`](TOKEN-AUTH-ELI5.md) (the badges) ·
+[`AGENTS-CLI-ELI5.md`](AGENTS-CLI-ELI5.md) (the visitor who knocks on a wall).
 
 ---
 

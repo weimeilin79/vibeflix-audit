@@ -1,7 +1,7 @@
-# Upstream Bugs — five gaps in A2A on Agent Runtime
+# Upstream Bugs — six gaps in A2A on Agent Runtime
 
 **Filed by:** vibeflix-audit (ADK multi-agent mesh on Agent Runtime, `pokedemo-test`)
-**Date:** 2026-08-02, updated 2026-08-04 · Supersedes two earlier drafts of this file, both wrong.
+**Date:** 2026-08-02, updated 2026-08-18 · Supersedes two earlier drafts of this file, both wrong.
 **Severity:** High — **no standard A2A client can make an agent-to-agent call** from a
 gateway-attached engine, and the cause is not user-configurable.
 
@@ -12,6 +12,7 @@ gateway-attached engine, and the cause is not user-configurable.
 | **C** | `AgentRegistry` needs `google-adk[agent-identity]`, and only says so at call time | `google-adk` |
 | **D** | A blocking `message:send` dies at ~180s, reporting a healthy engine as failed | Agent Runtime serving |
 | **E** | The console Playground hands the engine a session the engine must reject | Console + `google-adk` |
+| **F** | `agents-cli run` cannot reach an `A2aAgent` engine — it addresses routes that do not exist there | `google-agents-cli` |
 
 **The pattern is the point.** Every one is a defect *between two Google components* — template vs
 gateway, SDK vs SDK, console vs ADK — and every one appears only once you deploy with the
@@ -302,6 +303,67 @@ Even setting the failure aside, the Playground drives engines as the **shared fi
 `vais-query-reasoning-engine` rather than as the signed-in human. Every console user's sessions
 therefore land under one identity, so Playground-driven runs have no per-user isolation and no
 attribution. That is a weakness independent of this bug, and option 3 above fixes both.
+
+## FINDING F — `agents-cli run` cannot reach an `A2aAgent` engine
+
+**Measured 2026-08-18**, `google-agents-cli` 1.4.0 (also reproduced on 1.3.1 — the routing is
+identical), against a healthy `A2aAgent` engine. Google's own agent CLI cannot talk to an engine
+deployed with Google's own A2A template, in **either** of its two modes.
+
+```
+$ agents-cli run --url https://us-central1-aiplatform.googleapis.com/v1/projects/…/reasoningEngines/… \
+    --mode adk --app-name brand_style "Audit this mock-up…"
+
+Error: Failed to create Agent Runtime session (HTTP 404):
+  "Reasoning Engine Execution failed. … Error Details: {"detail":"Not Found"}"
+```
+
+### The routes do not overlap
+
+| | Path the client requests | Result |
+|---|---|---|
+| `--mode adk` | `<resource>:streamQuery` (`run/cmd_run.py:362`) | 404 — the A2A template serves no ADK SSE endpoint |
+| `--mode a2a` | `…/reasoningEngines/v1/<resource>/api/a2a/<app_name>/.well-known/agent-card.json` (`_agent_runtime_a2a.py:28-44`) | **404** (verified by curl) |
+| `--mode a2a`, app-name guessed as the agent dir | `…/api/a2a/brand_style/.well-known/agent-card.json` | **404** (verified by curl) |
+| **what the engine actually serves** | `…/v1beta1/<resource>/a2a/v1/card` | **200** ✓ |
+| | `…/v1beta1/<resource>/a2a/v1/message:send` · `/a2a/v1/tasks/{id}` | ✓ (our client uses these in production) |
+
+Two independent differences: the **API version segment** (`reasoningEngines/v1` vs `v1beta1`) and
+the **mount point** (`/api/a2a/<app_name>` vs `/a2a/v1`).
+
+### No flag can bridge it
+
+This is the part that makes it a defect rather than a documentation gap. `--url` is **not used
+verbatim**: `is_raw_agent_runtime_url()` recognises any Agent Runtime URL and rebuilds the path
+itself, so a caller cannot supply the correct one. `--app-name` only fills the `<app_name>`
+segment of a prefix that is already wrong. There is no combination of flags that reaches
+`/v1beta1/<resource>/a2a/v1/`.
+
+### Root cause
+
+`agents-cli` targets engines deployed by `agents-cli deploy` or `adk deploy agent_engine`, which
+mount each agent under its **directory name**. Engines created through `vertexai`'s
+`agent_engines.create()` with the `A2aAgent` template mount A2A at a **versioned protocol path**.
+Both are supported, first-party deploy paths; the client knows only one of them.
+
+### Requested fix — any one of these
+
+1. **Probe both layouts.** Try `/v1beta1/<resource>/a2a/v1/card` when the ADK-style card 404s.
+   Cheapest fix, no interface change.
+2. **Honour `--url` verbatim** when the caller supplies a full path, instead of rebuilding it.
+   Lets a user work around any future divergence without a client release.
+3. **Publish the route on the engine.** The engine knows how it was deployed; expose the A2A base
+   in `reasoningEngines.get` so clients resolve it instead of guessing.
+
+Option 1 unblocks users today; option 2 is the one that stops this recurring.
+
+### Impact
+
+The CLI is the documented way to smoke-test a deployed agent. For A2A-template engines it fails
+with `404 … {"detail":"Not Found"}`, which reads as *"your agent is broken"* rather than *"this
+client is looking in the wrong place"* — and the engine is fine, as the same request against
+`/a2a/v1/message:send` proves by returning a full report. We replaced the CLI with a ~30-line
+script over our own A2A client (`deploy/ask_agent.py`).
 
 ---
 

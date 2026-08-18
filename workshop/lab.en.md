@@ -228,7 +228,6 @@ Run the init script. It does the whole "get ready" step for you:
 - points gcloud at your project (prompting for the id if it isn't set yet)
 - creates the Python virtual environment `.venv` and installs every dependency — the agent requirements, the legal-RAG and deploy requirements, and the shared `vibeflix-common` package
 - installs `terraform` into `~/bin` if Cloud Shell doesn't have a working one (it ships a placeholder that only prints install instructions)
-- installs `agents-cli` — the tool you'll use to talk to a deployed agent — into its own small virtual environment, kept separate from the agent dependencies
 - writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`
 
 ```
@@ -554,9 +553,7 @@ It confirms the `brand_style` engine is deployed **with an agent identity**. To 
 
 ```bash
 source ./env.sh
-ENGINE=$(jq -r '.["vibeflix-brand-style"].engine' deploy/agent_identities.json)
-agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
-  --mode adk --app-name brand_style \
+python deploy/ask_agent.py brand-style \
   "Audit this mock-up. image: gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png, character: grogu, market: NA"
 ```
 
@@ -725,9 +722,7 @@ underpriced deal from the concept above and watch it reason:
 
 ```bash
 source ./env.sh
-ENGINE=$(jq -r '.["vibeflix-deal-pricing"].engine' deploy/agent_identities.json)
-agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
-  --mode adk --app-name deal_pricing \
+python deploy/ask_agent.py deal-pricing \
   "Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, \
 volume: 30000, net_unit_price: 18. Agreed terms — royalty_rate: 0.10, advance: 8000, mg: 30000."
 ```
@@ -946,9 +941,7 @@ HITL question), onboard a vendor to a new category — vendor_clearance will han
 
 ```bash
 source ./env.sh
-ENGINE=$(jq -r '.["vibeflix-vendor-clearance"].engine' deploy/agent_identities.json)
-agents-cli run --url "https://${REGION}-aiplatform.googleapis.com/v1/${ENGINE}" \
-  --mode adk --app-name vendor_clearance \
+python deploy/ask_agent.py vendor-clearance \
   "Onboard vendor VND-1008 for grogu vinyl figures in NA."
 ```
 

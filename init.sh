@@ -12,8 +12,7 @@
 #   3. defaults the region to us-central1 (override with REGION=… ./init.sh)
 #   4. creates the Python venv (.venv) and installs every dependency
 #   5. installs terraform into ~/bin if it's missing (Cloud Shell no longer ships it)
-#   6. installs agents-cli into its own venv (.venv-tools), isolated from the pinned agent deps
-#   7. writes deploy/.env — the config file every workshop script reads
+#   6. writes deploy/.env — the config file every workshop script reads
 #
 # Idempotent: safe to re-run. It reuses an existing .venv and terraform, and won't clobber
 # an existing .env.
@@ -87,9 +86,9 @@ else
 fi
 .venv/bin/pip install --quiet -e packages/vibeflix-common
 echo "  ✓ Installed agent + legal-RAG + deploy deps and the vibeflix-common package (editable)."
-# Cloud Shell's home directory is capped at 5 GB and these installs are large (the venv is
-# ~400 MB, agents-cli's isolated venv another ~500 MB). The wheel cache is pure duplication
-# once installed, so drop it — a full home disk fails later steps in confusing ways.
+# Cloud Shell's home directory is capped at 5 GB and this install is large (~400 MB). The
+# wheel cache is pure duplication once installed, so drop it — a full home disk fails later
+# steps in confusing ways.
 .venv/bin/pip cache purge >/dev/null 2>&1 || true
 
 # ── 4. terraform (Cloud Shell no longer pre-installs it) ─────────────────────
@@ -124,29 +123,7 @@ else
   fi
 fi
 
-# ── 5. agents-cli (isolated, in .venv-tools) ─────────────────────────────────
-# The lab talks to a deployed engine with `agents-cli`. It CANNOT share .venv — the two pin
-# incompatible majors of the same package:
-#     google-adk[a2a]==2.3.0    needs a2a-sdk >=0.3.4,<0.4
-#     google-agents-cli==1.4.0  needs a2a-sdk >=1.0,<2
-# (verified: `uv pip compile` of the two together is unsatisfiable). So it gets its own venv,
-# and env.sh appends it to PATH. Costs ~500 MB — worth watching on Cloud Shell's 5 GB home.
-# PINNED so the whole room runs the same CLI. Override with AGENTS_CLI_VER=… ./init.sh
-AGENTS_CLI_VER="${AGENTS_CLI_VER:-1.4.0}"
-_have_cli="$(.venv-tools/bin/pip show google-agents-cli 2>/dev/null | awk '/^Version:/{print $2}')"
-if [ "$_have_cli" = "$AGENTS_CLI_VER" ]; then
-  echo "▶ Reusing agents-cli $AGENTS_CLI_VER in .venv-tools"
-else
-  echo "▶ Installing agents-cli $AGENTS_CLI_VER (isolated in .venv-tools)…"
-  [ -d .venv-tools ] || python3 -m venv .venv-tools
-  .venv-tools/bin/python -m pip install --upgrade pip --quiet
-  .venv-tools/bin/pip install --quiet "google-agents-cli==$AGENTS_CLI_VER"
-  .venv-tools/bin/pip cache purge >/dev/null 2>&1 || true
-  echo "  ✓ agents-cli $AGENTS_CLI_VER → .venv-tools/bin/agents-cli"
-fi
-unset _have_cli
-
-# ── 6. Write deploy/.env (idempotent) ────────────────────────────────────────
+# ── 5. Write deploy/.env (idempotent) ────────────────────────────────────────
 ENV_FILE="deploy/.env"
 if [ -f "$ENV_FILE" ]; then
   echo "▶ $ENV_FILE already exists — leaving it untouched (delete it to regenerate)."

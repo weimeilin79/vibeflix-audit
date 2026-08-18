@@ -7,7 +7,8 @@ hard to see.
 
 Related simple explainers: [`A2A-ELI5.md`](A2A-ELI5.md) ·
 [`SSE-BUG-ELI5.md`](SSE-BUG-ELI5.md) ·
-[`PLAYGROUND-BUG-ELI5.md`](PLAYGROUND-BUG-ELI5.md) (the notebook with the wrong name).
+[`PLAYGROUND-BUG-ELI5.md`](PLAYGROUND-BUG-ELI5.md) (the notebook with the wrong name) ·
+[`AGENTS-CLI-ELI5.md`](AGENTS-CLI-ELI5.md) (the visitor who knocks on a wall).
 
 ---
 

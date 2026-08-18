@@ -56,9 +56,6 @@ export GOOGLE_GENAI_USE_VERTEXAI=true
 export FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-vibeflix-registry}"
 # init.sh installs terraform here when Cloud Shell doesn't ship a working one.
 [ -x "$HOME/bin/terraform" ] && export PATH="$HOME/bin:$PATH"
-# agents-cli lives in its own venv. APPENDED, not prepended: .venv/bin must keep owning
-# `python`, and .venv-tools has its own python that would otherwise shadow it.
-[ -d "$_VF_ROOT/.venv-tools/bin" ] && export PATH="$PATH:$_VF_ROOT/.venv-tools/bin"
 
 echo "✓ shell ready — project=$PROJECT_ID region=${REGION:-us-central1} $(python -V 2>&1)"
 unset _VF_ROOT
