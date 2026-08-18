@@ -72,9 +72,10 @@ echo "▶ Installing dependencies (a few minutes)…"
 .venv/bin/python -m pip install --upgrade pip --quiet
 # --pre: the ADK 2.0 Workflow API is pre-GA (see the header of agents/requirements.txt); the
 # version caps/pins in that file keep --pre from pulling anything too new.
-.venv/bin/pip install --pre --quiet -r agents/requirements.txt -r deploy/requirements-legal-rag.txt
+.venv/bin/pip install --pre --quiet -r agents/requirements.txt \
+  -r deploy/requirements-legal-rag.txt -r deploy/requirements-deploy.txt
 .venv/bin/pip install --quiet -e packages/vibeflix-common
-echo "  ✓ Installed agent + legal-RAG deps and the vibeflix-common package (editable)."
+echo "  ✓ Installed agent + legal-RAG + deploy deps and the vibeflix-common package (editable)."
 
 # ── 4. terraform (Cloud Shell no longer pre-installs it) ─────────────────────
 # Cloud Shell ships a PLACEHOLDER at /usr/bin/terraform that prints install instructions and

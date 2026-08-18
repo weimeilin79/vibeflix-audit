@@ -226,7 +226,7 @@ Run the init script. It does the whole "get ready" step for you:
 
 - **checks your environment first** — every CLI the workshop needs (`gcloud` + its alpha/beta components, `python3`, `jq`, `curl`, `unzip`, `openssl`, `git`), that you're authenticated, and that application-default credentials exist. If something's missing it stops *before* creating anything, so you fix one thing and re-run.
 - points gcloud at your project (prompting for the id if it isn't set yet)
-- creates the Python virtual environment `.venv` and installs every dependency — the agent requirements, the legal-RAG requirements, and the shared `vibeflix-common` package
+- creates the Python virtual environment `.venv` and installs every dependency — the agent requirements, the legal-RAG and deploy requirements, and the shared `vibeflix-common` package
 - installs `terraform` into `~/bin` if Cloud Shell doesn't have a working one (it ships a placeholder that only prints install instructions)
 - installs `agents-cli` — the tool you'll use to talk to a deployed agent — into its own small virtual environment, kept separate from the agent dependencies
 - writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`

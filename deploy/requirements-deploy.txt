@@ -1,0 +1,18 @@
+# Deployment-only requirements — creating/updating the Agent Engines.
+#
+# deploy/deploy_agents_a2a.py calls vertexai's `agent_engines.create()`, which pickles the
+# agent with cloudpickle before uploading it. cloudpickle comes from the [agent_engines]
+# extra; the plain `google-cloud-aiplatform` in requirements-legal-rag.txt does NOT pull it,
+# so without this the deploy fails at the upload step with:
+#
+#     ImportError: cloudpickle is not installed.
+#
+# Deliberately NOT in agents/requirements.txt: that file is installed into every agent image,
+# and this drags in the heavy aiplatform extras (opentelemetry exporters, cloud-trace,
+# cloud-logging). See that file's header — the agents get `vertexai` from the Agent Runtime
+# environment at runtime and don't need it baked in.
+#
+# Install it only where you RUN the deploy (init.sh puts it in .venv):
+#     pip install -r deploy/requirements-deploy.txt
+#
+google-cloud-aiplatform[agent_engines]>=1.71.0
