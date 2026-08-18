@@ -1,25 +1,29 @@
 # deploy/requirements.lock.txt — the EXACT dependency tree the workshop installs.
 #
-# Why a lock file: agents/requirements.txt and the two deploy/requirements-*.txt files use
-# `>=` ranges, so two people running the workshop a week apart resolve different trees. That
-# is how a rehearsal passes and the live session fails. init.sh installs THIS file instead,
-# so every attendee gets byte-identical versions.
+# Why a lock file: the requirements files it is built from use `>=` ranges, so two people
+# running the workshop a week apart resolve different trees. That is how a rehearsal passes and
+# the live session fails. init.sh installs THIS file instead, so every attendee gets identical
+# versions.
 #
-# Generated for PYTHON 3.12 (Cloud Shell's version). Regenerate after changing any
-# requirements file — from the repo root, with uv installed:
+# Covers SIX inputs — the agents, the two deploy-only sets, AND the three MCP servers. The MCP
+# servers matter because run_local.sh runs them from this venv for the local Dev UI sections;
+# leaving them out fails at import (`No module named 'spellchecker'`) the moment an agent tries
+# to load its tools.
+#
+# Generated for PYTHON 3.12 (Cloud Shell's version). Regenerate after changing any input:
 #
 #   uv pip compile --python-version 3.12 --prerelease=if-necessary-or-explicit \
 #     agents/requirements.txt deploy/requirements-legal-rag.txt deploy/requirements-deploy.txt \
+#     mcp_servers/mcp_brand_style/requirements.txt mcp_servers/mcp_licensing/requirements.txt \
+#     mcp_servers/mcp_market/requirements.txt \
 #     -o deploy/requirements.lock.txt
 #
 # NOTE the prerelease flag: `--prerelease=allow` (the obvious choice, since ADK 2.0 is pre-GA)
-# also drags in a BETA pydantic (2.14.0b1) and other unrelated pre-releases. The flag above
-# takes pre-releases only where a package genuinely has no stable release — which here is just
-# the two opentelemetry-exporter-gcp-* alphas that google-cloud-aiplatform[agent_engines]
-# pins directly.
+# also drags in a BETA pydantic and other unrelated pre-releases. The flag above takes
+# pre-releases only where a package has no stable release at all.
 #
-# This lock does NOT cover: the agents' own manifests (agents/<name>/requirements.txt, which
-# Agent Runtime installs IN THE CLOUD), terraform, or agents-cli — those are pinned in init.sh.
+# Does NOT cover: the agents' own manifests (agents/<name>/requirements.txt, installed by Agent
+# Runtime IN THE CLOUD), terraform, or agents-cli — those are pinned in init.sh.
 #
 a2a-sdk==0.3.26
     # via
@@ -29,6 +33,8 @@ a2ui-agent-sdk==0.5.0
     # via -r agents/requirements.txt
 a2ui-core==0.1.1
     # via a2ui-agent-sdk
+aiofile==3.12.3
+    # via py-key-value-aio
 aiohappyeyeballs==2.7.1
     # via aiohttp
 aiohttp==3.14.3
@@ -50,15 +56,29 @@ anyio==4.14.2
     #   google-genai
     #   httpx
     #   mcp
+    #   py-key-value-aio
     #   sse-starlette
     #   starlette
+    #   watchfiles
+asgiref==3.12.1
+    # via opentelemetry-instrumentation-asgi
 attrs==26.1.0
     # via
     #   aiohttp
+    #   cyclopts
     #   jsonschema
+    #   jsonschema-path
     #   referencing
 authlib==1.7.2
-    # via google-adk
+    # via
+    #   fastmcp-slim
+    #   google-adk
+beartype==0.22.9
+    # via py-key-value-aio
+cachetools==7.1.7
+    # via py-key-value-aio
+caio==0.12.2
+    # via aiofile
 certifi==2026.7.22
     # via
     #   google-cloud-aiplatform
@@ -81,14 +101,31 @@ cryptography==50.0.0
     #   google-auth
     #   joserfc
     #   pyjwt
+cyclopts==4.23.0
+    # via fastmcp-slim
 distro==1.9.0
     # via google-genai
+dnspython==2.8.0
+    # via email-validator
 docstring-parser==0.18.0
-    # via google-cloud-aiplatform
+    # via
+    #   cyclopts
+    #   google-cloud-aiplatform
+email-validator==2.3.0
+    # via pydantic
+exceptiongroup==1.3.1
+    # via fastmcp-slim
 fastapi==0.141.1
     # via
     #   -r agents/requirements.txt
     #   google-adk
+fastmcp==3.4.7
+    # via
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
+fastmcp-slim==3.4.7
+    # via fastmcp
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -148,7 +185,11 @@ google-cloud-core==2.6.1
     #   google-cloud-logging
     #   google-cloud-storage
 google-cloud-firestore==2.28.1
-    # via -r agents/requirements.txt
+    # via
+    #   -r agents/requirements.txt
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
 google-cloud-iamconnectorcredentials==0.1.1
     # via google-adk
 google-cloud-logging==3.16.2
@@ -156,7 +197,11 @@ google-cloud-logging==3.16.2
     #   google-cloud-aiplatform
     #   opentelemetry-exporter-gcp-logging
 google-cloud-pubsub==2.39.1
-    # via -r agents/requirements.txt
+    # via
+    #   -r agents/requirements.txt
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
 google-cloud-resource-manager==1.18.0
     # via google-cloud-aiplatform
 google-cloud-storage==3.13.1
@@ -190,6 +235,8 @@ googleapis-common-protos==1.75.1
     #   opentelemetry-exporter-otlp-proto-http
 graphviz==0.21
     # via google-adk
+griffelib==2.2.0
+    # via fastmcp-slim
 grpc-google-iam-v1==0.14.5
     # via
     #   google-cloud-logging
@@ -222,6 +269,7 @@ httpcore==1.0.9
 httpx==0.28.1
     # via
     #   a2a-sdk
+    #   fastmcp-slim
     #   google-adk
     #   google-genai
     #   mcp
@@ -232,46 +280,101 @@ httpx-sse==0.4.3
 idna==3.19
     # via
     #   anyio
+    #   email-validator
     #   httpx
     #   requests
     #   yarl
+jaraco-classes==3.4.0
+    # via keyring
+jaraco-context==6.1.2
+    # via keyring
+jaraco-functools==4.6.0
+    # via keyring
 joserfc==1.7.4
-    # via authlib
+    # via
+    #   authlib
+    #   fastmcp-slim
+jsonref==1.1.0
+    # via fastmcp-slim
 jsonschema==4.26.0
     # via
     #   a2ui-agent-sdk
     #   a2ui-core
     #   google-adk
     #   mcp
+jsonschema-path==0.5.0
+    # via fastmcp-slim
 jsonschema-specifications==2025.9.1
     # via jsonschema
+keyring==25.7.0
+    # via py-key-value-aio
+markdown-it-py==4.2.0
+    # via rich
 mcp==1.29.0
-    # via -r agents/requirements.txt
+    # via
+    #   -r agents/requirements.txt
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
+    #   fastmcp-slim
+mdurl==0.1.2
+    # via markdown-it-py
+more-itertools==11.1.0
+    # via
+    #   jaraco-classes
+    #   jaraco-functools
 multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
 numpy==2.5.2
     # via pandas
+openapi-pydantic==0.5.1
+    # via fastmcp-slim
 opentelemetry-api==1.42.1
     # via
+    #   fastmcp-slim
     #   google-adk
     #   google-cloud-logging
     #   google-cloud-pubsub
     #   opentelemetry-exporter-gcp-logging
     #   opentelemetry-exporter-gcp-trace
     #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-starlette
+    #   opentelemetry-propagator-gcp
     #   opentelemetry-resourcedetector-gcp
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
 opentelemetry-exporter-gcp-logging==1.14.0a0
     # via google-cloud-aiplatform
 opentelemetry-exporter-gcp-trace==1.14.0
-    # via google-cloud-aiplatform
+    # via
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
+    #   google-cloud-aiplatform
 opentelemetry-exporter-otlp-proto-common==1.42.1
     # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-http==1.42.1
     # via google-cloud-aiplatform
+opentelemetry-instrumentation==0.63b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-starlette
+opentelemetry-instrumentation-asgi==0.63b1
+    # via opentelemetry-instrumentation-starlette
+opentelemetry-instrumentation-starlette==0.63b1
+    # via
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
+opentelemetry-propagator-gcp==1.14.0
+    # via
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
 opentelemetry-proto==1.42.1
     # via
     #   opentelemetry-exporter-otlp-proto-common
@@ -282,6 +385,9 @@ opentelemetry-resourcedetector-gcp==1.14.0
     #   opentelemetry-exporter-gcp-trace
 opentelemetry-sdk==1.42.1
     # via
+    #   -r mcp_servers/mcp_brand_style/requirements.txt
+    #   -r mcp_servers/mcp_licensing/requirements.txt
+    #   -r mcp_servers/mcp_market/requirements.txt
     #   google-adk
     #   google-cloud-aiplatform
     #   google-cloud-pubsub
@@ -290,14 +396,28 @@ opentelemetry-sdk==1.42.1
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-resourcedetector-gcp
 opentelemetry-semantic-conventions==0.63b1
-    # via opentelemetry-sdk
+    # via
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-starlette
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.63b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-starlette
 packaging==26.3
     # via
+    #   fastmcp-slim
     #   google-adk
     #   google-cloud-aiplatform
     #   google-cloud-bigquery
+    #   opentelemetry-instrumentation
 pandas==3.0.5
     # via -r deploy/requirements-legal-rag.txt
+pathable==0.6.0
+    # via jsonschema-path
+platformdirs==4.11.3
+    # via fastmcp-slim
 propcache==0.5.2
     # via
     #   aiohttp
@@ -333,6 +453,8 @@ protobuf==6.33.6
     #   grpcio-status
     #   opentelemetry-proto
     #   proto-plus
+py-key-value-aio==0.4.5
+    # via fastmcp-slim
 pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
@@ -345,17 +467,29 @@ pydantic==2.13.4
     #   a2a-sdk
     #   a2ui-core
     #   fastapi
+    #   fastmcp-slim
     #   google-adk
     #   google-cloud-aiplatform
     #   google-genai
     #   mcp
+    #   openapi-pydantic
     #   pydantic-settings
 pydantic-core==2.46.4
     # via pydantic
 pydantic-settings==2.15.0
-    # via mcp
+    # via
+    #   fastmcp-slim
+    #   mcp
+pygments==2.21.0
+    # via
+    #   rich
+    #   rich-rst
 pyjwt==2.13.0
     # via mcp
+pyperclip==1.11.0
+    # via fastmcp-slim
+pyspellchecker==0.9.0
+    # via -r mcp_servers/mcp_brand_style/requirements.txt
 python-dateutil==2.9.0.post0
     # via
     #   google-cloud-bigquery
@@ -364,19 +498,25 @@ python-dotenv==1.2.3
     # via
     #   -r agents/requirements.txt
     #   -r deploy/requirements-legal-rag.txt
+    #   fastmcp-slim
     #   google-adk
     #   pydantic-settings
 python-multipart==0.0.32
     # via
     #   -r agents/requirements.txt
+    #   fastmcp-slim
     #   google-adk
     #   mcp
 pyyaml==6.0.3
-    # via google-adk
+    # via
+    #   fastmcp-slim
+    #   google-adk
+    #   jsonschema-path
 referencing==0.37.0
     # via
     #   a2ui-core
     #   jsonschema
+    #   jsonschema-path
     #   jsonschema-specifications
 requests==2.34.2
     # via
@@ -388,6 +528,13 @@ requests==2.34.2
     #   google-genai
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-resourcedetector-gcp
+rich==15.0.0
+    # via
+    #   cyclopts
+    #   fastmcp-slim
+    #   rich-rst
+rich-rst==2.1.0
+    # via cyclopts
 rpds-py==2026.6.3
     # via
     #   jsonschema
@@ -401,6 +548,7 @@ sse-starlette==3.4.8
 starlette==1.6.0
     # via
     #   fastapi
+    #   fastmcp-slim
     #   google-adk
     #   mcp
     #   sse-starlette
@@ -413,7 +561,9 @@ typing-extensions==4.16.0
     #   aiohttp
     #   aiosignal
     #   anyio
+    #   exceptiongroup
     #   fastapi
+    #   fastmcp-slim
     #   google-adk
     #   google-cloud-aiplatform
     #   google-genai
@@ -425,6 +575,7 @@ typing-extensions==4.16.0
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
+    #   py-key-value-aio
     #   pydantic
     #   pydantic-core
     #   referencing
@@ -438,18 +589,26 @@ typing-inspection==0.4.4
     #   pydantic-settings
 tzlocal==5.4.4
     # via google-adk
+uncalled-for==0.4.0
+    # via fastmcp-slim
 urllib3==2.7.0
     # via requests
 uvicorn==0.52.3
     # via
     #   -r agents/requirements.txt
+    #   fastmcp-slim
     #   google-adk
     #   mcp
 watchdog==6.0.0
     # via google-adk
+watchfiles==1.2.0
+    # via fastmcp-slim
 websockets==15.0.1
     # via
+    #   fastmcp-slim
     #   google-adk
     #   google-genai
+wrapt==2.3.0
+    # via opentelemetry-instrumentation
 yarl==1.24.5
     # via aiohttp

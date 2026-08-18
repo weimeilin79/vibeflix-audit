@@ -80,7 +80,10 @@ if [ -f deploy/requirements.lock.txt ]; then
 else
   echo "   ! no lock file — resolving from the requirements files (versions may drift)"
   .venv/bin/pip install --pre --quiet -r agents/requirements.txt \
-    -r deploy/requirements-legal-rag.txt -r deploy/requirements-deploy.txt
+    -r deploy/requirements-legal-rag.txt -r deploy/requirements-deploy.txt \
+    -r mcp_servers/mcp_brand_style/requirements.txt \
+    -r mcp_servers/mcp_licensing/requirements.txt \
+    -r mcp_servers/mcp_market/requirements.txt
 fi
 .venv/bin/pip install --quiet -e packages/vibeflix-common
 echo "  ✓ Installed agent + legal-RAG + deploy deps and the vibeflix-common package (editable)."
