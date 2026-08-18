@@ -26,6 +26,7 @@ PROJECT="${PROJECT}"
 # ⚠️ Agent Engine + Memory Bank need a REGION, not "global" (the Gemini location).
 REGION="${REGION:-us-central1}"
 BUCKET="${BUCKET:-vibeflix-artifacts}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_setup.sh"
 
 echo "[setup_memory] project=$PROJECT region=$REGION bucket=$BUCKET"
 gcloud config set project "$PROJECT" >/dev/null
@@ -34,10 +35,10 @@ echo "[setup_memory] 1/3 enabling APIs…"
 gcloud services enable aiplatform.googleapis.com storage.googleapis.com
 
 echo "[setup_memory] 2/3 creating private artifacts bucket…"
-gcloud storage buckets create "gs://$BUCKET" \
+ensure_created "gs://$BUCKET" \
+  gcloud storage buckets create "gs://$BUCKET" \
   --project="$PROJECT" --location="$REGION" \
-  --uniform-bucket-level-access --public-access-prevention \
-  || echo "   (bucket may already exist — continuing)"
+  --uniform-bucket-level-access --public-access-prevention
 
 echo "[setup_memory] 3/3 creating Agent Engine instance (Sessions + Memory Bank)…"
 # Agent Engine creation is a Vertex SDK call, not gcloud. Needs the SDK:

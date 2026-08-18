@@ -25,6 +25,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+. "$HERE/lib_setup.sh"
 
 # --- config: deploy/.env (the same file the other setup scripts load) ---
 ENV_FILE="$HERE/.env"
@@ -44,10 +45,10 @@ gcloud services enable firestore.googleapis.com
 
 echo "[setup_firestore] 2/4 creating the '$DATABASE' database (native mode)…"
 # Dedicated named DB — isolated from the project's shared (default) database.
-gcloud firestore databases create \
+ensure_created "the '$DATABASE' database" \
+  gcloud firestore databases create \
   --database="$DATABASE" --location="$REGION" \
-  --type=firestore-native --project="$PROJECT" \
-  || echo "   (database may already exist — continuing)"
+  --type=firestore-native --project="$PROJECT"
 
 # Prefer the repo venv's python if present (has google-cloud-firestore).
 PY="$ROOT/.venv/bin/python"

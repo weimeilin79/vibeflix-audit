@@ -39,6 +39,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/lib_setup.sh"
 
 ENV_FILE="$HERE/.env"
 if [ -f "$ENV_FILE" ]; then
@@ -65,12 +66,12 @@ gcloud pubsub topics describe "$TOPIC" --project "$PROJECT" >/dev/null 2>&1 || {
 
 echo "[setup_pubsub] 3/4 creating pull subscription '$SUBSCRIPTION'…"
 # UI telemetry is ephemeral: short retention, no expiry (the app reconnects at will).
-gcloud pubsub subscriptions create "$SUBSCRIPTION" \
+ensure_created "subscription '$SUBSCRIPTION'" \
+  gcloud pubsub subscriptions create "$SUBSCRIPTION" \
   --topic "$TOPIC" --project "$PROJECT" \
   --ack-deadline 10 \
   --message-retention-duration 10m \
-  --expiration-period never \
-  || echo "   (subscription may already exist — continuing)"
+  --expiration-period never
 
 echo "[setup_pubsub] 4/4 smoke test: publish → pull…"
 gcloud pubsub topics publish "$TOPIC" --project "$PROJECT" \

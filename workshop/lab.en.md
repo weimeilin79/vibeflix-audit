@@ -265,6 +265,16 @@ It's idempotent — if a step fails (usually a missing API or permission), fix i
 
 This confirms the Artifact Registry repo, the telemetry topic, the Firestore database, and **all three MCP servers are up *and* IAM-gated** (It should return **403**). 
 
+> 🩹 **If you see a `✗`, read what it says to run.** Every verify script names the exact script
+> that creates the missing piece — for example `run ./deploy/setup_gateway.sh registry`. Those
+> are the same scripts `setup.sh` calls internally, so running one directly just re-does that
+> one step instead of all nine. Run it, then run the verify script again.
+>
+> This is worth knowing because these are **real cloud APIs**, and they occasionally fail for
+> reasons that have nothing to do with you — a preview API can return a transient
+> `code: 13 INTERNAL`. The setup scripts retry those automatically and stop with a clear error
+> if the retries don't help, so a `✗` is a to-do, not a broken lab.
+
 You now have the mesh's foundation: three deterministic, IAM-gated tool servers **registered in the Agent Registry**, a seeded database, a telemetry topic, and an image registry. 
 Next, you'll build the first agent, connect it to `mcp_brand_style`, and grant it its own access.
 

@@ -75,4 +75,3 @@ echo "▶ 9/9 register the 3 MCP servers to the Agent Registry (discoverability 
 
 echo
 echo "✅ Foundations + 3 MCP servers are up, and the MCP servers are in the Agent Registry."
-echo "   Next: workshop/02-brand-style.md — build & deploy your first agent (it grants its own IAM)."

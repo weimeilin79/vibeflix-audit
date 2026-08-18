@@ -14,6 +14,7 @@
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/lib_setup.sh"
 [ -f "$HERE/.env" ] && { set -a; . "$HERE/.env"; set +a; }
 PROJECT="${PROJECT:?set PROJECT in deploy/.env}"
 REGION="${REGION:-us-central1}"
@@ -29,13 +30,13 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
     SPEC="$HERE/toolspecs/$S.json"
     [ -s "$SPEC" ] || { echo "  generating tool spec $SPEC…";
       "$HERE/../.venv/bin/python" "$HERE/make_toolspec.py" "$URL" > "$SPEC"; }
-    gcloud alpha agent-registry services create "vibeflix-mcp-$S" \
+    ensure_created "registry entry vibeflix-mcp-$S" \
+      gcloud alpha agent-registry services create "vibeflix-mcp-$S" \
       --project "$PROJECT" --location "$REGION" \
       --display-name "Vibeflix MCP $S" \
       --mcp-server-spec-type=tool-spec \
       --mcp-server-spec-content="$(cat "$SPEC")" \
-      --interfaces="url=$URL,protocolBinding=JSONRPC" \
-      || echo "  (vibeflix-mcp-$S may already be registered — continuing)"
+      --interfaces="url=$URL,protocolBinding=JSONRPC"
   done
   # ALL 6 AGENTS are registry entries too (A2A policies + console list + gateway
   # destinations all key off these; unregistered destinations are blocked). The
@@ -51,12 +52,12 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
   else
   for A in brand-style vendor-clearance deal-pricing legal ui-renderer orchestrator; do
     ENG=$(jq -r --arg k "vibeflix-$A" '.[$k].engine' "$HERE/agent_identities.json")
-    gcloud alpha agent-registry services create "vibeflix-$A-agent" \
+    ensure_created "registry entry vibeflix-$A-agent" \
+      gcloud alpha agent-registry services create "vibeflix-$A-agent" \
       --project "$PROJECT" --location "$REGION" \
       --display-name "Vibeflix $A agent" \
       --endpoint-spec-type=no-spec \
-      --interfaces='[{url="https://'"$REGION"'-aiplatform.mtls.googleapis.com/v1beta1/'"$ENG"'",protocolBinding="jsonrpc"}]' \
-      || echo "  (vibeflix-$A-agent may already be registered — continuing)"
+      --interfaces='[{url="https://'"$REGION"'-aiplatform.mtls.googleapis.com/v1beta1/'"$ENG"'",protocolBinding="jsonrpc"}]' 
   done
   fi
   gcloud alpha agent-registry services list --project "$PROJECT" --location "$REGION" \
@@ -92,11 +93,12 @@ timeout: 5s
 metadata:
   iapPolicyVersion: "V1"
 EOF
-  gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
-    --source="$HERE/iap-authz-extension.yaml" --location="$REGION" --project="$PROJECT" \
-    || echo "  (authz extension may already exist — continuing)"
+  ensure_created "the IAP authz extension" \
+    gcloud beta service-extensions authz-extensions import vibeflix-gateway-iap-authz \
+    --source="$HERE/iap-authz-extension.yaml" --location="$REGION" --project="$PROJECT"
   # Bind the extension to the gateway (AuthzPolicy, REQUEST_AUTHZ profile).
-  curl -fsS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  ensure_created "the gateway authz policy" \
+    curl -fsS -H "Authorization: Bearer $(gcloud auth print-access-token)" \
     -H "Content-Type: application/json" \
     -X POST "https://networksecurity.googleapis.com/v1alpha1/projects/$PROJECT/locations/$REGION/authzPolicies?authz_policy_id=vibeflix-gateway-iap-policy" \
     -d '{
@@ -105,7 +107,7 @@ EOF
       "action": "CUSTOM",
       "target": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/agentGateways/vibeflix-gateway"]},
       "customProvider": {"authzExtension": {"resources": ["projects/'"$PROJECT"'/locations/'"$REGION"'/authzExtensions/vibeflix-gateway-iap-authz"]}}
-    }' || echo "  (authz policy may already exist — continuing)"
+    }' 
   echo
   # EVERYTHING the agents need, in one idempotent pass — grant_agent_iam.sh registers the
   # endpoints nothing else creates (gcp-iamcredentials, global aiplatform), grants the
