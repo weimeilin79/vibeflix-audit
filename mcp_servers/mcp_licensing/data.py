@@ -361,6 +361,46 @@ _TRADEMARKS: dict[str, dict] = {
 # Exactly FOUR: one per region, each a different trademark, and every partner is
 # a REGISTRY vendor (name + vendor_id match _VENDORS) so the data is coherent.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# CANONICAL VOCABULARY — the spellings the registry stores.
+#
+# Vendor records are MUTATED at runtime by create_vendor/update_vendor, and the
+# values come from a reasoner echoing whatever the user typed ("apparel"). Left
+# alone that casing lands in the registry, so the same category is stored two
+# ways and an exact lookup for "Apparel" misses the row that was just written.
+# Writes are normalised through canon_category/canon_territory so the store only
+# ever holds one spelling of each.
+# ---------------------------------------------------------------------------
+def _canon(value: str, known: set[str]) -> str:
+    """Map `value` onto its canonical spelling, case-insensitively. An unknown
+    value is title-cased rather than rejected — vendors legitimately onboard into
+    categories nobody seeded."""
+    v = (value or "").strip()
+    if not v:
+        return v
+    lowered = {k.lower(): k for k in known}
+    return lowered.get(v.lower(), v.title())
+
+
+def canon_category(value: str) -> str:
+    return _canon(value, CANONICAL_CATEGORIES)
+
+
+def canon_territory(value: str) -> str:
+    return _canon(value, CANONICAL_TERRITORIES)
+
+
+def canon_list(values, fn) -> list:
+    """Normalise a list, dropping blanks and duplicates while keeping order."""
+    out: list[str] = []
+    for raw in values or []:
+        c = fn(raw)
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 _EXCLUSIVITY: dict[str, dict] = {
     "EXC-4471": {
         "contract_id": "EXC-4471",
@@ -597,3 +637,14 @@ def vendor_reset() -> dict:
     for vid, rec in _DEFAULT_VENDORS.items():
         _VENDORS[vid] = _copy.deepcopy(rec)
     return {"restored": len(_DEFAULT_VENDORS), "deleted": deleted}
+
+
+# Derived from the seeded records above, so the vocabulary grows with the data
+# rather than drifting from it.
+CANONICAL_CATEGORIES: set[str] = {
+    c for v in _VENDORS.values() for c in v.get("product_categories", []) if c
+} | {c.get("category") for c in _EXCLUSIVITY.values() if c.get("category")}
+
+CANONICAL_TERRITORIES: set[str] = {
+    t for v in _VENDORS.values() for t in v.get("operating_territories", []) if t
+} | {c.get("territory") for c in _EXCLUSIVITY.values() if c.get("territory")}

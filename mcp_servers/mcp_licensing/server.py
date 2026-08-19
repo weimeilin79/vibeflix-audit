@@ -36,7 +36,8 @@ instrument_fastmcp(mcp, source="mcp_licensing")
 
 # Seed data lives in data.py (keeps this file focused on the tools).
 from data import (_TRADEMARKS, _EXCLUSIVITY, _CONTRACTS, _RATE_CARDS,
-                  vendors_all, vendor_get, vendor_put, vendor_reset)
+                  vendors_all, vendor_get, vendor_put, vendor_reset,
+                  canon_category, canon_territory, canon_list)
 
 # Allowed-value hints surfaced to the agent in each tool's parameter schema.
 _TERRITORIES = '"North America", "Europe", "Asia-Pacific", "Latin America", or "Middle East & Africa"'
@@ -46,11 +47,21 @@ _CHARACTERS = '"grogu", "gremlins", "et", "stitch", "little_green_men", "minions
 
 
 def _match_territory(vendor: dict, territory: str) -> bool:
-    return not territory or territory in vendor.get("operating_territories", [])
+    # Case-insensitive for the same reason as _match_category below.
+    if not territory:
+        return True
+    want = territory.strip().lower()
+    return any((t or "").strip().lower() == want for t in vendor.get("operating_territories", []))
 
 
 def _match_category(vendor: dict, category: str) -> bool:
-    return not category or category in vendor.get("product_categories", [])
+    # Case-insensitive: the reasoner passes whatever casing the user typed ("apparel"),
+    # while the registry stores title case ("Apparel"). Matching on the exact string
+    # made a vendor look like it couldn't make a category it had just been given.
+    if not category:
+        return True
+    want = category.strip().lower()
+    return any((c or "").strip().lower() == want for c in vendor.get("product_categories", []))
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +134,8 @@ def create_vendor(
         "legal_name": data["legal_name"],
         "dba": data.get("dba", ""),
         "hq_country": data["hq_country"],
-        "operating_territories": data.get("operating_territories", []),
-        "product_categories": data.get("product_categories", []),
+        "operating_territories": canon_list(data.get("operating_territories", []), canon_territory),
+        "product_categories": canon_list(data.get("product_categories", []), canon_category),
         "manufacturing_capabilities": data.get("manufacturing_capabilities", []),
         "license_tier": data.get("license_tier", "Tier 3 - Probation"),
         # New vendors are added ACTIVE so they're immediately usable for clearance.
@@ -165,6 +176,12 @@ def update_vendor(
         return json.dumps({"error": "updates_json must be a JSON object."})
     record = copy.deepcopy(current)
     updates.pop("vendor_id", None)  # id is immutable
+    # Normalise the two controlled vocabularies before they hit the store, so an
+    # onboarding turn can't write "apparel" next to "Vinyl Figures".
+    if "product_categories" in updates:
+        updates["product_categories"] = canon_list(updates["product_categories"], canon_category)
+    if "operating_territories" in updates:
+        updates["operating_territories"] = canon_list(updates["operating_territories"], canon_territory)
     record.update(updates)
     vendor_put(vid, record)
     return json.dumps({"updated": True, "changed": sorted(updates), "vendor": record})
@@ -237,16 +254,23 @@ def verify_trademark_record(
 def scan_global_exclusivity_clauses(
     character_id: Annotated[str, Field(description=f'Character/mark ID (case-insensitive): {_CHARACTERS}.')],
     territory: Annotated[str, Field(description=f'Territory to check for an exclusivity lock: {_TERRITORIES}.')],
+    category: Annotated[str, Field(description=f'Product category being applied for ({_CATEGORIES}). An exclusivity contract locks ONE category, so pass this to get an answer scoped to what you are actually asking about. Empty = report a lock on ANY category in this territory.')] = "",
 ) -> str:
     """Crawl active exclusivity contracts to see if a competitor holds an exclusive
     lock on this character's product category in this territory (e.g. an exclusive partner vendor on
-    vinyl figures in North America). Only ACTIVE, non-expired contracts count."""
+    vinyl figures in North America). Only ACTIVE, non-expired contracts count.
+
+    Each contract locks a SINGLE category, so a lock on vinyl figures says nothing about
+    apparel. Pass `category` and the answer is scoped to it — deciding whether a
+    vinyl-figures lock applies to an apparel request is a lookup, not a judgement call."""
     cid = (character_id or "").strip().lower()
+    cat = (category or "").strip().lower()
     hits = [
         c for c in _EXCLUSIVITY.values()
         if c.get("character_id") == cid
         and c.get("territory") == territory
         and c.get("status") == "active"
+        and (not cat or (c.get("category") or "").strip().lower() == cat)
     ]
     if hits:
         c = hits[0]
@@ -259,9 +283,10 @@ def scan_global_exclusivity_clauses(
             "message": f"Block release. {c['partner']} holds exclusive rights for "
                        f"{c['category']} in {territory} until {c['expiration']}.",
         })
+    scope = f"'{character_id}' {category}" if category else f"'{character_id}'"
     return json.dumps({
         "has_conflict": False,
-        "message": f"No active exclusivity lock for '{character_id}' in {territory}.",
+        "message": f"No active exclusivity lock for {scope} in {territory}.",
     })
 
 
@@ -286,7 +311,7 @@ def check_vendor_eligibility(
         reasons.append(f"Vendor is not cleared to operate in {territory}.")
     if not _match_category(vendor, category):
         reasons.append(f"Vendor does not manufacture category '{category}'.")
-    excl = json.loads(scan_global_exclusivity_clauses(character_id, territory))
+    excl = json.loads(scan_global_exclusivity_clauses(character_id, territory, category))
     if excl.get("has_conflict"):
         reasons.append(excl["message"])
     return json.dumps({
