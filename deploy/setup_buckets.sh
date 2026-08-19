@@ -42,15 +42,26 @@ for B in "$RIB" "$AAB" "$BKT"; do
   fi
 done
 
-# Seed the default mockup the console form points at (frontend DEFAULT_IMAGE + every guided
-# scenario preset resolve to gs://<request-image>/vendor_request_refine.png).
-IMG="$ROOT/deploy/img/vendor_request_refine.png"
-if [ -f "$IMG" ]; then
-  gcloud storage cp "$IMG" "gs://$RIB/vendor_request_refine.png" --project="$PROJECT" >/dev/null \
-    && echo "  ✓ seeded default mockup → gs://$RIB/vendor_request_refine.png"
+# Seed EVERY mock-up in deploy/img/ into the request-image bucket, not just the default one.
+# Adding a scenario should mean dropping a file in that folder — nothing here to edit. The
+# console's form default and the guided scenarios point at vendor_request_refine.png, so that
+# one is called out separately if it's missing.
+IMG_DIR="$ROOT/deploy/img"
+shopt -s nullglob
+IMGS=("$IMG_DIR"/*.png "$IMG_DIR"/*.jpg "$IMG_DIR"/*.jpeg "$IMG_DIR"/*.webp)
+shopt -u nullglob
+if [ ${#IMGS[@]} -eq 0 ]; then
+  echo "  ⚠️ no mock-ups found in $IMG_DIR"
 else
-  echo "  ⚠️ default mockup missing at $IMG — the console form's default image will 404"
+  for f in "${IMGS[@]}"; do
+    B="$(basename "$f")"
+    gcloud storage cp "$f" "gs://$RIB/$B" --project="$PROJECT" >/dev/null \
+      && echo "  ✓ seeded $B → gs://$RIB/$B" \
+      || echo "  ✗ could not upload $B" >&2
+  done
 fi
+[ -f "$IMG_DIR/vendor_request_refine.png" ] \
+  || echo "  ⚠️ vendor_request_refine.png is missing — the console form's default image will 404"
 
 echo
 echo "[setup_buckets] PIN these in deploy/.env so the app, the seed, and terraform all agree:"

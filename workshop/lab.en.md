@@ -1097,6 +1097,45 @@ source ./env.sh
 ./deploy/grant_agent_access.sh vendor-clearance
 ```
 
+### 👀 Verify
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+./deploy/verify/step4.sh
+```
+
+Eleven checks, and they cover everything this step built:
+
+```
+✓ legal engine deployed (…/8652609503562301440)
+✓ legal AGENT IDENTITY present
+✓ legal has its project roles
+✓ legal may impersonate the MCP invoker SA
+✓ vendor_clearance engine deployed (…/8004091157220950016)
+✓ vendor_clearance AGENT IDENTITY present
+✓ vendor_clearance has its project roles
+✓ vendor_clearance may impersonate the MCP invoker SA
+✓ RAG_CORPUS set (…/893665458870288384)
+✓ RAG corpus exists in <your-project>
+✓ deployed legal engine carries RAG_CORPUS
+```
+
+Both engines **deployed**, both running as their **own identity**, both **granted** their project
+roles and the right to reach the IAM-gated MCP servers — and legal's corpus wired all the way
+through.
+
+That last check is the one worth knowing about. It reads the env of the **deployed** engine, not
+your `deploy/.env`, because those can disagree: deploy legal *before* `setup_legal_rag.sh` writes
+`RAG_CORPUS` and the engine ships without it. Legal then still works — it falls back to keyword
+search over the local files and answers plausibly — so nothing looks wrong until the answers are
+subtly poor. If you see that ✗, add `RAG_CORPUS` to `deploy/.env` and redeploy legal.
+
+> 👀 Watch for vendor_clearance to reach `legal_clearance`, legal to reconstruct its steps via
+> RAG, and — if a safety-cert ID is needed — a `needs_input` status with a **question** bubbling
+> back up. That's HITL. The full round-trip (answer coming back down from a real user) comes
+> together once the app is in place (Step 6).
+
 ### 💻 Try `legal` on its own first
 
 Before watching the handoff, talk to `legal` directly. It's worth doing separately: in the
@@ -1288,42 +1327,10 @@ tail -f /tmp/a2a_legal.log
 
 👉💻 When you're done, press `Ctrl+C` in the `adk web` tab and again in the `./run_local.sh mesh` tab.
 
-### 👀 Verify
+### 👀 Now the same thing, against the deployed agents
 
-```bash
-cd ~/vibeflix-audit
-source ./env.sh
-./deploy/verify/step4.sh
-```
-
-Eleven checks, and they cover everything this step built:
-
-```
-✓ legal engine deployed (…/8652609503562301440)
-✓ legal AGENT IDENTITY present
-✓ legal has its project roles
-✓ legal may impersonate the MCP invoker SA
-✓ vendor_clearance engine deployed (…/8004091157220950016)
-✓ vendor_clearance AGENT IDENTITY present
-✓ vendor_clearance has its project roles
-✓ vendor_clearance may impersonate the MCP invoker SA
-✓ RAG_CORPUS set (…/893665458870288384)
-✓ RAG corpus exists in <your-project>
-✓ deployed legal engine carries RAG_CORPUS
-```
-
-Both engines **deployed**, both running as their **own identity**, both **granted** their project
-roles and the right to reach the IAM-gated MCP servers — and legal's corpus wired all the way
-through.
-
-That last check is the one worth knowing about. It reads the env of the **deployed** engine, not
-your `deploy/.env`, because those can disagree: deploy legal *before* `setup_legal_rag.sh` writes
-`RAG_CORPUS` and the engine ships without it. Legal then still works — it falls back to keyword
-search over the local files and answers plausibly — so nothing looks wrong until the answers are
-subtly poor. If you see that ✗, add `RAG_CORPUS` to `deploy/.env` and redeploy legal.
-
-Now run the same onboarding against the **deployed** agents, to see the handoff happen in the
-cloud rather than locally:
+You've watched the handoff run locally. Run it once more in the cloud — same conversation, but
+now `vendor_clearance` and `legal` are separate engines talking over A2A:
 
 ```bash
 cd ~/vibeflix-audit
@@ -1332,14 +1339,8 @@ python deploy/ask_agent.py vendor-clearance \
   "Onboard vendor VND-1008 for grogu apparel in North America."
 ```
 
-It'll come back `needs_input` asking for approval — the same three-turn conversation you just had
-in the Dev UI, now over A2A against the real engines. Re-send with the approval (and the
-safety-cert id) exactly as before.
-
-> 👀 Watch for vendor_clearance to reach `legal_clearance`, legal to reconstruct its steps via
-> RAG, and — if a safety-cert ID is needed — a `needs_input` status with a **question** bubbling
-> back up. That's HITL. The full round-trip (answer coming back down from a real user) comes
-> together once the app is in place (Step 6).
+It comes back `needs_input` asking for approval, exactly as it did in the Dev UI. Re-send with the
+approval and then the safety-cert id, using the same three prompts as above.
 
 ### 💡 What you learned
 
@@ -1562,10 +1563,88 @@ python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh orchestrator
 ```
 
+> ⏱️ **This takes a few minutes — don't sit and watch it.** Leave it running in this tab and go
+> straight to **💻 Try it in the ADK Dev UI**, just below: it runs entirely on your own machine
+> against the local mesh and needs nothing from this deploy. Come back and run the ✓ Verify at
+> the end of the section once the deploy has finished.
+
 > The orchestrator reads the shared task store from the **app**, which you deploy in Step 6.
 > Until then, a fan-out run falls back to per-replica memory (with a loud warning) — fine for a
 > single-replica smoke test, but the real, fast, multi-replica run comes together once the app
 > is up.
+
+### 💻 Try it in the ADK Dev UI — the whole mesh, locally
+
+This is the first time you can watch **one request light up all three specialists at once**. Run
+the orchestrator locally against the local mesh: the fan-out is real (three A2A calls), it just
+crosses processes on this machine instead of engines in the cloud.
+
+👉💻 **In a second Cloud Shell tab**, start the whole local backend — MCP servers *and* every
+agent as an A2A service:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+export RUN_LOCAL=true
+./run_local.sh mesh
+```
+
+Wait for all five agents to report ✓ (`brand_style` :8001 … `legal` :8005). The orchestrator will
+call three of them.
+
+👉💻 **In a third Cloud Shell tab**, launch the Dev UI on the orchestrator, pointed at those
+local services:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+export RUN_LOCAL=true
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001
+export VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002
+export DEAL_PRICING_A2A_URL=http://127.0.0.1:8003
+adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/orchestrator
+```
+
+Open it via **Web Preview → Change port → 8000**, pick **orchestrator**, and paste this request
+**as one line of JSON** (replace `<your-project>`):
+
+```json
+{"image_uri": "gs://<your-project>-request-image/vendor_request_refine.png", "character": "grogu", "product_category": "Vinyl Figures", "vendor": "VND-1006", "target_market": "Europe", "volume": 20000, "net_unit_price": 14, "agreed_royalty_rate": 0.18, "agreed_advance": 40000, "agreed_mg": 155000}
+```
+
+> ⚠️ **Send JSON here, not a sentence.** `ingest` accepts either, but the natural-language parse
+> is best-effort and the console never uses it — the console posts a structured request, which is
+> what these keys are. Type the same thing as prose and you can watch it go wrong: `vendor:
+> VND-1006` gets read as **volume 1006**, and the character can be dropped entirely
+> (`"The licensed character/trademark was NOT provided — ask for it"`). The JSON path is exact.
+
+**Why these values clear.** Each one dodges a block you met earlier:
+
+| field | why |
+|---|---|
+| `character: grogu` | **must match the artwork.** The seeded mock-up depicts Grogu, and brand_style compares the two — audit it as another character and you get `character_mismatch: The artwork depicts Grogu, not the licensed character under audit` |
+| `Vinyl Figures` × `Europe` | no exclusivity lock — grogu's lock is **North America** (the others: gremlins/Europe, stitch/Asia-Pacific, minions/LatAm) |
+| `VND-1006` (Kraków Vinyl Studio) | already makes Vinyl Figures in Europe → no onboarding, no legal handoff, no approval question |
+| `volume: 20000` | under the 25,000 sourcing cap, so no capacity-split question |
+| `agreed_royalty_rate: 0.18` | the rate card computes **0.1764** for this deal (0.14 base × 1.2 category × 1.05 territory) — the agreed rate is above it |
+| `agreed_advance: 40000`, `agreed_mg: 155000` | above the expected **37,500** and **150,000** |
+
+👀 Watch the graph in the Dev UI: `dispatch` fans out to **brand_style, vendor_clearance and
+deal_pricing in parallel**, `merge_reports` waits for all three, and `contract_finalize` executes
+the licensing contract — an `LC-####` id in the final report.
+
+> 💡 **Change one field and watch a single branch fail.** Set `"target_market": "North America"`
+> and the same request hits grogu's exclusivity lock in `vendor_clearance` — while brand style
+> and pricing still come back `cleared`. That's the fan-out doing its job: one branch blocking
+> doesn't stop the others reporting, and `merge_reports` shows you all three verdicts side by
+> side.
+
+👉💻 When you're done, `Ctrl+C` in both tabs.
+
+You've now run the mesh end-to-end from a playground. In Step 8 you'll run the same flow through
+the **console**, where the specialists' progress is drawn live and the report is rendered by the
+UI Renderer.
 
 ### 👀 Verify
 
@@ -1575,7 +1654,7 @@ source ./env.sh
 ./deploy/verify/step5.sh
 ```
 
-It confirms the orchestrator engine is deployed with an agent identity. The end-to-end fan-out, one request lighting up all three specialists at once. You'll run for real in Step 8, after the app and its task store are in place.
+It confirms the orchestrator engine is deployed with an agent identity.
 
 ### 💡 What you learned
 

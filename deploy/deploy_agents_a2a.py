@@ -538,10 +538,22 @@ def main():
                 # The user asked for THIS agent by name — a skip is a failure, not a no-op.
                 # Exiting 0 here meant the next step (grant/verify) was the first thing to
                 # notice the engine was never created.
-                print(f"   ✗ {name} was NOT deployed.\n"
-                      f"     Its peer engine isn't in deploy/agent_identities.json yet. Run:\n"
-                      f"       python deploy/collect_agent_identities.py\n"
-                      f"     then re-run this command.", file=sys.stderr)
+                # Name the RIGHT remedy per variable: a peer A2A URL is produced by deploying
+                # that peer and recording it, while RAG_CORPUS / the MCP URLs come from
+                # deploy/.env. Pointing at the wrong one sends people fixing the wrong thing.
+                peers = [k for k in missing if k.endswith("_A2A_URL")]
+                other = [k for k in missing if k not in peers]
+                lines = [f"   ✗ {name} was NOT deployed."]
+                if peers:
+                    lines += [f"     {', '.join(peers)} come from a peer engine that isn't in",
+                              "     deploy/agent_identities.json yet. Deploy that agent first, then run:",
+                              "       python deploy/collect_agent_identities.py"]
+                if other:
+                    lines += [f"     {', '.join(other)} are read from deploy/.env (via env.sh).",
+                              "     RAG_CORPUS/RAG_LOCATION are written by ./deploy/setup_legal_rag.sh;",
+                              "     the MCP_*_URL values are resolved from Cloud Run by ./workshop/setup.sh."]
+                lines.append("     Then re-run this command.")
+                print("\n".join(lines), file=sys.stderr)
                 raise SystemExit(1)
             return
         display = f"vibeflix-{name.replace('_', '-')}"
