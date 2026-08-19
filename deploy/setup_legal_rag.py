@@ -86,8 +86,12 @@ def main() -> None:
         _creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         _creds.refresh(_grt.Request())
         _req = urllib.request.Request(
+            # NO updateMask — this method doesn't accept one, and sending it fails the whole
+            # PATCH with "Unknown name \"updateMask\": Cannot bind query parameter", leaving the
+            # project in Spanner mode. Corpus creation then 400s on the capacity limit, several
+            # lines later, blaming Spanner rather than this call.
             f"https://{REGION}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT}"
-            f"/locations/{REGION}/ragEngineConfig?updateMask=rag_managed_db_config",
+            f"/locations/{REGION}/ragEngineConfig",
             method="PATCH",
             data=_json.dumps({"ragManagedDbConfig": {"serverless": {}}}).encode(),
             headers={"Authorization": f"Bearer {_creds.token}", "Content-Type": "application/json"})
