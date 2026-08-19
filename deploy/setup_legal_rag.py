@@ -25,12 +25,41 @@ import os
 import sys
 import glob
 import subprocess
+import pathlib
 
 from dotenv import load_dotenv
 
 # Load deploy/.env (if present) so PROJECT/REGION/BUCKET/etc. can live in a file for local
 # testing instead of the shell. Real shell env vars still take precedence (override=False).
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def _upsert_env(key: str, value: str) -> bool:
+    """Set key=value in deploy/.env, replacing any existing (or commented-out) line.
+
+    Written here rather than printed for the user to copy: env.sh sources deploy/.env, so the
+    value is in the environment on the next command, and deploy_agents_a2a.py picks it up when
+    the legal agent is deployed. A value that has to be hand-copied is a value someone forgets,
+    and the failure then looks like RAG returning nothing rather than a missing variable.
+    """
+    line = f"{key}={value}"
+    try:
+        lines = pathlib.Path(_ENV_PATH).read_text().splitlines()
+    except FileNotFoundError:
+        return False
+    for i, l in enumerate(lines):
+        if l.strip().lstrip("#").strip().startswith(f"{key}="):
+            if l == line:
+                return True                      # already correct — nothing to do
+            lines[i] = line
+            break
+    else:
+        lines.append(line)
+    pathlib.Path(_ENV_PATH).write_text("\n".join(lines) + "\n")
+    return True
+
 
 PROJECT = os.environ.get("PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 if not PROJECT:
@@ -153,10 +182,13 @@ def main() -> None:
     client.rag.import_files(name=corpus.name, import_config={"gcs_source": {"uris": [_GCS + "/"]}})
 
     print("\n=== Legal RAG corpus ready ===")
-    print("RAG_CORPUS :", corpus.name)
-    print("\nSet these wherever search_legal_docs runs (the legal agent's env):")
     print(f"  RAG_CORPUS={corpus.name}")
     print(f"  RAG_LOCATION={REGION}")
+    if _upsert_env("RAG_CORPUS", corpus.name) and _upsert_env("RAG_LOCATION", REGION):
+        print("\n  ✓ saved to deploy/.env — `source ./env.sh` picks them up, and the legal")
+        print("    agent gets them at deploy time. Nothing to copy.")
+    else:
+        print(f"\n  ! deploy/.env not found — add those two lines to it before deploying legal.")
 
 
 if __name__ == "__main__":

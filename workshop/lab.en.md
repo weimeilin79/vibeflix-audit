@@ -870,8 +870,6 @@ Legal needs its RAG corpus first. Build it from the tribal-knowledge docs:
 cd ~/vibeflix-audit
 source ./env.sh
 ./deploy/setup_legal_rag.sh
-# It prints  RAG_CORPUS=projects/.../ragCorpora/...
-# Add that line (and RAG_LOCATION=us-central1) to deploy/.env, then continue.
 ```
 
 `setup_legal_rag.sh` runs `deploy/setup_legal_rag.py`, which does four things:
@@ -880,7 +878,28 @@ source ./env.sh
 2. **Creates (or reuses) the corpus** `vibeflix-legal-kb`, configured with the `text-embedding-005` embedding model.
 3. **Imports the files** into the corpus (`import_files` from the GCS source). RAG Engine then chunks, embeds, and indexes them behind the scenes.
 
-It prints the corpus resource name as `RAG_CORPUS=…`. Paste that (plus `RAG_LOCATION=us-central1`) into `deploy/.env` so the deployed `legal` agent's `search_legal_docs` tool knows which corpus to query.
+> ⏱️ **The import is the slow part.** When you see
+> `[legal-rag] importing 10 files from gs://…/legal-docs/ …` it can sit there for a few
+> minutes — RAG Engine is chunking, embedding, and indexing every document before it returns.
+> It's working; let it finish.
+>
+> On a brand-new project you may also see
+> `Vector Search permissions still propagating (attempt 1/5) — retrying in 30s…`. That's
+> expected too: enabling the Vector Search API grants the RAG service agent its role, and the
+> grant takes a couple of minutes to take effect. The script waits it out.
+
+It finishes by printing your corpus id and **writing it into `deploy/.env`** for you:
+
+```
+=== Legal RAG corpus ready ===
+  RAG_CORPUS=projects/<your-project-number>/locations/us-central1/ragCorpora/8061205838481588224
+  RAG_LOCATION=us-central1
+
+  ✓ saved to deploy/.env — `source ./env.sh` picks them up, and the legal
+    agent gets them at deploy time. Nothing to copy.
+```
+
+Nothing to paste. The next `source ./env.sh` exports both, and when you deploy `legal` in a moment they travel with it — that's how its `search_legal_docs` tool knows which corpus to query.
 
 
 ### 📝 The retrieval tool

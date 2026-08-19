@@ -38,5 +38,5 @@ echo "[setup_legal_rag] 2/3 ensuring provisioning SDK (deploy/requirements-legal
 echo "[setup_legal_rag] 3/3 creating corpus + importing docs…"
 PROJECT="$PROJECT" REGION="$REGION" BUCKET="$BUCKET" "$PY" "$ROOT/deploy/setup_legal_rag.py"
 
-echo "[setup_legal_rag] done. Copy the printed RAG_CORPUS/RAG_LOCATION into the legal"
-echo "                  agent's env (docker-compose 'legal' service or agents/legal/.env)."
+echo "[setup_legal_rag] done. RAG_CORPUS/RAG_LOCATION were written to deploy/.env — the next"
+echo "                  'source ./env.sh' exports them, and deploying legal picks them up."
