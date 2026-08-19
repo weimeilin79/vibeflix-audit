@@ -1193,11 +1193,77 @@ export LEGAL_A2A_URL=http://127.0.0.1:8005
 adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/vendor_clearance
 ```
 
-Open it via **Web Preview → Change port → 8000**, pick **vendor_clearance**, and **onboard a vendor to a new category** — onboarding is what triggers the handoff to legal:
+Open it via **Web Preview → Change port → 8000** and pick **vendor_clearance**. You're going to
+**onboard a vendor to a category it doesn't already have** — that, and only that, is what
+triggers the handoff to legal.
 
-> Onboard vendor VND-1008 for grogu resin statues in North America.
+> ⚠️ **The category has to be genuinely new for that vendor**, or legal never runs. VND-1008
+> (Liberty Figure Works) is already registered for *Action Figures*, *Vinyl Figures* and
+> *Resin Statues* — ask for any of those and the agent correctly clears the vendor and stops,
+> because there is nothing to onboard and therefore no contract to draw up. **Apparel** is one it
+> doesn't have, so the vendor record is actually updated and the handoff fires.
+>
+> The gate is in `agents/vendor_clearance/agent.py` (`_needs_legal`): legal runs only when the
+> report comes back `cleared` **and** the reasoner really called `update_vendor` / `create_vendor`.
+> A quiet, correct no-op is easy to mistake for a broken handoff — if legal doesn't fire, check
+> the vendor's existing categories first.
+>
+> Apparel is also the most interesting choice: it's the category the legal docs argue about
+> certifications for, so it exercises `verify_certifications` and is the most likely to produce
+> the human-in-the-loop **safety-cert** question below.
 
-Watch vendor_clearance clear the vendor, then **hand off to `legal` over A2A** (the `legal_clearance` node). Legal reconstructs its process from the docs — locally, via the keyword retriever — and either asks back for the **safety-cert ID** (the HITL question travelling up) or executes the contract. You can watch the handoff land in legal's log from the first tab:
+**This takes three messages, not one.** The agent stops to ask permission before it changes a
+vendor record — and in the Dev UI *you* are the one who has to answer it.
+
+**Turn 1 — the request:**
+
+> Onboard vendor VND-1008 for grogu apparel in North America.
+
+It comes back `needs_input`, not with an answer — it wants approval before touching the record:
+
+```json
+{"status": "needs_input", "needs": ["add_category_approved"],
+ "question": "VND-1008 does not currently manufacture 'Apparel'. Do you approve adding
+              'Apparel' to VND-1008's approved product categories?",
+ "pending_workflow": {"tool": "update_vendor", "params": {"vendor_id": "VND-1008", …}}}
+```
+
+**Turn 2 — approve, *and restate the request*.** Paste this exactly:
+
+> Yes, I approve adding Apparel to VND-1008's approved product categories. Onboard vendor
+> VND-1008 for grogu apparel in North America.
+
+⚠️ **Answering just "yes" will not work** — it comes back `blocked`, asking for the vendor,
+character, territory and category all over again. That surprises everyone, and the reason is
+worth understanding: the reasoner's brief is a template of state fields — `{vendor?}`,
+`{character_id?}`, `{target_market?}`, `{product_category?}`, `{add_category_approved?}` — and
+its instruction says *"take anything missing from the user's message."* In the **console** you
+build in Step 6, those fields come from a **form**, so the user really can just click *yes*. The
+**Dev UI has no form**: your message is the only channel, so each turn has to carry the whole
+picture. Same agent, different transport.
+
+Now `update_vendor` fires, the report comes back `cleared` — and *that* is what triggers the
+handoff to `legal` over A2A (the `legal_clearance` node).
+
+**Turn 3 — the human-in-the-loop question.** Legal reconstructs its process from the docs and
+discovers it needs a **safety-certification ID** — a value that exists in no record, which is
+exactly the rule everyone kept forgetting. It asks, and the question travels back up to you.
+Paste this exactly:
+
+> The safety certification id is SC-2026-44718. Yes, I approve adding Apparel to VND-1008's
+> approved product categories. Onboard vendor VND-1008 for grogu apparel in North America.
+
+`SC-2026-44718` is arbitrary — **any string works**, because no document in the corpus defines a
+format for it. That's not sloppiness in the lab; it's the point the docs themselves make.
+`q3-legal-sync-notes.md` has an unresolved action item to *"document the safety cert ID step"*,
+and `slack-export-licensing-ops.txt` has someone complaining they've asked three times for it to
+be written down. The one field that blocks every contract is the one nobody specified.
+
+Legal then executes the contract and returns an `LC-####` id in the merged report. (If you never
+supply one, legal issues a provisional `PROV-…` id rather than blocking — onboarding is never
+silently stuck.)
+
+You can watch the handoff land in legal's log from the first tab:
 
 ```bash
 cd ~/vibeflix-audit
