@@ -121,13 +121,31 @@ def main() -> None:
             break
     if corpus is None:
         print(f"[legal-rag] 3/3 creating corpus '{DISPLAY}' (RagManagedVertexVectorSearch)…")
-        corpus = client.rag.create_corpus(rag_corpus=C.RagCorpus(
+        _spec = C.RagCorpus(
             display_name=DISPLAY,
             description="Vibeflix legal 'tribal knowledge' — scattered process docs.",
             vector_db_config=C.RagVectorDbConfig(
                 rag_managed_vertex_vector_search=C.RagVectorDbConfigRagManagedVertexVectorSearch(),
             ),
-        ))
+        )
+        # Enabling vectorsearch.googleapis.com provisions the RAG service agent and grants it
+        # roles/aiplatform.ragServiceAgent — which DOES include vectorsearch.collections.create.
+        # That grant takes a few minutes to reach the Vector Search service, so on a FRESH
+        # project this call lands first and fails with:
+        #   PERMISSION_DENIED 'vectorsearch.collections.create' … (or it may not exist)
+        # It reads like a missing role; it's a propagation race. Wait it out instead of sending
+        # the user hunting for an IAM binding that is already there.
+        import time as _time
+        for _attempt in range(1, 6):
+            try:
+                corpus = client.rag.create_corpus(rag_corpus=_spec)
+                break
+            except Exception as _e:  # noqa: BLE001
+                if "vectorsearch" not in str(_e) or _attempt == 5:
+                    raise
+                print(f"[legal-rag]      Vector Search permissions still propagating "
+                      f"(attempt {_attempt}/5) — retrying in 30s…")
+                _time.sleep(30)
         print(f"[legal-rag]      created: {corpus.name}")
 
     # import the staged files into the corpus

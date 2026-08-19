@@ -46,6 +46,7 @@ gcloud services enable --project="$PROJECT" \
   firestore.googleapis.com pubsub.googleapis.com storage.googleapis.com \
   run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com \
   aiplatform.googleapis.com agentregistry.googleapis.com iamcredentials.googleapis.com \
+  vectorsearch.googleapis.com \
   cloudresourcemanager.googleapis.com observability.googleapis.com cloudtrace.googleapis.com \
   telemetry.googleapis.com monitoring.googleapis.com iap.googleapis.com \
   networkservices.googleapis.com networksecurity.googleapis.com \
