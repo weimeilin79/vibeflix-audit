@@ -901,12 +901,80 @@ It finishes by printing your corpus id and **writing it into `deploy/.env`** for
 
 Nothing to paste. The next `source ./env.sh` exports both, and when you deploy `legal` in a moment they travel with it — that's how its `search_legal_docs` tool knows which corpus to query.
 
+### 👀 Verify the corpus actually answers
+
+Before building anything on top of it, ask the corpus a question directly — no agent, no model,
+just the RAG Engine API:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+curl -s -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  "https://$REGION-aiplatform.googleapis.com/v1/projects/$PROJECT/locations/$REGION:retrieveContexts" \
+  -d "{\"vertex_rag_store\":{\"rag_resources\":{\"rag_corpus\":\"$RAG_CORPUS\"}},
+       \"query\":{\"text\":\"what certifications does apparel need\",\"rag_retrieval_config\":{\"top_k\":3}}}" \
+  | jq '.contexts.contexts[] | {source: .sourceDisplayName, score, text: .text[0:100]}'
+```
+
+You should get three excerpts from **three different documents** — something like:
+
+```
+{ "source": "email-thread-cert-requirements.txt",   "score": 0.3663, "text": "From: Tomás Herrera …" }
+{ "source": "janes-onboarding-checklist.md",        "score": 0.3756, "text": "Jane's legal onboarding checklist …" }
+{ "source": "confluence-licensing-onboarding.md",   "score": 0.3874, "text": "Licensing Legal — Vendor Onboarding …" }
+```
+
+That's the tribal-knowledge problem in one result: the answer to a single question is spread
+across an email thread, someone's personal checklist, and a half-finished wiki page. **Lower
+score = closer match** here.
+
+> 🕐 **Empty result?** If `contexts` comes back empty right after the import, indexing hasn't
+> caught up yet — wait a minute and run it again. It's the one case where "nothing found" doesn't
+> mean "something is wrong".
+
 
 ### 📝 The retrieval tool
 
 Open `agents/legal/legal_kb.py`. It exposes one FunctionTool, `search_legal_docs`, with the following backends:
 
-- **`RAG_CORPUS` set** → Vertex AI **RAG Engine** (`:retrieveContexts`) over a corpus built from those docs (you'll build it below);
+- **`RAG_CORPUS` set** → Vertex AI **RAG Engine** (`:retrieveContexts`) over the corpus you built above;
+- **`RAG_CORPUS` unset, or Vertex unreachable** → a local keyword search over the same files, so the agent still runs offline.
+
+👉💻 Call the tool on its own — no agent, no model, just the function:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+python - <<'EOF'
+import sys, json
+sys.path.insert(0, "agents")
+from legal.legal_kb import search_legal_docs
+
+r = json.loads(search_legal_docs("what certifications does apparel need", top_k=3))
+print("retriever:", r["retriever"])
+for h in r["results"]:
+    print(f"  {h['score']}  {h['source']}")
+EOF
+```
+
+```
+retriever: vertex_rag
+  0.3663  email-thread-cert-requirements.txt
+  0.3756  janes-onboarding-checklist.md
+  0.3874  confluence-licensing-onboarding.md
+```
+
+> 🔎 **Watch the `retriever` field — it's the whole point of running this.** That fallback above
+> is deliberate (the agent shouldn't die because RAG is down), but it means a broken corpus
+> doesn't *look* broken: the agent keeps answering, just from keyword matches. Run the same
+> command with `RAG_CORPUS` unset and you'll see it — `retriever: local_keyword`, and the top
+> hit for a certifications question becomes `logistics-hs-codes.md`. Plausible-looking, wrong,
+> and no error anywhere.
+>
+> So whenever legal's answers seem off, check this field first. `vertex_rag` means the corpus is
+> being used; `local_keyword` means it isn't, and `RAG_CORPUS` is the thing to look at.
 
 In `agents/legal/agent.py`, `search_legal_docs` sits alongside the legal *workflow* tools (`draft_license_amendment`, `verify_certifications`, `assign_customs_hs_code`, `verify_liability_insurance`, …) and the one real side effect — `upsert_contract` (an MCP tool) that persists the executed contract. The agent uses RAG to figure out *what the process is*, then the tools to *do it*.
 
