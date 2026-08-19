@@ -227,6 +227,25 @@ def _tool_call_args(ctx: Context, tool_name: str) -> dict | None:
     return None
 
 
+# The skill prescribes exactly three statuses, but the reasoner has no output_schema
+# (deliberately — see clearance_reasoner), so it sometimes returns a synonym: "clear"
+# instead of "cleared", "approved" after a resume. `_needs_legal` gates the whole legal
+# hand-off on this one string, so an off-schema word silently skips legal with no error
+# anywhere. Normalise it once, where the report is parsed.
+_STATUS_SYNONYMS = {
+    "cleared": ("cleared", "clear", "clears", "approved", "approve", "ok", "pass", "passed"),
+    "blocked": ("blocked", "block", "denied", "deny", "rejected", "reject", "fail", "failed"),
+    "needs_input": ("needs_input", "needs-input", "need_input", "needs input", "input_needed"),
+}
+_STATUS_CANON = {v: k for k, vs in _STATUS_SYNONYMS.items() for v in vs}
+
+
+def _canon_status(status: str) -> str:
+    """Map a reasoner-emitted status onto the skill's vocabulary. Unknown values are
+    left alone rather than guessed at."""
+    return _STATUS_CANON.get((status or "").strip().lower().replace("-", "_"), status)
+
+
 def _needs_legal(ctx: Context, report: dict) -> dict | None:
     """Legal runs when a vendor was just onboarded for a category — either a NEW vendor
     (`create_vendor`) or a NEW category on an existing vendor (`update_vendor`), both
@@ -318,6 +337,11 @@ async def clearance(ctx: Context, node_input):
     await ctx.run_node(clearance_reasoner, node_input)
     report = _parse_report(_latest_text(ctx, "clearance_reasoner")) or {"status": "blocked", "issues": []}
     report.pop("legal_request", None)   # the legal trigger is the update_vendor fact
+    raw_status = report.get("status", "")
+    report["status"] = _canon_status(raw_status)
+    if report["status"] != raw_status:
+        print(f"[vendor_clearance] status {raw_status!r} normalised to "
+              f"{report['status']!r} (skill vocabulary)", flush=True)
     report["agent"] = "vendor_clearance_agent"
     yield Event(output=report, state={"finalize_requested": finalize_requested})
 

@@ -530,7 +530,19 @@ def main():
     def deploy_one(name, spec):
         missing = [k for k in spec["env"] if not _ENV.get(k)]
         if missing:
-            print(f"── skipping {name}: export {', '.join(missing)} first")
+            # A2A URLs are derived from agent_identities.json AT IMPORT (see above), so an agent
+            # whose peer was deployed moments ago still looks unresolved until
+            # collect_agent_identities.py has written that peer's engine id.
+            print(f"── skipping {name}: {', '.join(missing)} not resolved yet")
+            if ONLY == name:
+                # The user asked for THIS agent by name — a skip is a failure, not a no-op.
+                # Exiting 0 here meant the next step (grant/verify) was the first thing to
+                # notice the engine was never created.
+                print(f"   ✗ {name} was NOT deployed.\n"
+                      f"     Its peer engine isn't in deploy/agent_identities.json yet. Run:\n"
+                      f"       python deploy/collect_agent_identities.py\n"
+                      f"     then re-run this command.", file=sys.stderr)
+                raise SystemExit(1)
             return
         display = f"vibeflix-{name.replace('_', '-')}"
         # VIBEFLIX_AGENT_NAME: the runtime authority for which agent module this

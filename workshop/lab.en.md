@@ -1057,15 +1057,30 @@ Its instruction ties them together: given a clearance brief, follow the skill (l
 
 ### 💻 Deploy both Agents
 
-Now deploy legal, then vendor_clearance (deploy **in this order** — vendor_clearance auto-discovers legal's A2A URL from `agent_identities.json`):
+Now deploy legal, then vendor_clearance — **in this order, with a `collect` in between**:
 
 ```bash
 cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py legal
+python deploy/collect_agent_identities.py        # legal's engine id → LEGAL_A2A_URL
 python deploy/deploy_agents_a2a.py vendor_clearance
-python deploy/collect_agent_identities.py
+python deploy/collect_agent_identities.py        # vendor_clearance's identity, for the grant
 ```
+
+> 🔗 **Why `collect` runs twice.** `vendor_clearance` calls `legal`, so it has to be deployed
+> knowing legal's A2A URL — and that URL contains legal's engine id, which doesn't exist until
+> legal is deployed. The deploy script reads it out of `deploy/agent_identities.json`, and only
+> `collect_agent_identities.py` writes that file. Deploy both back-to-back and vendor_clearance
+> looks up a URL that isn't recorded yet:
+>
+> ```
+> ── skipping vendor_clearance: LEGAL_A2A_URL not resolved yet
+> ```
+>
+> This is the same two-pass shape as `TASK_STORE_URL` in Step 6, at a smaller scale: something
+> an agent needs is created by deploying *another* agent, so a deploy has to happen, be recorded,
+> and only then feed the next one.
 
 > ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
 > uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
@@ -1281,15 +1296,45 @@ source ./env.sh
 ./deploy/verify/step4.sh
 ```
 
-It confirms both engines are deployed with agent identities. To see the handoff (and maybe the
-HITL question), onboard a vendor to a new category — vendor_clearance will hand off to legal:
+Eleven checks, and they cover everything this step built:
+
+```
+✓ legal engine deployed (…/8652609503562301440)
+✓ legal AGENT IDENTITY present
+✓ legal has its project roles
+✓ legal may impersonate the MCP invoker SA
+✓ vendor_clearance engine deployed (…/8004091157220950016)
+✓ vendor_clearance AGENT IDENTITY present
+✓ vendor_clearance has its project roles
+✓ vendor_clearance may impersonate the MCP invoker SA
+✓ RAG_CORPUS set (…/893665458870288384)
+✓ RAG corpus exists in <your-project>
+✓ deployed legal engine carries RAG_CORPUS
+```
+
+Both engines **deployed**, both running as their **own identity**, both **granted** their project
+roles and the right to reach the IAM-gated MCP servers — and legal's corpus wired all the way
+through.
+
+That last check is the one worth knowing about. It reads the env of the **deployed** engine, not
+your `deploy/.env`, because those can disagree: deploy legal *before* `setup_legal_rag.sh` writes
+`RAG_CORPUS` and the engine ships without it. Legal then still works — it falls back to keyword
+search over the local files and answers plausibly — so nothing looks wrong until the answers are
+subtly poor. If you see that ✗, add `RAG_CORPUS` to `deploy/.env` and redeploy legal.
+
+Now run the same onboarding against the **deployed** agents, to see the handoff happen in the
+cloud rather than locally:
 
 ```bash
 cd ~/vibeflix-audit
 source ./env.sh
 python deploy/ask_agent.py vendor-clearance \
-  "Onboard vendor VND-1008 for grogu vinyl figures in NA."
+  "Onboard vendor VND-1008 for grogu apparel in North America."
 ```
+
+It'll come back `needs_input` asking for approval — the same three-turn conversation you just had
+in the Dev UI, now over A2A against the real engines. Re-send with the approval (and the
+safety-cert id) exactly as before.
 
 > 👀 Watch for vendor_clearance to reach `legal_clearance`, legal to reconstruct its steps via
 > RAG, and — if a safety-cert ID is needed — a `needs_input` status with a **question** bubbling
