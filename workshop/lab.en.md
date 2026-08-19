@@ -213,6 +213,8 @@ You'll mostly **read** `agents/` and `mcp_servers/` to understand each piece, an
 Point gcloud at your project, and capture its id and number for later commands:
 
 ```
+cd ~/vibeflix-audit
+source ./env.sh
 gcloud config set project YOUR_PROJECT_ID --quiet
 export PROJECT_ID=$(gcloud config get-value project)
 export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
@@ -231,6 +233,7 @@ Run the init script. It does the whole "get ready" step for you:
 - writes `deploy/.env` — the config file every workshop script reads — with your project, a default region of `us-central1`, and a freshly generated `TASK_STORE_KEY`
 
 ```
+cd ~/vibeflix-audit
 ./init.sh
 ```
 
@@ -247,6 +250,7 @@ Re-running is safe: it reuses an existing `.venv` and terraform, and won't overw
 Every step below that runs `python` or `adk` starts with one line:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 ```
 
@@ -269,6 +273,8 @@ safe to copy-paste on its own.
 ### 💻 Setup the foundations + all 3 MCP servers
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./workshop/setup.sh
 ```
 
@@ -282,6 +288,8 @@ It's idempotent — if a step fails (usually a missing API or permission), fix i
 ### 👀 Verify the MCP servers are up *and* locked down
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step1.sh
 ```
 
@@ -383,6 +391,7 @@ The pattern to notice: the model does one fuzzy thing (read the image), and dete
 The deploy script finds the MCP server URLs for you, so deploying your first agent is two commands:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py brand_style
 python deploy/collect_agent_identities.py
@@ -436,6 +445,8 @@ yet. Deploy, collect, deploy again.
 The engine exists now, but its identity can do nothing at all. This grants it exactly what it needs:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/grant_agent_access.sh brand-style
 ```
 
@@ -539,28 +550,57 @@ Everything else is the **tool's** work. `checks_run` lists the three determinist
 
 This local loop is the fastest way to iterate on an agent before you ship it.
 
-👉💻 When you're finished exploring, shut the local servers down: press `Ctrl+C` in the `adk web` tab, and again in the `./run_local.sh mcp` tab.
+👉💻 When you're finished exploring, press `Ctrl+C` in the `adk web` tab. **Leave the
+`./run_local.sh mcp` tab running** — the next section drives another agent against the same three
+MCP servers.
 
 
 ### 👀 Verify the agent extracts, then the tool decides
 
 The cloud deploy from the *Build & deploy* step takes a few minutes. Once it reports success, verify the engine: 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step2.sh
 ```
 
 It confirms the `brand_style` engine is deployed **with an agent identity**. To watch it actually work, talk to it directly — point it at the default mock-up and see it read the image, then call the deterministic tool:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/ask_agent.py brand-style \
   "Audit this mock-up. image: gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png, character: grogu, market: NA"
 ```
 
-> 👀 In the reply you should see the agent report the **text and medium it read from the
-> image** (the non-deterministic part) and a **status** — `compliant`, `flagged`, or
-> `rejected` — that came from `run_brand_audit` (the deterministic part). Try a bad image link
-> and watch the **asset-source gate** reject it *before* any content check runs.
+You'll get back the same shape of report you saw in the Dev UI — this time from the deployed
+engine in the cloud:
+
+```json
+→ vibeflix-brand-style  (…/7721660704905756672)
+{
+  "status": "flagged",
+  "extracted": { "text": [], "medium": "artwork", "image_uri": "gs://…/vendor_request_refine.png" },
+  "checks_run": ["asset_source", "typo", "printed_medium"],
+  "findings": [
+    { "element_id": "printed_medium", "issue_type": "unapproved_medium", "severity": "critical",
+      "description": "Printed medium 'artwork' is not on the approved list: …" }
+  ]
+}
+```
+
+> 👀 **Your `status` may differ from the run above, and that's the lesson.** The agent decides
+> the `medium` by *looking at the artwork* — here it said `"artwork"`, which isn't on the
+> approved list, so the deterministic check flagged it. Run it again and it might say
+> `"vinyl figures"` and come back `compliant`. The fuzzy half varies; the rule applied to it
+> never does. A `flagged` result is the system working, not a failure.
+>
+> Try a bad image link and watch the **asset-source gate** reject it *before* any content check
+> runs — `checks_run` will contain only `asset_source`.
+
+> You may also see a line like `[a2a] NOT propagating: valid=False sampled=False …`. That's the
+> A2A client saying it isn't attaching a trace parent to the call (there's no trace running on
+> your laptop), so the engine starts its own. Expected — it's diagnostics, not an error.
 
 ### 💡 What you learned
 
@@ -673,6 +713,7 @@ Both sub-agents are ordinary `LlmAgent`s, but they never talk to the outside wor
 Same one command as before — the deploy script finds `mcp_licensing`'s URL automatically:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py deal_pricing
 python deploy/collect_agent_identities.py
@@ -687,13 +728,26 @@ python deploy/collect_agent_identities.py
 Then grant it its own access (project roles on its principal + reach to the MCP servers):
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/grant_agent_access.sh deal-pricing
 ```
 
 
 ### 💻 Try it in the ADK Dev UI
 
-Like brand_style, you can run deal_pricing locally and drive it from the playground. With the MCP servers up (`./run_local.sh mcp` — start it again if you stopped it), launch the Dev UI in a second Cloud Shell tab, pointed at the local licensing MCP:
+Like brand_style, you can run deal_pricing locally and drive it from the playground.
+
+👉💻 In a **second Cloud Shell tab**, start the three local MCP servers — skip this if they're
+still running from the last section:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+./run_local.sh mcp
+```
+
+👉💻 In a **third Cloud Shell tab**, launch the Dev UI pointed at the local licensing MCP:
 
 ```bash
 cd ~/vibeflix-audit
@@ -707,13 +761,55 @@ Open it via **Web Preview → Change port → 8000**, pick **deal_pricing**, and
 
 > Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, volume: 30000, net_unit_price: 18. Agreed terms — royalty_rate: 0.10, advance: 8000, mg: 30000.
 
-Watch the reasoner pull the expected deal, mark the royalty **unresolved**, and the **reconcile loop** reject the volume-discount claim (30k < 50k) → **NEEDS-ADJUSTMENT**.
+Watch the reasoner pull the expected deal, mark the royalty **unresolved**, and the **reconcile loop** reject the volume-discount claim (30k < 100k) → **NEEDS-ADJUSTMENT**. The reply is long; these are the parts that matter:
 
-👉💻 When you're done, press `Ctrl+C` in the `adk web` tab (and in the `./run_local.sh mcp` tab if you're finished with local testing).
+```json
+{
+  "agent": "deal_pricing_agent",
+  "expected": { "effective_rate": 0.168, "royalty": 90720.0, "mg": 150000, "advance": 37500.0 },
+  "agreed":   { "rate": 0.1, "advance": 8000, "mg": 30000 },
+  "rate_card": {
+    "found": true, "property": "Grogu (The Child)", "character_tier": "A-list",
+    "base_royalty_rate": 0.14,
+    "category_modifier":      { "vinyl figures": 1.2, "plush": 1.0, "…": "…" },
+    "territory_modifier":     { "north america": 1.0, "europe": 1.05, "…": "…" },
+    "volume_discount_tiers":  [ { "min_units": 0, "mult": 1.0 }, { "min_units": 100000, "mult": 0.95 } ],
+    "min_royalty_rate": 0.1,
+    "mg_rule":     { "pct_of_projected_royalty": 0.5, "floor_usd": 150000 },
+    "advance_rule": { "pct_of_mg": 0.25 }
+  },
+  "components": [
+    { "name": "royalty_rate", "agreed": 0.1,   "expected": 0.168,   "status": "discrepancy", "below_floor": false },
+    { "name": "mg",           "agreed": 30000, "expected": 150000,  "status": "discrepancy", "below_floor": true  },
+    { "name": "advance",      "agreed": 8000,  "expected": 37500.0, "status": "discrepancy", "below_floor": false }
+  ],
+  "verdict": "UNDERPRICED",
+  "status": "blocked"
+}
+```
+
+**`rate_card` is what the agent *fetched*, not what it knew.** `get_license_pricing` on `mcp_licensing` returned Grogu's card — A-list tier, a `0.14` base rate, and the modifier tables. None of it is in the prompt or in the model's head.
+
+**`expected` is what that card computes to** for this deal: `0.14 × 1.2` (vinyl figures) `× 1.0` (North America) `× 1.0` (volume) `= 0.168`. That last multiplier is the volume-discount claim being **rejected** — the first tier that earns a discount starts at 100,000 units and this deal is 30,000, so it stays `1.0`. The arithmetic is the tool's, not the model's. This is *"defer the exact math to the tool"* from the skill, made concrete.
+
+**`components` is the line-by-line comparison** against `agreed`, what the vendor put on the table. All three are a `discrepancy`, and `mg` also carries `below_floor: true` — 30,000 against the card's `floor_usd` of 150,000. Note that `royalty_rate` is *not* below floor: `0.10` is exactly `min_royalty_rate`, so it's legal, just far under what the card expects. "Legal" and "what we should have charged" are two different questions, and the card answers both.
+
+**`verdict` and `status` are the tool's**, derived from those components. The model drove the loop and resolved the claims; it never picked the verdict.
+
+> 🔎 **Try it.** Re-run with `volume: 120000`. The volume tier is now met, so `volume_mult` becomes
+> `0.95` and `expected.effective_rate` drops to `0.1596` — still above the agreed `0.10`, so the
+> verdict stays `UNDERPRICED`. Same graph, same skill, different arithmetic, all of it read off
+> the card rather than reasoned about.
+
+👉💻 When you're done, press `Ctrl+C` in the `adk web` tab **and in the `./run_local.sh mcp`
+tab** — the next section starts the whole local mesh, which brings up its own MCP servers on the
+same ports `9002-9004` and can't start while these are holding them.
 
 ### 👀 Verify and watch the loop reconcile a claim
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step3.sh
 ```
 
@@ -721,6 +817,7 @@ It confirms the `deal_pricing` engine is deployed with an agent identity. Then s
 underpriced deal from the concept above and watch it reason:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/ask_agent.py deal-pricing \
   "Audit this deal. character: grogu, product_category: vinyl figures, territory: NA, \
@@ -728,7 +825,7 @@ volume: 30000, net_unit_price: 18. Agreed terms — royalty_rate: 0.10, advance:
 ```
 
 > 👀 Look for the agent to (1) pull the **expected** deal from the tool, (2) mark the royalty **unresolved** with the volume-discount claim, (3) let the **reconcile loop** reject the claim
-> (30k < 50k), and (4) return a verdict — here **NEEDS-ADJUSTMENT** (or **UNDERPRICED** if a floor is breached). If it asks for a missing field, that's the agent doing input-validation, supply it and re-run.
+> (30k < 100k), and (4) return a verdict — here **NEEDS-ADJUSTMENT** (or **UNDERPRICED** if a floor is breached). If it asks for a missing field, that's the agent doing input-validation, supply it and re-run.
 
 *(The richest end-to-end pricing run comes together in Step 5, once the orchestrator feeds the
 deal's fields automatically — here you're exercising the agent on its own.)*
@@ -770,6 +867,8 @@ The payoff: the model never has to have memorized the legal process. It asks a q
 Legal needs its RAG corpus first. Build it from the tribal-knowledge docs:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/setup_legal_rag.sh
 # It prints  RAG_CORPUS=projects/.../ragCorpora/...
 # Add that line (and RAG_LOCATION=us-central1) to deploy/.env, then continue.
@@ -874,6 +973,7 @@ Its instruction ties them together: given a clearance brief, follow the skill (l
 Now deploy legal, then vendor_clearance (deploy **in this order** — vendor_clearance auto-discovers legal's A2A URL from `agent_identities.json`):
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py legal
 python deploy/deploy_agents_a2a.py vendor_clearance
@@ -882,22 +982,68 @@ python deploy/collect_agent_identities.py
 
 > ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
 > uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
-> ahead to **💻 Try it in the ADK Dev UI**, a couple of sections below: that part runs entirely
-> on your own machine and needs nothing from this deploy. Come back to this tab when the two
-> commands have finished, then carry on with the grants below (two agents deploy here, so this one is the longest wait).
+> ahead to **💻 Try `legal` on its own first**, just below: that part runs entirely on your own
+> machine and needs nothing from this deploy. Come back to this tab when the two commands have
+> finished, then carry on with the grants (two agents deploy here, so this is the longest wait).
 
 Then grant each its own access:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/grant_agent_access.sh legal
 ./deploy/grant_agent_access.sh vendor-clearance
 ```
 
+### 💻 Try `legal` on its own first
 
+Before watching the handoff, talk to `legal` directly. It's worth doing separately: in the
+handoff it answers *inside* another agent, so if retrieval came back empty you'd see a vague
+vendor_clearance result rather than the real cause. On its own, you can see the knowledge base
+you just built actually being read.
+
+👉💻 In a **second Cloud Shell tab**, start the local MCP servers — `legal` uses
+`mcp_licensing` to persist a contract:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+./run_local.sh mcp
+```
+
+👉💻 In a **third Cloud Shell tab**, launch the Dev UI on `legal`:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+export RUN_LOCAL=true
+export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
+adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/legal
+```
+
+Open it via **Web Preview → Change port → 8000**, pick **legal**, and ask it something the
+answer to only exists in those scattered documents:
+
+> What does "annual-volume band" mean, and what are the options?
+
+> Are there style guidelines for grogu, and any exclusivity in North America?
+
+👀 Watch the trace: it calls **`search_legal_docs`** and answers from what it retrieved — with
+`status: answer`. That's the RAG corpus from `setup_legal_rag.sh` doing its job. Ask about
+something the docs don't cover and you'll see the difference immediately.
+
+👉💻 When you're done, press `Ctrl+C` in the `adk web` tab **and in the `./run_local.sh mcp`
+tab** — the next section starts the whole local mesh, which needs ports `9002-9004` free.
 
 ### 💻 Try it in the ADK Dev UI
 
-This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call). Start it in one tab:
+This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call).
+
+👉 **Stop the `./run_local.sh mcp` tab first** (`Ctrl+C`). `mesh` starts its own MCP servers on the
+same ports `9002-9004`; if the old ones are still holding them, the new ones exit immediately and
+`mesh` reports `Stopping…` as soon as it starts.
+
+Then start it in one tab:
 
 ```bash
 cd ~/vibeflix-audit
@@ -925,6 +1071,8 @@ Open it via **Web Preview → Change port → 8000**, pick **vendor_clearance**,
 Watch vendor_clearance clear the vendor, then **hand off to `legal` over A2A** (the `legal_clearance` node). Legal reconstructs its process from the docs — locally, via the keyword retriever — and either asks back for the **safety-cert ID** (the HITL question travelling up) or executes the contract. You can watch the handoff land in legal's log from the first tab:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 tail -f /tmp/a2a_legal.log
 ```
 
@@ -933,6 +1081,8 @@ tail -f /tmp/a2a_legal.log
 ### 👀 Verify
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step4.sh
 ```
 
@@ -940,6 +1090,7 @@ It confirms both engines are deployed with agent identities. To see the handoff 
 HITL question), onboard a vendor to a new category — vendor_clearance will hand off to legal:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/ask_agent.py vendor-clearance \
   "Onboard vendor VND-1008 for grogu vinyl figures in NA."
@@ -1164,6 +1315,7 @@ Deploy it last of the agents — it auto-discovers the three specialists' A2A UR
 `agent_identities.json`:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py orchestrator
 python deploy/collect_agent_identities.py
@@ -1178,6 +1330,8 @@ python deploy/collect_agent_identities.py
 ### 👀 Verify
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step5.sh
 ```
 
@@ -1238,6 +1392,7 @@ the one app container to keep the workshop simple, which is why it runs pinned t
 The app calls the UI Renderer, so deploy it first, and grant its access like any other agent:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py ui_renderer
 python deploy/collect_agent_identities.py
@@ -1255,12 +1410,16 @@ uploaded mock-ups in the request-image bucket; and publish app-side events plus 
 mesh-telemetry subscription. `setup_app_iam.sh` grants exactly that set and creates the subscription:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/setup_app_iam.sh
 ```
 
 ### 💻 Build & deploy the app
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/deploy_app.sh
 ```
 
@@ -1273,6 +1432,7 @@ Here's a subtlety worth understanding. The engines need the app's URL (for `TASK
 
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py        # no arg = redeploy all engines (pass 2)
 ```
@@ -1283,12 +1443,16 @@ back to the 404 storm from Step 5.
 ### 👀 Verify
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step6.sh
 ```
 
 It confirms the app is deployed and **pinned 1/1**. Then open the app in your browser:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 gcloud run services describe vibeflix-app --region "$REGION" --format 'value(status.url)'
 ```
 
@@ -1354,6 +1518,8 @@ Open `deploy/policies.yaml` — it maps each agent to the exact tools it's allow
 ### 💻 Register, gate, and grant
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/setup_gateway.sh
 ```
 
@@ -1370,6 +1536,7 @@ governed egress"*). An engine's gateway attachment is part of its deployment spe
 them once to pick it up:
 
 ```bash
+cd ~/vibeflix-audit
 source ./env.sh
 python deploy/deploy_agents_a2a.py        # no arg = all six engines
 ```
@@ -1381,6 +1548,8 @@ this pass, the agents' egress isn't governed by the gateway.
 ### 👀 Verify
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step7.sh
 ```
 
@@ -1403,6 +1572,8 @@ see the whole distributed system through the observability tools. Then we wrap u
 Open the console and grab its URL:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 gcloud run services describe vibeflix-app --region "$REGION" --format 'value(status.url)'
 ```
 
@@ -1434,6 +1605,8 @@ The mesh has been emitting telemetry the whole time (it's on by default — ever
 ### 👀 Verify
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/verify/step8.sh
 ```
 
@@ -1456,6 +1629,8 @@ And the concepts behind them: **MCP**, **deterministic vs non-deterministic** wo
 When you're completely done, one script removes everything so you don't leave anything running:
 
 ```bash
+cd ~/vibeflix-audit
+source ./env.sh
 ./deploy/destroy.sh              # delete the workshop's resources, keep the project
 # — or —
 ./deploy/destroy.sh --project    # delete the WHOLE project (fastest, cleanest)

@@ -16,6 +16,16 @@ gcloud pubsub topics describe "$TOPIC" --project="$PROJECT" >/dev/null 2>&1 \
 gcloud firestore databases describe --database="$DB" --project="$PROJECT" >/dev/null 2>&1 \
   && ok "Firestore database '$DB'" || bad "Firestore database '$DB' not found"
 
+# All three buckets, including the artifacts/staging one. That one used to go unchecked here and
+# unbuilt until much later, so the first thing to need it — the legal RAG import in Step 4 —
+# died with "The specified bucket does not exist", three steps from the actual cause.
+for B in "${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}" \
+         "${APPROVED_ASSETS_BUCKET:-$PROJECT-approved-assets}" \
+         "${BUCKET:-$PROJECT-artifacts}"; do
+  gcloud storage buckets describe "gs://$B" --project="$PROJECT" >/dev/null 2>&1 \
+    && ok "bucket gs://$B" || bad "bucket gs://$B missing — re-run ./workshop/setup.sh (step 5/9)"
+done
+
 for s in vibeflix-mcp-brand-style vibeflix-mcp-licensing vibeflix-mcp-market; do
   URL=$(gcloud run services describe "$s" --region="$REGION" --project="$PROJECT" \
         --format='value(status.url)' 2>/dev/null || true)
