@@ -1108,29 +1108,65 @@ export MCP_LICENSING_URL=http://127.0.0.1:9002/mcp
 adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/legal
 ```
 
-Open it via **Web Preview → Change port → 8000**, pick **legal**, and ask it something the
-answer to only exists in those scattered documents:
+Open it via **Web Preview → Change port → 8000**, pick **legal**, and ask these two questions —
+in this order. They're a matched pair, and the second one is *supposed* to come up empty.
+
+**1 — something only the scattered documents know:**
 
 > What does "annual-volume band" mean, and what are the options?
 
+```json
+{"status": "answer", "answer": "The annual-volume band is the vendor's yearly production volume,
+ which sets the royalty tier: Tier 1 (< 50,000 units/yr) = 12%, Tier 2 (50,000-250,000) = 10%,
+ Tier 3 (> 250,000) = 8%."}
+```
+
+👀 Watch the trace: it calls **`search_legal_docs`**, and the answer is assembled from documents
+that never state it in one place. That's the corpus from `setup_legal_rag.sh` doing its job.
+
+**2 — something the documents don't contain:**
+
 > Are there style guidelines for grogu, and any exclusivity in North America?
 
-👀 Watch the trace: it calls **`search_legal_docs`** and answers from what it retrieved — with
-`status: answer`. That's the RAG corpus from `setup_legal_rag.sh` doing its job. Ask about
-something the docs don't cover and you'll see the difference immediately.
+```json
+{"status": "answer", "answer": "I could not find any information regarding style guidelines for
+ Grogu or exclusivity in North America within the available legal documents."}
+```
 
-👉💻 When you're done, press `Ctrl+C` in the `adk web` tab **and in the `./run_local.sh mcp`
-tab** — the next section starts the whole local mesh, which needs ports `9002-9004` free.
+### 💡 Why the second question has no answer — and shouldn't
 
-### 💻 Try it in the ADK Dev UI
+Nothing is broken. Those two facts exist in your project, just **not in legal's corpus**:
 
-This agent hands off to `legal`, so `legal` has to be running too. The `mesh` command starts the whole local backend at once — the MCP servers **and** every agent as an A2A service, including `legal` on `:8005` (which `vendor_clearance` will call).
+| knowledge | where it lives | who reads it |
+|---|---|---|
+| how the process *works* — cert rules, royalty tiers, insurance minimums, amendment steps | `resource/legal/docs/` → the **RAG corpus** | `legal`, via `search_legal_docs` |
+| the *records* — exclusivity contracts, trademarks, style guidelines, the rate card | **Firestore registries** (seeded in Step 1) | the **MCP servers**, via deterministic tools |
 
-👉 **Stop the `./run_local.sh mcp` tab first** (`Ctrl+C`). `mesh` starts its own MCP servers on the
-same ports `9002-9004`; if the old ones are still holding them, the new ones exit immediately and
-`mesh` reports `Stopping…` as soon as it starts.
+`exclusivity_grogu_north_america` and `style_guidelines_grogu` are registry rows, served by
+`mcp_licensing` and `mcp_brand_style` — the same deterministic/non-deterministic split from the
+very first chapter, one level up. Prose that has to be *interpreted* goes in RAG; facts that must
+be *looked up exactly* go in a registry behind a tool. An exclusivity conflict is not something
+you want a language model inferring from a wiki page.
 
-Then start it in one tab:
+That's why the exclusivity check belongs to `vendor_clearance` (via `mcp_licensing`), and you'll
+watch it fire in the handoff next.
+
+> 👍 Note what legal did **not** do: invent an answer. "I could not find any information…" is the
+> correct behaviour for a retrieval agent, and worth more than a confident guess.
+
+### 💻 Now try `vendor_clearance` — and watch the handoff
+
+You've driven `legal` by hand. Now run the agent that *calls* it, and watch the same agent answer
+from inside someone else's workflow.
+
+👉💻 **First, stop what's running** — `Ctrl+C` in **both** tabs (the `adk web` on legal, and
+`./run_local.sh mcp`). Two things need the ports:
+
+- `vendor_clearance`'s Dev UI wants **:8000**, which legal's Dev UI is holding.
+- `mesh` starts its own MCP servers on **:9002-9004**; if the old ones are still there, the new
+  ones exit instantly and `mesh` prints `Stopping…` the moment it starts.
+
+👉💻 **In tab 2** (where the MCP servers were), start the whole local backend:
 
 ```bash
 cd ~/vibeflix-audit
@@ -1139,7 +1175,13 @@ export RUN_LOCAL=true
 ./run_local.sh mesh
 ```
 
-In a **second Cloud Shell tab**, launch the Dev UI for vendor_clearance, pointed at the local MCP servers **and** the local `legal` service:
+`mesh` brings up the three MCP servers **and every agent as an A2A service** — including `legal`
+on **:8005**. That's the shift worth noticing: a moment ago you were *typing at* legal in a
+playground; now the same agent is running as a **service**, waiting to be called by another
+agent. Nothing about legal changed — only who talks to it.
+
+👉💻 **In tab 3** (where legal's Dev UI was), launch the Dev UI for `vendor_clearance`, pointed at
+the local MCP servers **and** at the local `legal` service:
 
 ```bash
 cd ~/vibeflix-audit

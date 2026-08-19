@@ -74,7 +74,7 @@ start_mcp_servers() {
 }
 
 # Local A2A agent services (brand_style:8001, vendor_clearance:8002, deal_pricing:8003,
-# ui_renderer:8004). Each gets only the MCP URLs it uses; Vertex config comes from
+# ui_renderer:8004, legal:8005). Each gets only the MCP URLs it uses; Vertex config comes from
 # the agent's .env (ui_renderer needs Vertex for its Gemini call, no MCP).
 start_a2a_agents() {
   ensure_venv
@@ -99,11 +99,17 @@ start_a2a_agents() {
     MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
     "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_legal.log 2>&1 &
   A2A_PIDS+=("$!")
-  for port in 8001 8002 8003 8004 8005; do
+  # Report each agent as it comes up. This loop used to wait silently, so a mesh with a DEAD
+  # agent looked identical to a healthy one — you only found out when a call to it failed.
+  for entry in "brand_style:8001" "vendor_clearance:8002" "deal_pricing:8003" \
+               "ui_renderer:8004" "legal:8005"; do
+    name="${entry%%:*}"; port="${entry##*:}"; ready=""
     for _ in $(seq 1 40); do
-      curl -sf "http://127.0.0.1:$port/.well-known/agent-card.json" >/dev/null 2>&1 && break
+      curl -sf "http://127.0.0.1:$port/.well-known/agent-card.json" >/dev/null 2>&1 && { ready=1; break; }
       sleep 0.5
     done
+    if [ -n "$ready" ]; then c_info "  ✓ $name  → http://127.0.0.1:$port"
+    else c_warn "  ✗ $name did NOT start on :$port (see /tmp/a2a_$name.log)"; fi
   done
 }
 
@@ -143,13 +149,13 @@ case "${1:-up}" in
     VITE_API_URL="$API_BASE" npm run dev --prefix "$ROOT/frontend"
     ;;
   mesh)
-    # Full backend (4 MCP + 3 A2A agent services) for testing the orchestrator
+    # Full backend (3 MCP + 5 A2A agent services) for testing the orchestrator
     # locally without Docker — e.g. via `adk web agents/orchestrator`.
     check_adc
     start_mcp_servers
     start_a2a_agents
     trap 'c_info "Stopping mesh…"; kill "${MCP_PIDS[@]}" "${A2A_PIDS[@]}" 2>/dev/null || true' EXIT INT TERM
-    c_info "Mesh up: MCP :9002-:9004, agent cards :8001-:8004 (incl. ui_renderer:8004)."
+    c_info "Mesh up: MCP :9002-:9004, agents :8001-:8005 (legal is :8005 — vendor_clearance calls it there)."
     c_info "Test the orchestrator in another shell:"
     c_info "  export BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \\"
     c_info "         VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \\"
