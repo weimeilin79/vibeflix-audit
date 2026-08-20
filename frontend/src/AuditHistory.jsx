@@ -217,7 +217,7 @@ export default function AuditHistory() {
       '• vendors → pristine defaults (onboarded vendors & added categories removed)\n' +
       '• executed licensing contracts cleared\n' +
       '• audit history wiped (Firestore + local)\n' +
-      '• uploaded mockup images deleted from gs://vibeflix-request-image\n\n' +
+      '• uploaded mockup images deleted (the seeded scenario images are kept)\n\n' +
       'This cannot be undone.')) return;
     setResetting(true); setResetMsg(null);
     try {

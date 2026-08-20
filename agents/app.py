@@ -927,13 +927,28 @@ async def database_dump():
     return out
 
 
+# /api/upload names every blob "<uuid8>-<filename>", so an upload is identifiable without
+# keeping a list of what was seeded.
+_UPLOADED_BLOB = re.compile(r"^[0-9a-f]{8}-")
+
+
 def _clear_upload_bucket() -> int:
-    """Delete every uploaded mockup in the request-image bucket (demo uploads only —
-    the curated approved-assets bucket is never touched). Returns blobs deleted."""
+    """Delete the console's UPLOADED mockups, keeping the seeded scenario images.
+
+    This used to delete every blob in the bucket, which also removed the images
+    deploy/setup_buckets.sh seeds from deploy/img/ (vendor_request_refine.png, stitch.png,
+    …). Every guided scenario then pointed at a 404 until someone re-ran setup_buckets.sh —
+    a reset that breaks the demo it is meant to restore. Uploads carry a uuid8 prefix; seeded
+    images don't. The curated approved-assets bucket is never touched either way.
+
+    Returns blobs deleted.
+    """
     from google.cloud import storage
-    bucket = storage.Client().bucket(os.environ.get("REQUEST_IMAGE_BUCKET", "vibeflix-request-image"))
+    bucket = storage.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT")).bucket(_REQUEST_IMAGE_BUCKET)
     n = 0
     for blob in bucket.list_blobs():
+        if not _UPLOADED_BLOB.match(blob.name):
+            continue          # seeded scenario image — keep it
         blob.delete()
         n += 1
     return n
@@ -947,7 +962,8 @@ async def reset_database():
       2. audit history wiped (Firestore docs + in-memory + JSONL fallback);
       2b. A2A task store wiped (Firestore `a2a_tasks` collection + in-memory fallback);
       3. run caches dropped (run_token chains, pending sessions);
-      4. uploaded mockups deleted from the request-image GCS bucket.
+      4. UPLOADED mockups deleted from the request-image GCS bucket (the seeded
+         scenario images are kept, so the demo still works after a reset).
     """
     result: dict = {}
     # 1) vendors + contracts (mcp_licensing owns the defaults).
