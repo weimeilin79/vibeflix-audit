@@ -63,6 +63,25 @@ fi
 [ -f "$IMG_DIR/vendor_request_refine.png" ] \
   || echo "  ⚠️ vendor_request_refine.png is missing — the console form's default image will 404"
 
+# ── Vertex AI service agent → read access on the image buckets ───────────────
+# When an agent asks Gemini to look at a gs:// image, VERTEX fetches that object — as its own
+# service agent, not as you. Without this grant a LOCAL run (user credentials → Vertex → GCS)
+# fails with `403 PERMISSION_DENIED … service-<num>@gcp-sa-aiplatform…`, reported by the
+# orchestrator as "no report for brand_style_compliance_agent" with the real cause truncated.
+# Deployed engines take a different path and are unaffected, so this only bites local runs —
+# which is exactly where a workshop attendee meets it first.
+PNUM="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null)"
+if [ -n "$PNUM" ]; then
+  VERTEX_SA="service-${PNUM}@gcp-sa-aiplatform.iam.gserviceaccount.com"
+  for B in "$RIB" "$AAB"; do
+    gcloud storage buckets add-iam-policy-binding "gs://$B" \
+      --member="serviceAccount:$VERTEX_SA" --role=roles/storage.objectViewer \
+      --project="$PROJECT" >/dev/null 2>&1 \
+      && echo "  ✓ Vertex AI service agent may read gs://$B" \
+      || echo "  ⚠️ could not grant objectViewer to $VERTEX_SA on gs://$B (local image audits may 403)"
+  done
+fi
+
 echo
 echo "[setup_buckets] PIN these in deploy/.env so the app, the seed, and terraform all agree:"
 echo "  REQUEST_IMAGE_BUCKET=$RIB"
