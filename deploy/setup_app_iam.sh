@@ -26,6 +26,20 @@ gcloud storage buckets add-iam-policy-binding "gs://$REQ_BUCKET" \
   --member="serviceAccount:$APP_SA" --role=roles/storage.objectAdmin >/dev/null 2>&1 \
   || echo "  (bucket gs://$REQ_BUCKET grant skipped — create it in Step 1 setup)"
 
+# Cloud Run: the app calls the three IAM-gated MCP servers DIRECTLY, with its own ID token —
+# it does not go through vibeflix-mcp-invoker the way an agent identity has to (an agent has no
+# service account to mint a token with; the app does). So the app SA needs run.invoker on each
+# service in its own right.
+#
+# Miss this and nothing errors visibly: the console draws the three MCP boxes RED with no
+# message, because a 403 from a health probe is indistinguishable from "server down" at the
+# point the UI renders it. Confirmed as the cause of exactly that symptom.
+for S in vibeflix-mcp-licensing vibeflix-mcp-market vibeflix-mcp-brand-style; do
+  gcloud run services add-iam-policy-binding "$S" --region="$REGION" --project="$PROJECT" \
+    --member="serviceAccount:$APP_SA" --role=roles/run.invoker -q >/dev/null 2>&1 \
+    || echo "  (skipped $S — deploy the MCP servers in Step 1 first)"
+done
+
 # Pub/Sub: the app publishes app-side events and is the single mesh-telemetry consumer.
 gcloud pubsub topics add-iam-policy-binding "$TOPIC" --project="$PROJECT" \
   --member="serviceAccount:$APP_SA" --role=roles/pubsub.publisher >/dev/null

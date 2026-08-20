@@ -70,6 +70,15 @@ fi
 # orchestrator as "no report for brand_style_compliance_agent" with the real cause truncated.
 # Deployed engines take a different path and are unaffected, so this only bites local runs —
 # which is exactly where a workshop attendee meets it first.
+#
+# On a BRAND-NEW project the grant below fails with "Service account does not exist", because
+# enabling an API does not create its service agent — the agent appears lazily, on first use.
+# `services identity create` forces it into existence now, and returns the same address when it
+# already exists. Without this the loop below just prints its warning and carries on, and the
+# 403 surfaces an hour later in an agent's report instead of here.
+gcloud beta services identity create --service=aiplatform.googleapis.com \
+  --project="$PROJECT" >/dev/null 2>&1 || true
+
 PNUM="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null)"
 if [ -n "$PNUM" ]; then
   VERTEX_SA="service-${PNUM}@gcp-sa-aiplatform.iam.gserviceaccount.com"
