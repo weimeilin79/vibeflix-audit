@@ -1724,6 +1724,12 @@ python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh ui-renderer
 ```
 
+> ⏱️ **Another few-minute wait — spend it on the console.** Leave this tab building and skip ahead
+> to **💻 Run the console locally first**, two sections below. It brings the whole product up on
+> this machine in seconds — the UI, the graph, the report — and needs nothing from this deploy,
+> so it's the best use of the wait in the entire workshop. Come back here when the three commands
+> have finished.
+
 ### 💻 The app's identity
 
 The app runs as its own service account with its own least-privilege IAM. It gets just enough to do
@@ -1776,6 +1782,54 @@ for the one that's *derivable* rather than reaching for a second deployment pass
 If the engines ever *do* log `[task-store] … falling back to the per-replica store`, that's this
 wiring having failed — you're back to the 404 storm from Step 5, and a redeploy of the engines
 (`python deploy/deploy_agents_a2a.py`) is the fix.
+
+### 💻 Run the console locally first
+
+Before checking the cloud deploy, drive the **whole thing on your own machine** — the console UI,
+the app, all six agents and the three MCP servers. It's the fastest way to see the product you've
+been building, and it touches nothing in the cloud.
+
+> ⚡ **No Docker build here.** `console` starts the same processes the `mesh` command has been
+> starting since Step 4 — from your `.venv`, in seconds — and adds the two pieces mesh leaves
+> out: the **orchestrator** on `:8006` and the **console app** on `:8000`. (There's also
+> `./run_local.sh up`, which runs the identical stack in containers; it builds seven images
+> first, so it's the slow way to see the same thing.)
+>
+> 🔑 It needs **application-default credentials**, because the agents call Gemini. If it warns
+> that ADC is missing, run `gcloud auth application-default login` once and start again.
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+./run_local.sh console
+```
+
+`source ./env.sh` matters here: it exports `FIRESTORE_DATABASE`, so the MCP servers read the
+registries you seeded in Step 1 rather than their built-in fallback data.
+
+Wait for every service to report ✓ — three MCP servers, five agents, the orchestrator, then the
+console — and open it via **Web Preview → Change port → 8000**. This is the real thing: the same
+app you just deployed to Cloud Run, running locally against local agents.
+
+👉 In the console, pick the **✅ Happy path** scenario, then hit **Run**. It fills the form with a
+request that clears all three checks (grogu vinyl figures on VND-1001 in Asia-Pacific, compliant
+pricing), so you can watch a complete audit end to end:
+
+- the **graph lights up** as each specialist starts and finishes — brand style, vendor clearance
+  and deal pricing running **in parallel**, exactly the fan-out you drove by hand in the Dev UI;
+- the **MCP tool LEDs** blink as the deterministic checks fire;
+- the report is painted by the **UI Renderer** — that's A2UI, not HTML the app wrote;
+- and the run ends with an executed **`LC-####` contract**.
+
+Try a second scenario while you're here — **⛔ Exclusivity block** is the same request in North
+America, where Liberty Figure Works holds the lock. One branch turns red, the others still pass,
+and no contract is issued.
+
+👉💻 When you're done, press `Ctrl+C` in that tab — it stops all ten processes.
+
+> 💡 What you just ran is the *local* mesh — processes talking over `127.0.0.1`. The engines you
+> deployed to Agent Runtime were not involved. Step 8 runs the identical console
+> against those, which is the only difference that matters between this and production.
 
 ### 👀 Verify
 

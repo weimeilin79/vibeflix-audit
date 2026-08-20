@@ -213,7 +213,7 @@ vibeflix/
 ├── deploy/                     # Dockerfiles (app/agent/mcp) + Cloud Run / Agent Engine guide
 │                               #   + setup_legal_rag.py (provision the legal RAG corpus)
 ├── docker-compose.yml          # Local 10-service topology (+ legal :8005)
-└── run_local.sh                # compose wrapper (up / down / smoke / logs / frontend / mesh)
+└── run_local.sh                # local driver (up / down / smoke / logs / frontend / console / mesh / mcp)
 ```
 
 ---
@@ -362,6 +362,10 @@ gcloud auth application-default login     # agents call Gemini on Vertex AI
 `./run_local.sh smoke` brings the mesh up and POSTs a sample audit;
 `./run_local.sh down` tears it down. The app container builds the React frontend
 and FastAPI serves it on the same origin as `/api/*` (port `8000`).
+
+**Without Docker:** `./run_local.sh console` runs the same stack from `.venv` —
+MCP servers, the five agents, the orchestrator on `:8006` and the app on `:8000`
+— skipping the seven image builds. `Ctrl+C` stops all of it.
 
 **Frontend dev loop (optional):** with the mesh running, `./run_local.sh
 frontend` starts Vite on `:3000` against the app API (`VITE_API_URL`).

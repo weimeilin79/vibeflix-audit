@@ -14,6 +14,9 @@
 #   ./run_local.sh frontend          Run the Vite dev server against a running app (:8000)
 #
 #   --- local (no Docker) ---
+#   ./run_local.sh console           The whole product from .venv: MCP + agents +
+#                                    orchestrator + the console app on :8000.
+#                                    Same as `up`, without the seven image builds.
 #   ./run_local.sh mcp               Start all 4 MCP servers locally (Ctrl-C stops all)
 #   ./run_local.sh mesh              Start the full backend (4 MCP + 3 A2A agents) for
 #                                    testing the orchestrator, e.g. via `adk web`
@@ -113,6 +116,54 @@ start_a2a_agents() {
   done
 }
 
+# The orchestrator, as an A2A service like the rest of the mesh. `mesh` leaves it
+# out because you usually drive it from `adk web`; the console needs it running.
+start_orchestrator() {
+  A2A_AGENT=orchestrator A2A_HOST=127.0.0.1 A2A_PROTOCOL=http PORT=8006 \
+    BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \
+    VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \
+    DEAL_PRICING_A2A_URL=http://127.0.0.1:8003 \
+    MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
+    "$VENV/bin/python" -m vibeflix_common.a2a.serve >/tmp/a2a_orchestrator.log 2>&1 &
+  ORCH_PID="$!"
+  for _ in $(seq 1 40); do
+    curl -sf "http://127.0.0.1:8006/.well-known/agent-card.json" >/dev/null 2>&1 && {
+      c_info "  ✓ orchestrator  → http://127.0.0.1:8006"; return; }
+    sleep 0.5
+  done
+  c_warn "  ✗ orchestrator did NOT start on :8006 (see /tmp/a2a_orchestrator.log)"
+}
+
+# The console: FastAPI + the built frontend, as a thin client over the local mesh.
+# Same wiring as the `app` service in docker-compose.yml, pointed at 127.0.0.1.
+start_app() {
+  if [ ! -d "$ROOT/frontend/dist" ]; then
+    c_warn "frontend/dist missing — building it once (npm run build)…"
+    (cd "$ROOT/frontend" && npm ci --silent && npm run build)
+  fi
+  PORT=8000 \
+    ORCHESTRATOR_A2A_URL=http://127.0.0.1:8006 \
+    BRAND_STYLE_A2A_URL=http://127.0.0.1:8001 \
+    VENDOR_CLEARANCE_A2A_URL=http://127.0.0.1:8002 \
+    DEAL_PRICING_A2A_URL=http://127.0.0.1:8003 \
+    UI_RENDERER_A2A_URL=http://127.0.0.1:8004 \
+    MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
+    MCP_MARKET_URL=http://127.0.0.1:9003/mcp \
+    MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp \
+    FRONTEND_DIST="$ROOT/frontend/dist" \
+    AUDIT_HISTORY_DIR="$ROOT/data/app" \
+    "$VENV/bin/python" -m uvicorn agents.app:app --host 127.0.0.1 --port 8000 \
+    >/tmp/app.log 2>&1 &
+  APP_PID="$!"
+  for _ in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:8000/api/ready" >/dev/null 2>&1 && {
+      c_info "  ✓ console       → http://127.0.0.1:8000"; return; }
+    sleep 0.5
+  done
+  c_warn "  ✗ console did NOT start on :8000 (see /tmp/app.log)"
+}
+
+
 case "${1:-up}" in
   up)
     check_adc
@@ -147,6 +198,21 @@ case "${1:-up}" in
   frontend)
     c_info "Vite dev server (proxying API to $API_BASE)…"
     VITE_API_URL="$API_BASE" npm run dev --prefix "$ROOT/frontend"
+    ;;
+  console)
+    # The whole product, WITHOUT Docker: the mesh you already know, plus the
+    # orchestrator and the console app. `up` does the same thing in containers,
+    # but pays for seven image builds first — this reuses .venv and starts in
+    # seconds. Same processes, same ports the lab has used all along.
+    check_adc
+    start_mcp_servers
+    start_a2a_agents
+    start_orchestrator
+    start_app
+    trap 'c_info "Stopping console…"; kill "${MCP_PIDS[@]}" "${A2A_PIDS[@]}" "$ORCH_PID" "$APP_PID" 2>/dev/null || true' EXIT INT TERM
+    c_info "Console up on http://127.0.0.1:8000 — open it via Web Preview (port 8000)."
+    c_info "Ctrl-C to stop everything."
+    wait
     ;;
   mesh)
     # Full backend (3 MCP + 5 A2A agent services) for testing the orchestrator
