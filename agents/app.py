@@ -367,6 +367,9 @@ async def _present(reports: dict) -> list | None:
     emit_event("ui_renderer", "started", detail="rendering report panels")
     text = await _run_presenter(reports)
     if not text:
+        # Log every failure path, not just the parse error. A silent fallback renders a normal
+        # report while the renderer box goes red with no explanation anywhere.
+        print("[app] presenter returned NO TEXT — falling back to deterministic panels", flush=True)
         emit_event("ui_renderer", "failed", detail="no response — using the deterministic panels")
         return None
     try:
@@ -379,6 +382,9 @@ async def _present(reports: dict) -> list | None:
     # card — the LLM sometimes does this for a sparse report. The spec has no opinion on it, so
     # reject it here and let panels_fallback show "<name> — <status>" instead.
     if not panel or not any(a2ui_text(c).strip() for c in panel["components"]):
+        print(f"[app] presenter returned a CONTENT-EMPTY panel "
+              f"({len((panel or {}).get('components', []))} components, no text) — "
+              f"falling back to deterministic panels", flush=True)
         emit_event("ui_renderer", "failed", detail="empty panel — using the deterministic panels")
         return None
     emit_event("ui_renderer", "completed", detail="A2UI panel rendered")
