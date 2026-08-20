@@ -375,7 +375,14 @@ async def _present(reports: dict) -> list | None:
     try:
         panel = parse_panel(text)
     except Exception as e:
-        print(f"[app] presenter emitted invalid A2UI ({type(e).__name__}: {e}); fallback", flush=True)
+        # Show WHAT came back, not just that it failed. "tags not found" has two very different
+        # causes — the agent ignored the contract, or the transport handed us a fragment (the
+        # tags split across parts, a truncated reply, a stray preamble) — and they are
+        # indistinguishable without the payload. First/last 200 chars is enough to tell.
+        _t = (text or "").strip()
+        print(f"[app] presenter emitted invalid A2UI ({type(e).__name__}: {e}); fallback\n"
+              f"      len={len(_t)} head={_t[:200]!r}\n"
+              f"      tail={_t[-200:]!r}", flush=True)
         emit_event("ui_renderer", "failed", detail=f"invalid A2UI ({type(e).__name__})")
         return None
     # A structurally-valid but CONTENT-EMPTY panel (every Text blank) renders as an invisible
