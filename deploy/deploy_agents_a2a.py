@@ -79,7 +79,7 @@ def get_run_url(service_name: str, optional: bool = False) -> str:
         return f"{url}/mcp" if url else ""
     except Exception as e:
         if optional:
-            print(f"   ℹ {service_name} isn't deployed yet — continuing without it.")
+            pass   # the caller reports what it does instead (see _app_url)
         else:
             print(f"Error getting URL for {service_name}: {e}")
         return ""
@@ -144,8 +144,28 @@ _ENV.setdefault("MCP_MARKET_URL", get_run_url("vibeflix-mcp-market"))
 # get_run_url() appends /mcp for the MCP servers — strip it; we want the app root.
 # EMPTY on the first pass of a fresh project (the app doesn't exist yet) — the engines then
 # fall back to a per-replica store and say so loudly. Pass 2, after the app is up, sets it.
-_ENV.setdefault("TASK_STORE_URL",
-                get_run_url("vibeflix-app", optional=True).removesuffix("/mcp"))
+# The app hosts the shared A2A task store. Prefer its live URL; if it isn't deployed yet, use
+# the DETERMINISTIC Cloud Run form instead of leaving this empty.
+#
+# Cloud Run serves every service at BOTH  https://<svc>-<hash>-<reg>.a.run.app  (what
+# `gcloud run services describe` reports) AND  https://<svc>-<project-number>.<region>.run.app
+# — verified: both return 200 for the same service. Only the second is computable, and the value
+# is read at RUNTIME, so it's fine to set it before the app exists: it just has to be up by the
+# time an audit runs. That removes the whole "deploy everything twice" pass this used to need.
+def _app_url() -> str:
+    live = get_run_url("vibeflix-app", optional=True).removesuffix("/mcp")
+    if live:
+        return live
+    num = _project_number(PROJECT)
+    if not num:
+        return ""
+    url = f"https://vibeflix-app-{num}.{REGION}.run.app"
+    print(f"   \u2139 vibeflix-app isn't deployed yet — using its predictable URL {url}\n"
+          f"     (deploy the app in Step 6; the engines only read this at run time).")
+    return url
+
+
+_ENV.setdefault("TASK_STORE_URL", _app_url())
 
 # Probed ONCE here, not per-agent: deploy_one() runs in a thread pool, and this shells out.
 GATEWAY_READY = gateway_exists()

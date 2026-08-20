@@ -1610,33 +1610,39 @@ Open it via **Web Preview → Change port → 8000**, pick **orchestrator**, and
 **as one line of JSON** (replace `<your-project>`):
 
 ```json
-{"image_uri": "gs://<your-project>-request-image/vendor_request_refine.png", "character": "grogu", "product_category": "Vinyl Figures", "vendor": "VND-1006", "target_market": "Europe", "volume": 20000, "net_unit_price": 14, "agreed_royalty_rate": 0.18, "agreed_advance": 40000, "agreed_mg": 155000}
+{"image_uri": "gs://<your-project>-request-image/stitch.png", "character": "stitch", "product_category": "Vinyl Figures", "medium": "vinyl figures", "vendor": "VND-1007", "target_market": "North America", "volume": 20000, "net_unit_price": 14, "agreed_royalty_rate": 0.15, "agreed_advance": 35000, "agreed_mg": 125000}
 ```
 
-> ⚠️ **Send JSON here, not a sentence.** `ingest` accepts either, but the natural-language parse
-> is best-effort and the console never uses it — the console posts a structured request, which is
-> what these keys are. Type the same thing as prose and you can watch it go wrong: `vendor:
-> VND-1006` gets read as **volume 1006**, and the character can be dropped entirely
-> (`"The licensed character/trademark was NOT provided — ask for it"`). The JSON path is exact.
+> ⚠️ **Why JSON, when plain English also works?** `ingest` accepts either (`_parse_audit_request`),
+> but the natural-language path is deliberately small: it pulls out the **image link**, the
+> **market**, and the **volume** — and nothing else. Describe the vendor, character, category or
+> pricing in prose and those fields simply aren't extracted, so the agents do the sensible thing
+> and ask you for them (`"The licensed character/trademark was NOT provided — ask for it"`).
+>
+> That's fine for a quick *"audit this image"*, and worth trying once. But a full audit has
+> eleven fields, and JSON is how the console sends them — these keys are exactly the ones
+> `POST /api/audit` uses. Use JSON when you want the whole request to land in one shot.
 
 **Why these values clear.** Each one dodges a block you met earlier:
 
 | field | why |
 |---|---|
-| `character: grogu` | **must match the artwork.** The seeded mock-up depicts Grogu, and brand_style compares the two — audit it as another character and you get `character_mismatch: The artwork depicts Grogu, not the licensed character under audit` |
-| `Vinyl Figures` × `Europe` | no exclusivity lock — grogu's lock is **North America** (the others: gremlins/Europe, stitch/Asia-Pacific, minions/LatAm) |
-| `VND-1006` (Kraków Vinyl Studio) | already makes Vinyl Figures in Europe → no onboarding, no legal handoff, no approval question |
+| `image_uri: …/stitch.png` + `character: stitch` | **the artwork and the character must agree.** brand_style looks at the image and compares — point it at `vendor_request_refine.png` (which is Grogu) while auditing stitch and you get `character_mismatch: The artwork depicts Grogu, not the licensed character 'stitch' under audit` |
+| `medium: "vinyl figures"` | these images are **character artwork, not product mock-ups**. Left blank, brand_style infers a medium like *"artwork"* — which isn't on the approved list, so the audit gets `flagged` for `unapproved_medium`. Supplying it says what the product actually is |
+| `Vinyl Figures` × `North America` | no exclusivity lock — stitch's lock is **Asia-Pacific** (the others: grogu/NA, gremlins/Europe, minions/LatAm) |
+| `VND-1007` (Maple Collectibles) | already makes Vinyl Figures in North America → no onboarding, no legal handoff, no approval question |
 | `volume: 20000` | under the 25,000 sourcing cap, so no capacity-split question |
-| `agreed_royalty_rate: 0.18` | the rate card computes **0.1764** for this deal (0.14 base × 1.2 category × 1.05 territory) — the agreed rate is above it |
-| `agreed_advance: 40000`, `agreed_mg: 155000` | above the expected **37,500** and **150,000** |
+| `agreed_royalty_rate: 0.15` | the rate card computes **0.143** for this deal (0.13 base × 1.1 category × 1.0 territory) — the agreed rate is above it |
+| `agreed_advance: 35000`, `agreed_mg: 125000` | above the expected **30,000** and **120,000** |
 
 👀 Watch the graph in the Dev UI: `dispatch` fans out to **brand_style, vendor_clearance and
 deal_pricing in parallel**, `merge_reports` waits for all three, and `contract_finalize` executes
 the licensing contract — an `LC-####` id in the final report.
 
-> 💡 **Change one field and watch a single branch fail.** Set `"target_market": "North America"`
-> and the same request hits grogu's exclusivity lock in `vendor_clearance` — while brand style
-> and pricing still come back `cleared`. That's the fan-out doing its job: one branch blocking
+> 💡 **Change one field and watch a single branch fail.** Set `"target_market": "Asia-Pacific"`
+> and the same request hits stitch's exclusivity lock in `vendor_clearance` — while brand style
+> and pricing still come back `cleared`. Or swap the image to `vendor_request_refine.png` and
+> only *brand style* fails, on the character mismatch. That's the fan-out doing its job: one branch blocking
 > doesn't stop the others reporting, and `merge_reports` shows you all three verdicts side by
 > side.
 
@@ -1744,20 +1750,32 @@ source ./env.sh
 
 It builds the frontend + API image, auto-resolves the engine A2A URLs and three MCP URLs, and deploys `vibeflix-app` to Cloud Run pinned to a single instance.
 
-### 💻 Redeploy the engines (pass 2)
+### 💡 Concept — the circular dependency, and how to break it
 
-Here's a subtlety worth understanding. The engines need the app's URL (for `TASK_STORE_URL`), but the app needed the engines' URLs first — a genuine **circular dependency**. The fix is to deploy the engines **twice**, with the app in between. You've done pass 1 (Steps 2–5) and just deployed the app; now do **pass 2** so the engines pick up the task-store URL:
-*(The app's Cloud Run URL is actually predictable — `https://vibeflix-app-<project-number>.<region>.run.app` — so a production pipeline could compute it up front, set `TASK_STORE_URL` on the first pass, and skip this redeploy entirely. We keep it as an explicit second pass here so the circular dependency stays visible.)*
+Here's a subtlety worth understanding. The engines need the app's URL (for `TASK_STORE_URL`, the
+shared task store), but the app needed the engines' URLs first — a genuine **circular
+dependency**. The obvious fix is to deploy the engines, deploy the app, then redeploy all six
+engines so they learn the URL. That works, and it's what this workshop used to do.
 
+You don't have to, because **the URL is computable before the app exists**. Cloud Run serves every
+service at two addresses:
 
-```bash
-cd ~/vibeflix-audit
-source ./env.sh
-python deploy/deploy_agents_a2a.py        # no arg = redeploy all engines (pass 2)
+```
+https://vibeflix-app-<hash>-uc.a.run.app          ← what `gcloud run services describe` reports
+https://vibeflix-app-<project-number>.<region>.run.app   ← deterministic, and just as live
 ```
 
-Skip this and the engines log `[task-store] … falling back to the per-replica store`, and you're
-back to the 404 storm from Step 5.
+The second one needs only your project number, so `deploy_agents_a2a.py` computes it during pass
+one and the engines are wired to the task store from the start. `TASK_STORE_URL` is only read at
+**run time**, so pointing at a service that doesn't exist yet is harmless — it just has to be up
+before you run an audit, which it now is.
+
+That's a useful habit beyond this workshop: when two components need each other's addresses, look
+for the one that's *derivable* rather than reaching for a second deployment pass.
+
+If the engines ever *do* log `[task-store] … falling back to the per-replica store`, that's this
+wiring having failed — you're back to the 404 storm from Step 5, and a redeploy of the engines
+(`python deploy/deploy_agents_a2a.py`) is the fix.
 
 ### 👀 Verify
 

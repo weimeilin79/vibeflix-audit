@@ -327,7 +327,12 @@ def _parse_audit_request(text: str) -> AuditInput:
         market = "Europe"
     elif re.search(r"asia", text, re.I):
         market = "Asia-Pacific"
-    vm = re.search(r"\b(\d{4,7})\b", text.replace(",", ""))
+    # Prefer an explicit "volume: N". The bare-number fallback must NOT take digits that are
+    # part of an identifier — `\b(\d{4,7})\b` happily matched the 1007 in "vendor VND-1007"
+    # and audited 1007 units, which then showed up as a sourcing decision nobody asked for.
+    _t = text.replace(",", "")
+    vm = re.search(r"\bvolume\b\D{0,10}(\d{3,9})", _t, re.I) \
+        or re.search(r"(?<![\w-])(\d{4,7})(?![\w-])", _t)
     volume = int(vm.group(1)) if vm else 15000
     image_path = image_uri.split("/")[-1].split("?")[0] if image_uri else "grogu_mockup_box.png"
     return AuditInput(image_path=image_path, image_uri=image_uri, target_market=market, volume=volume)
