@@ -31,6 +31,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# Read deploy/.env for PROJECT / REQUEST_IMAGE_BUCKET / FIRESTORE_DATABASE, so this script works
+# on its own rather than only after `source ./env.sh`. The SHELL still wins over the file.
+_RL_SHELL="${RUN_LOCAL:-}"
+[ -f "$ROOT/deploy/.env" ] && { set -a; . "$ROOT/deploy/.env"; set +a; }
+
 # EVERYTHING this script starts is local — say so explicitly.
 #
 # cloud_auth.run_local() otherwise auto-detects by asking "am I on GCP?", and in CLOUD SHELL the
@@ -38,7 +43,7 @@ cd "$ROOT"
 # Agent Runtime URL shape (…/a2a/v1/message:send) — a route stock `to_a2a` doesn't serve, so the
 # console fails with `404 … for url: http://127.0.0.1:8006/a2a/v1/message:send`. Same reason
 # docker-compose.yml pins RUN_LOCAL: "true". An explicit RUN_LOCAL still wins.
-export RUN_LOCAL="${RUN_LOCAL:-true}"
+export RUN_LOCAL="${_RL_SHELL:-true}"
 
 API_BASE="${API_BASE:-http://localhost:8000}"
 VENV="$ROOT/.venv"
@@ -146,9 +151,18 @@ start_orchestrator() {
 # The console: FastAPI + the built frontend, as a thin client over the local mesh.
 # Same wiring as the `app` service in docker-compose.yml, pointed at 127.0.0.1.
 start_app() {
-  if [ ! -d "$ROOT/frontend/dist" ]; then
-    c_warn "frontend/dist missing — building it once (npm run build)…"
-    (cd "$ROOT/frontend" && npm ci --silent && npm run build)
+  # The console's default mock-up is baked in at BUILD time (Vite inlines import.meta.env).
+  # Without VITE_DEFAULT_IMAGE the bundle falls back to the hardcoded
+  # gs://vibeflix-request-image/… — a bucket in the ORIGINAL demo project — and every audit
+  # fails in brand_style with `403 … service-<num>@gcp-sa-aiplatform… ` because Vertex can't
+  # read another project's object. Cloud builds pass this via cloudbuild-app.yaml; local ones
+  # have to do it here.
+  VITE_DEFAULT_IMAGE="gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png"
+  # Rebuild when the baked-in default doesn't match this project (e.g. a dist/ built elsewhere,
+  # or before this fix existed) — otherwise a stale bundle keeps pointing at the wrong bucket.
+  if [ ! -d "$ROOT/frontend/dist" ] || ! grep -rqs "$VITE_DEFAULT_IMAGE" "$ROOT/frontend/dist"; then
+    c_warn "building the console bundle for $PROJECT (default image: $VITE_DEFAULT_IMAGE)…"
+    (cd "$ROOT/frontend" && npm ci --silent && VITE_DEFAULT_IMAGE="$VITE_DEFAULT_IMAGE" npm run build)
   fi
   PORT=8000 \
     ORCHESTRATOR_A2A_URL=http://127.0.0.1:8006 \
