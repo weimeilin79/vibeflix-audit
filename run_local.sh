@@ -81,6 +81,15 @@ ensure_venv() {
   uv pip install --python "$VENV/bin/python" "$ROOT/packages/vibeflix-common" --no-deps >/dev/null 2>&1 || true
 }
 
+# Mesh telemetry — the LIVE graph in the console.
+#
+# Every agent and MCP tool publishes started/completed events onto PUBSUB_TOPIC, and the app
+# streams them to the browser over SSE. emit_event is a NO-OP when PUBSUB_TOPIC is unset, so
+# without these the console can only draw the graph from the FINAL report — the run looks
+# instantaneous instead of unfolding. docker-compose.yml sets the same two.
+export PUBSUB_TOPIC="${PUBSUB_TOPIC:-vibeflix-mesh-events}"
+export PUBSUB_SUBSCRIPTION="${PUBSUB_SUBSCRIPTION:-${PUBSUB_TOPIC}-app}"
+
 start_mcp_servers() {
   ensure_venv
   MCP_PIDS=()
