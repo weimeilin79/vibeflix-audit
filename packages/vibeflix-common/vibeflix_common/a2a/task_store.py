@@ -162,7 +162,18 @@ class RemoteTaskStore(TaskStore):
                     r = await c.get(f"{self._base}/api/taskstore/{task_id}")
                 if r.status_code == 200:
                     return Task.model_validate_json(r.json()["json"])
-                if r.status_code != 404:
+                if r.status_code in (401, 403):
+                    # An AUTH failure is NOT a missing task. Falling through quietly makes this
+                    # replica answer from local memory, which never had the task — so the A2A
+                    # layer reports 404 "task not found" for a task that exists. That is exactly
+                    # how a token expiry appears in the gateway log: a burst of 404s on
+                    # tasks/{id} with 401s on /api/taskstore alongside them. GoogleAuth has
+                    # already retried once with a forced re-mint, so reaching here means the
+                    # credential is genuinely refused — say so.
+                    print(f"[task-store] get({task_id}) → {r.status_code} AUTH DENIED — this is "
+                          f"NOT a missing task; falling back to this replica's memory",
+                          flush=True)
+                elif r.status_code != 404:
                     r.raise_for_status()
             except Exception as e:  # noqa: BLE001
                 self._warn("get", task_id, e)

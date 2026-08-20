@@ -6,73 +6,89 @@
 
 ## 00:00 — Cold open
 
-[SCREEN: three different audit results — a clean pass, a blocked exclusivity conflict, a question asking for a safety-cert ID. Three completely different shapes.]
+[SCREEN: three audit results side by side — a clean pass, a blocked exclusivity conflict, a question waiting for an answer.]
 
 Three audits. Three completely different results.
 
-One is a clean report. One is a blocked deal with a conflicting contract to show. One isn't a result at all — it's a *question*, waiting for a human to answer it.
+One is a clean report. One is a blocked deal, with a conflicting contract to show. And one isn't a result at all — it's a *question*, waiting for a human.
 
 [BEAT]
 
-Now: how many React components do you write for that?
+So. How many React components do you write for that?
 
-The honest answer, if you go down the normal path, is *one per shape you can think of*, plus a fallback for the ones you couldn't, plus a new one every time an agent learns to say something new. It's a losing battle, and the losing gets worse as the system gets smarter.
+Go down the normal path and the answer is: one per shape you can think of. Plus a fallback for the ones you couldn't. Plus a new one every time an agent learns to say something new.
 
-This step is about not fighting it.
+It's a treadmill. And it gets worse as the system gets smarter.
+
+Today we stop running.
 
 ---
 
-## 01:30 — A2UI: the agents generate the UI
+## 01:30 — A2UI
 
-The idea is called **A2UI** — agent to user interface — and it flips the direction.
+The idea is called **A2UI**. Agent to user interface. It flips the direction.
 
-Instead of the frontend anticipating every result shape, the **result decides the interface**. An agent looks at what the backend actually produced and emits a description of the UI to draw. The frontend's job shrinks to rendering components it's given.
+Instead of the frontend guessing every possible result shape — **the result decides the interface.** An agent looks at what the backend produced, and emits a description of the UI to draw.
+
+The frontend's job shrinks to rendering what it's handed.
 
 [BEAT]
 
-I want to be careful here, because "let the AI build the UI" is the kind of sentence that makes sensible engineers reach for the door. So let's be precise about what is and isn't happening.
+Now, "let the AI build the UI" is the kind of sentence that makes sensible engineers reach for the door. So let's be exact about what is and isn't happening.
 
-The renderer does **not** emit HTML, or CSS, or JavaScript. It emits **components from a fixed schema** — a card, a table, a badge, a question with a set of options. The frontend knows how to draw each of those, and it draws nothing else.
+The renderer does **not** emit HTML. Or CSS. Or JavaScript.
 
-So the space of possible UIs is bounded by the schema, not by the model's imagination. The model chooses *which* components and *what goes in them*. That's a much smaller, much safer job than "generate an interface".
+It emits **components from a fixed schema.** A card. A table. A badge. A question with options. The frontend knows how to draw each of those, and it draws nothing else.
+
+So the space of possible UIs is bounded by the schema. Not by the model's imagination.
+
+The model picks *which* components, and *what goes in them*. That's a much smaller job than "generate an interface." And a much safer one.
 
 ---
 
-## 03:30 — The UI Renderer is just another agent
+## 03:30 — Just another agent
 
-[SCREEN: `agents/ui_renderer/`.]
+[SCREEN: the ui_renderer folder.]
 
-Two things worth noticing about how it's built.
+Two things about how it's built.
 
-**It's an independent A2A agent**, exactly like the domain agents. Its own engine, called over A2A. The app talks to it the same way it talks to the orchestrator. It is not a library, not a function in the app — a peer.
+**It's an independent A2A agent.** Own engine. Called over A2A. The app talks to it exactly like it talks to the orchestrator. Not a library. Not a function. A peer.
 
-**Its rendering procedure is a Skill** — the same pattern as deal pricing. It has **no tools**, and its instruction carries the A2UI component schema, so it emits the real wire format directly.
+**Its procedure is a Skill** — same pattern as deal pricing. No tools. Its instruction carries the component schema, so it emits the real wire format directly.
 
-And here's a design decision worth pausing on: there's **no output schema** on the model call. A2UI blocks are a text format, so reliability comes from **validate-then-fallback** instead.
+And here's a design call worth stopping on. There's **no output schema** on the model call. A2UI blocks are a text format. So reliability comes from **validate-then-fallback** instead.
 
 [BEAT]
 
-That means: the renderer emits its panel, the app parses it, and if it doesn't validate, the app heals what it can and falls back to a plain rendering rather than showing nothing. The user always gets *something*.
+Meaning: the renderer emits a panel. The app parses it. If it doesn't validate, the app heals what it can and falls back to a plain rendering.
 
-That's the right shape for a presentation layer. A malformed panel should degrade to a plain report — not to a blank screen with a stack trace behind it. Contrast that with pricing, where a malformed answer must *fail*, loudly, rather than degrade. **Where you put the fallback depends on whether being approximately right is acceptable.** In a verdict it isn't. In a layout it is.
+The user always gets *something*.
+
+That's the right shape — for a presentation layer. A malformed panel should degrade to a plain report. Not to a blank screen with a stack trace behind it.
+
+Now contrast that with pricing. There, a malformed answer must **fail**. Loudly. Never degrade.
+
+**Where you put the fallback depends on whether being approximately right is acceptable.** In a verdict, it isn't. In a layout, it is.
 
 ---
 
-## 06:00 — The app is a thin client to two agents
+## 06:00 — The app is a thin client
 
-[SCREEN: `browser ──► app ──A2A──► orchestrator` and `──A2A──► ui_renderer`.]
+[SCREEN: browser → app → orchestrator, and app → ui_renderer.]
 
 So what does the app actually do?
 
-It runs the audit by calling the **orchestrator** over A2A. It turns reports into panels by calling the **UI renderer** over A2A. And it hosts the shared task store the engines read and write — which is the piece we set up in Step 5.
+It runs the audit by calling the **orchestrator** over A2A. It turns reports into panels by calling the **renderer** over A2A. And it hosts the shared task store the engines read and write — the piece from Step 5.
 
-What it does **not** do is run any agent workflow itself. No fan-out, no reasoning, no business logic. It's a thin client and a piece of shared infrastructure.
+What it does **not** do is run any agent workflow itself. No fan-out. No reasoning. No business logic.
 
-That's why it runs pinned to a single instance — because it's the one component holding state everything else depends on.
+Thin client, plus one piece of shared infrastructure.
+
+Which is why it runs pinned to a single instance. It's the one component holding state that everything else depends on.
 
 ---
 
-## 07:30 — Deploy the UI Renderer
+## 07:30 — Deploy the renderer
 
 ```bash
 cd ~/vibeflix-audit
@@ -82,9 +98,9 @@ python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh ui-renderer
 ```
 
-The sixth and final agent, deployed exactly like the other five.
+Sixth and final agent. Deployed exactly like the other five.
 
-[DO: start it. This is another few-minute wait — and this time there's a genuinely good use for it. Jump ahead to the local console run below.]
+[DO: start it. Another few-minute wait — and this time there's a great use for it. Jump ahead to the local console run.]
 
 ---
 
@@ -96,15 +112,17 @@ source ./env.sh
 ./deploy/setup_app_iam.sh
 ```
 
-The app runs as its own service account with its own least-privilege IAM. Same principle as every agent — but the list is different, because its job is different.
+The app runs as its own service account, with its own least-privilege IAM. Same principle as every agent. Different list, because its job is different.
 
-It needs to call the engines over A2A. It needs to read and write the shared task state — and **without that one, task-store reads fail and audits hang**, which is a confusing failure to debug from the outside. It needs to read the Firestore data it serves: the registries, the audit history, the task store. It needs to resolve engine URLs from the registry. It needs to store uploaded mock-ups. And it needs to publish its own events and consume the telemetry subscription.
+It calls the engines over A2A. It reads and writes shared task state — **and without that one, task-store reads fail and audits hang.** That's a nasty one to debug from outside.
 
-That script grants exactly that set and creates the subscription.
+It reads the Firestore data it serves. Resolves engine URLs from the registry. Stores uploaded mock-ups. Publishes its own events and consumes the telemetry subscription.
+
+That script grants exactly that set, and creates the subscription.
 
 ---
 
-## 10:30 — Build and deploy the app
+## 10:30 — Deploy the app
 
 ```bash
 cd ~/vibeflix-audit
@@ -112,39 +130,47 @@ source ./env.sh
 ./deploy/deploy_app.sh
 ```
 
-It builds the frontend and API image, auto-resolves the engine A2A URLs and the three MCP URLs, and deploys to Cloud Run pinned to a single instance.
+Builds the frontend and API image. Auto-resolves the engine URLs and the three MCP URLs. Deploys to Cloud Run, pinned to one instance.
 
 ---
 
-## 11:30 — The circular dependency, and how to break it
+## 11:30 — The circular dependency
 
-Here's a subtlety worth understanding properly, because the lesson generalises well beyond this workshop.
+Here's a subtlety worth getting right. The lesson travels well beyond this workshop.
 
-The engines need the **app's** URL, for the task store. But the app needed the **engines'** URLs first. That's a genuine circular dependency.
+The engines need the **app's** URL, for the task store. But the app needed the **engines'** URLs first.
 
-The obvious fix is a second pass: deploy the engines, deploy the app, then redeploy all six engines so they learn the URL. That works. It's what this workshop used to do.
+That's a real circular dependency.
 
-[BEAT]
+The obvious fix is a second pass. Deploy the engines. Deploy the app. Then redeploy all six engines so they learn the URL.
 
-You don't have to — because **the URL is computable before the app exists**.
-
-Cloud Run serves every service at two addresses. One is the hashed form that `gcloud run services describe` reports. The other is deterministic: the service name, your project number, the region. Just as live, and derivable from things you already know.
-
-So the deploy script computes it during the first pass, and the engines are wired to the task store from the start. `TASK_STORE_URL` is only read at **run time**, so pointing at a service that doesn't exist yet is harmless — it just has to be up before you run an audit, which it now is.
+That works. It's what this workshop used to do.
 
 [BEAT]
 
-That's a habit worth taking with you: **when two components need each other's addresses, look for the one that's derivable rather than reaching for a second deployment pass.**
+You don't have to. Because **the URL is computable before the app exists.**
 
-And note the contrast with Step 4. Engine ids are *not* derivable — Agent Runtime mints a random one — which is exactly why that step needs deploy-collect-deploy and this one doesn't. Knowing which of your identifiers are computable and which are assigned tells you where your deployment ordering constraints really are.
+Cloud Run serves every service at two addresses. One is the hashed form that `describe` reports. The other is deterministic — service name, project number, region.
 
-If the engines ever *do* log that they're falling back to the per-replica store, that's this wiring having failed — you're back to the 404 storm from Step 5, and redeploying the engines is the fix.
+Just as live. And derivable from things you already know.
+
+So the deploy script computes it on the first pass, and the engines are wired to the task store from the start. The URL is only read at **run time**, so pointing at a service that doesn't exist yet is harmless. It just has to be up before you run an audit. Which it now is.
+
+[BEAT]
+
+Take this one with you: **when two components need each other's addresses, look for the one that's derivable — before you reach for a second deployment pass.**
+
+And notice the contrast with Step 4. Engine ids are *not* derivable. Agent Runtime mints a random one. That's exactly why that step needs deploy-collect-deploy and this one doesn't.
+
+Knowing which identifiers are computable and which are assigned tells you where your real ordering constraints are.
+
+If the engines ever *do* log that they're falling back to the per-replica store — that's this wiring having failed. You're back to the 404 storm from Step 5. Redeploy the engines.
 
 ---
 
-## 14:30 — Run the console locally first
+## 14:30 — Run the whole thing locally
 
-Before checking the cloud deploy, let's drive the **whole thing on your own machine**.
+Before we check the cloud deploy — let's drive the **entire product** on this machine.
 
 ```bash
 cd ~/vibeflix-audit
@@ -152,15 +178,15 @@ source ./env.sh
 ./run_local.sh console
 ```
 
-**No Docker build here.** This starts the same processes the `mesh` command has been starting since Step 4 — from your virtual environment, in seconds — and adds the two pieces mesh leaves out: the orchestrator, and the console app.
+**No Docker build here.** This starts the same processes the mesh command has been starting since Step 4 — from your virtual environment, in seconds — plus the two pieces the mesh leaves out. The orchestrator, and the console app.
 
-There's also an `up` command that runs the identical stack in containers. It builds seven images first, so it's the slow way to see the same thing.
+There's also an `up` command that runs the identical stack in containers. It builds seven images first. Slow way to see the same thing.
 
-It does need **application-default credentials**, because the agents call Gemini. If it warns that they're missing, run the login once and start again.
+It does need **application-default credentials**, because the agents call Gemini. If it warns they're missing, log in once and start again.
 
-And `source ./env.sh` matters here specifically: it exports the Firestore database name, so the MCP servers read the registries you seeded in Step 1 rather than their built-in fallback data.
+And `source ./env.sh` matters here specifically. It exports the Firestore database name — so the MCP servers read the registries you seeded in Step 1, not their built-in fallback data.
 
-[DO: wait for every service to report ✓, then Web Preview → port 8000.]
+[DO: wait for every service to report ✓. Web Preview → port 8000.]
 
 ---
 
@@ -168,31 +194,33 @@ And `source ./env.sh` matters here specifically: it exports the Firestore databa
 
 [SCREEN: the console.]
 
-This is the real thing — the same app you just deployed to Cloud Run, running locally against local agents.
+This is the real thing. Same app you just deployed to Cloud Run. Running locally, against local agents.
 
-Pick the **happy path** scenario and hit Run.
+Pick the **happy path** scenario. Hit Run.
 
 [SCREEN: the graph animating.]
 
-Four things to watch, and each one is a concept from an earlier step made visible.
+Four things to watch. Each one is a concept from an earlier step, made visible.
 
-**The graph lights up** as each specialist starts and finishes — brand style, vendor clearance and deal pricing running **in parallel**. That's the fan-out you drove by hand in Step 5.
+**The graph lights up** as each specialist starts and finishes. Brand style, vendor clearance, deal pricing — **in parallel.** That's the fan-out you drove by hand in Step 5.
 
-**The MCP tool LEDs blink** as the deterministic checks fire. Those are the tool calls — the exact half of the work.
+**The MCP tool LEDs blink** as the deterministic checks fire. Those are the exact half of the work.
 
-**The report is painted by the UI Renderer.** That's A2UI. The app didn't write that layout; an agent chose those components.
+**The report is painted by the UI Renderer.** That's A2UI. The app didn't write that layout. An agent chose those components.
 
-**The run ends with an executed contract.**
+**And the run ends with an executed contract.**
 
-Try a second scenario while you're here — **exclusivity block** is the same request in North America, where a competitor holds the lock. One branch turns red, the others still pass, and no contract is issued.
+Try a second one — **exclusivity block.** Same request, North America, where a competitor holds the lock. One branch turns red. The others still pass. No contract.
 
 [BEAT]
 
-That's worth ten seconds of appreciation. One branch failing didn't take down the run, didn't hide the other results, and produced a specific reason rather than a generic error.
+Give that ten seconds of appreciation. One branch failed. It didn't take down the run. It didn't hide the other results. And it produced a specific reason, not a generic error.
 
-[DO: Ctrl+C to stop everything.]
+[DO: Ctrl+C.]
 
-What you just ran is the *local* mesh — processes talking over localhost. The engines you deployed to Agent Runtime were not involved. Step 8 runs the identical console against those, which is the only difference that matters between this and production.
+What you just ran is the *local* mesh. Processes talking over localhost. The engines you deployed to Agent Runtime were not involved at all.
+
+Step 8 runs the identical console against those. That's the only difference that matters between this and production.
 
 ---
 
@@ -208,26 +236,30 @@ source ./env.sh
 
 ## 20:30 — Do and don't
 
-**Do let results choose their own presentation** when the space of result shapes is open-ended. Hand-coding a panel per shape is a treadmill.
+**Do let results choose their own presentation** when result shapes are open-ended.
 
-**Don't let a model emit raw markup.** A fixed component schema bounds what can possibly appear on screen.
+**Don't let a model emit raw markup.** A fixed component schema bounds what can appear on screen.
 
 **Do use validate-then-fallback in a presentation layer.** A degraded panel beats a blank screen.
 
 **Don't use fallback in a decision layer.** A degraded verdict is worse than an error.
 
-**Do keep the app a thin client.** The moment it starts doing business logic, it becomes a component your governance model didn't plan for.
+**Do keep the app a thin client.** The moment it does business logic, it's a component your governance didn't plan for.
 
-**Don't add a deployment pass for a value you can compute.** Check whether the identifier is derivable first.
+**Don't add a deployment pass for a value you can compute.**
 
 ---
 
-## 22:00 — Recap and bridge
+## 22:00 — Recap and hook
 
-You have a working product: six agents, three tool servers, and a console where a human can run an audit and read a result that an agent chose how to display.
+You have a working product. Six agents. Three tool servers. A console where a human runs an audit and reads a result an agent chose how to display.
 
-And it is, right now, **almost entirely ungoverned**. Each agent has its own identity and its own IAM — that part's real. But there's no policy in the path. Nothing checks, per call, whether *this* agent is allowed to call *that* tool.
+And right now, it is **almost entirely ungoverned.**
 
-That's the last piece, and it's the whole reason this workshop is called Guardrails. Next step: identity, registry, and a deny-by-default gateway that sits in the traffic path and enforces per-tool policy.
+Every agent has its own identity and its own IAM — that part's real. But there's no policy in the path. Nothing checks, per call, whether *this* agent may call *that* tool.
+
+That's the last piece. It's the whole reason this workshop is called Guardrails.
+
+Next: identity, registry, and a deny-by-default gateway that sits in the traffic path and says no.
 
 See you there.

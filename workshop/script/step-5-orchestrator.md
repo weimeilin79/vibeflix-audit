@@ -6,25 +6,31 @@
 
 ## 00:00 — Cold open
 
-[SCREEN: the workflow graph — one node fanning out to three, then converging.]
+[SCREEN: the workflow graph. One node fans out to three. Then converges.]
 
-Four agents so far, each doing its own job when you talk to it directly.
+Four agents so far. Each one does its job when you talk to it.
 
-This step is the one that makes them a system. One request comes in, and three specialists work on it **at the same time**, in three different engines, and something waits for all three before deciding anything.
+Today they become a system.
+
+One request comes in. Three specialists work on it **at the same time**, in three different engines. And something waits for all three before deciding anything.
 
 [BEAT]
 
-And along the way we're going to hit a bug that I think is the most instructive failure in this entire workshop — because it's invisible in development, it only appears under real conditions, and the fix is architectural rather than a patch.
+And along the way we hit a bug that I think is the most instructive failure in this whole workshop.
+
+It's invisible in development. It only shows up under real conditions. And you cannot patch your way out of it.
 
 ---
 
 ## 01:30 — The orchestrator is just another agent
 
-One thing to get straight up front, because it shapes everything.
+One thing straight up front, because it shapes everything.
 
-The orchestrator is **not** a special coordinator service sitting above the mesh. It's an agent, deployed exactly like the other four, with its own identity and its own engine. The app calls it over A2A exactly like any other agent.
+The orchestrator is **not** a special coordinator sitting above the mesh.
 
-That's what makes the whole mesh uniformly governable later. There's no privileged component with a back door. In Step 7, when we put a gateway in the path, the orchestrator is subject to it like everything else.
+It's an agent. Deployed like the other four. Own identity. Own engine. The app calls it over A2A exactly like anything else.
+
+That's what makes the whole mesh governable later. There's no privileged component with a back door. In Step 7, when the gateway goes in the path, the orchestrator is subject to it like everyone else.
 
 ---
 
@@ -32,17 +38,21 @@ That's what makes the whole mesh uniformly governable later. There's no privileg
 
 [SCREEN: `agents/orchestrator/agent.py`, the Workflow at the bottom.]
 
-Open the orchestrator and go to the bottom of the file. There's a `Workflow` — a directed graph.
+Open the orchestrator. Go to the bottom of the file.
 
-Read the edges out loud and you have the whole business process: ingest the request, dispatch it, run the three guards, merge their reports, self-heal anything that came back malformed, compile the UI, generate the report, finalize the contract.
+There's a `Workflow`. A directed graph.
 
-Each of those names is a node defined just above with a decorator.
+Read the edges out loud and you have the entire business process. Ingest the request. Dispatch it. Run the three guards. Merge their reports. Self-heal anything malformed. Compile the UI. Generate the report. Finalize the contract.
 
 [BEAT]
 
-I want to point at something about this that's easy to skate past. **You can read the business process off the code.** Not a diagram that drifts from the code — the code. When somebody asks "what happens during an audit", you show them nine lines.
+Catch what that means.
 
-That's a real benefit of declaring flow instead of writing it. And it's the thing you lose the moment you let a model decide what to do next.
+**You can read the business process off the code.** Not off a diagram that drifted from the code. The code.
+
+Somebody asks "what happens during an audit?" — you show them nine lines.
+
+That's the real benefit of declaring flow instead of writing it. And it's exactly what you lose the moment you let a model decide what happens next.
 
 ---
 
@@ -50,107 +60,131 @@ That's a real benefit of declaring flow instead of writing it. And it's the thin
 
 Two edges do the heavy lifting.
 
-[SCREEN: the tuple edge — `(dispatch, (guard_brand, guard_clearance, guard_pricing))`.]
+[SCREEN: the tuple edge.]
 
 An edge to a **tuple** is a fan-out. All three run in parallel.
 
-Then a **join node** waits for all of them. Not the fastest, not the first — all three.
+Then a **join** waits for all of them. Not the fastest. Not the first. All three.
 
-Why parallel? Because these three checks are genuinely independent. Brand compliance doesn't depend on pricing. Vendor clearance doesn't depend on brand. Running them in sequence would just be slower for no benefit — and in a system where each one is a model-driven agent taking ten to twenty seconds, sequential is the difference between a demo you'd show and one you wouldn't.
+Why parallel? Because these checks are genuinely independent. Brand compliance doesn't depend on pricing. Vendor clearance doesn't depend on brand.
 
-Why join at all? Because the *decision* needs all three. A contract can't be finalized while one verdict is missing. The join is where "three independent opinions" becomes "one decision".
+Running them in sequence is just slower for nothing. And when each one is a model-driven agent taking ten to twenty seconds, sequential is the difference between a demo you'd show and one you wouldn't.
+
+Why join? Because the *decision* needs all three. You can't finalize a contract with a verdict missing.
+
+The join is where three independent opinions become one decision.
 
 ---
 
-## 06:00 — The specialists are remote agents
+## 06:00 — The specialists are remote
 
 [SCREEN: `_AGENTS[...]` and `_remote_agent(...)`.]
 
-Look at how the guard nodes call the specialists. Each one is a **remote agent** — the ADK stand-in for something running in another engine, the ones you deployed in Steps 2 through 4.
+Look at how the guard nodes call the specialists. Each is a **remote agent** — the stand-in for something running in another engine.
 
-So a single orchestrator run fans out into **three simultaneous A2A calls to three separate engines**.
+So one orchestrator run fans out into **three simultaneous A2A calls, to three separate engines.**
 
-Now look at what `_remote_agent` *doesn't* do: it never branches on transport. All three specialists are built with the same constructor. One boolean decides pacing.
+Now look at what the constructor *doesn't* do. It never branches on transport. All three are built the same way. One boolean decides pacing.
 
-[SCREEN: `_LONG_RUNNING_A2A = {"vendor_clearance_agent"}`.]
+[SCREEN: the long-running set.]
 
-Brand style and deal pricing finish well inside Agent Runtime's roughly 180-second blocking ceiling, so they take the stock path. Vendor clearance can exceed it — it fans out into legal's multi-round question loop — so it sends non-blocking and polls instead.
+Brand style and deal pricing finish well inside Agent Runtime's 180-second ceiling. They take the stock path. Vendor clearance can blow past it — it fans out into legal's question loop — so it sends non-blocking and polls.
 
-Same class, same call site, one flag. **Moving a hop across that ceiling is a boolean, not a different client.** That's a design property worth copying.
+Same class. Same call site. One flag.
+
+**Moving a hop across that ceiling is a boolean, not a different client.** Worth copying.
 
 ---
 
-## 08:00 — The bug: replica roulette
+## 08:00 — The bug
 
 Right. Here's the failure I promised.
 
-Every A2A call is two HTTP requests. First a POST that starts the task and returns a task id. Then a GET on that task id, polled until it's done.
+Every A2A call is two HTTP requests. A POST that starts the task and returns an id. Then a GET on that id, polled until it's done.
 
-Agent Runtime runs each engine as **several replicas**, with no session affinity.
+Agent Runtime runs each engine as **several replicas.** No session affinity.
 
 [BEAT]
 
-Do you see it?
+Do you see it yet?
 
-[SCREEN: animate — POST lands on replica A, which creates the task in its own memory. GET is load-balanced to replica B. Replica B has never heard of that task.]
+[SCREEN: animate it. POST lands on replica A. Task created in memory. GET is load-balanced — lands on replica B.]
 
-The POST creates the task on replica A, in memory. The GET is load-balanced — and lands on replica B, which has no idea what you're talking about.
+The POST creates the task on replica A. In memory.
 
-**404. Task not found.** For a task that exists and is running perfectly well, three metres away, on a different replica.
+The GET gets load-balanced. And lands on replica B.
 
-And the odds are exactly as bad as they sound. With several replicas, most of your polls miss.
+Replica B has never heard of this task.
+
+[BEAT]
+
+**404. Task not found.**
+
+For a task that exists. That's running perfectly well. Three metres away. On a different replica.
+
+And the odds are exactly as bad as they sound. Several replicas — most of your polls miss.
 
 ---
 
-## 10:00 — Why this is invisible until it isn't
+## 10:00 — Why it hides
 
-Here's what makes this bug genuinely nasty, and why I want you to sit with it.
+Here's what makes this one genuinely nasty.
 
-**On your laptop, it never happens.** One process, one task store, every poll hits the right place. It works perfectly.
+**On your laptop, it never happens.** One process. One task store. Every poll hits the right place. Works perfectly.
 
 **In a single-replica deployment, it never happens.** Also fine.
 
-It appears when you scale — which is to say, it appears in production, under load, at exactly the moment you least want a new class of failure. And it *looks* like a timeout or a flaky agent, not like an architecture problem.
+It appears when you scale. Which is to say — it appears in production, under load, at exactly the moment you least want a new class of failure.
 
-In the real build of this system, this showed up in traces as a huge fraction of all spans being 404 polls. Twenty-six percent of every span in the system was this bug.
+And it doesn't look like an architecture problem. It looks like a timeout. Or a flaky agent.
+
+In the real build of this system, this showed up in traces as a huge share of every span. Twenty-six percent of all spans in the system were this bug.
 
 [BEAT]
 
-The general lesson: **any time you have a stateful handle plus a load balancer, ask where the state lives.** If the answer is "in the memory of whichever instance answered first", you have this bug. It doesn't matter that it's agents — this is as old as web sessions.
+Here's the general lesson, and it's older than agents.
+
+**Any time you have a stateful handle plus a load balancer — ask where the state lives.**
+
+If the answer is "in the memory of whichever instance answered first", you have this bug. It doesn't matter that these are agents. This is as old as web sessions.
 
 ---
 
-## 12:00 — The fix: a shared task store
+## 12:00 — The fix
 
 The fix is not to retry harder. Retrying just plays roulette again.
 
-The fix is to move the task state somewhere **all replicas can see**.
+The fix is to move the task state somewhere **every replica can see.**
 
-[SCREEN: `packages/vibeflix-common/vibeflix_common/a2a/task_store.py`.]
+[SCREEN: the task store module.]
 
-The engines don't use ADK's default in-memory task store. They're wired to a remote task store that reads and writes through the app's Firestore-backed endpoints.
+The engines don't use the default in-memory task store. They're wired to a remote one, reading and writing through the app's Firestore-backed endpoints.
 
-So the POST writes the task to Firestore. The GET — on whatever replica — reads it from Firestore. Affinity stops mattering.
+POST writes the task to Firestore. GET — on whatever replica — reads it from Firestore.
+
+Affinity stops mattering.
 
 [BEAT]
 
-One consequence you need to know about now: the engines get that endpoint from an environment variable pointing at the **app**, which you deploy in Step 6. Until then, a fan-out run falls back to per-replica memory, with a loud warning. Fine for a single-replica smoke test. The real, fast, multi-replica run comes together once the app is up.
+One consequence you need now. The engines get that endpoint from a variable pointing at the **app**, which you deploy in Step 6.
+
+Until then, a fan-out run falls back to per-replica memory, with a loud warning. Fine for a single-replica smoke test. The real multi-replica run comes together once the app is up.
 
 ---
 
 ## 14:00 — Two kinds of memory
 
-While we're here — the orchestrator introduces two memory concepts that people routinely confuse.
+While we're here. Two memory concepts people constantly confuse.
 
-A **session** is the memory of **one run**. Everything that happened during this audit. It's what makes a human-in-the-loop resume possible, and it's what survives a replica dying mid-run.
+A **session** is the memory of **one run.** Everything that happened during this audit. It's what makes a human-in-the-loop resume possible, and what survives a replica dying mid-run.
 
-A **Memory Bank** is memory **across runs**. It's how the console can answer "what did we decide about this vendor last quarter?" It's written once, by the contract-finalize node, and read by a responder agent when you type in the console's chat box.
+A **Memory Bank** is memory **across runs.** It's how the console answers "what did we decide about this vendor last quarter?" Written once by the finalize node. Read by a responder agent when you type in the chat box.
 
-Different lifetimes, different purposes. One run versus one organisation's history.
+Different lifetimes. One run, versus one company's history.
 
 ---
 
-## 15:30 — Deploy the orchestrator
+## 15:30 — Deploy
 
 ```bash
 cd ~/vibeflix-audit
@@ -160,15 +194,15 @@ python deploy/collect_agent_identities.py
 ./deploy/grant_agent_access.sh orchestrator
 ```
 
-Deploy it last of the agents — it auto-discovers the three specialists' A2A URLs from `agent_identities.json`, which is exactly why we've been running `collect` after every deploy.
+Deploy it last. It auto-discovers the three specialists' URLs from the identities file — which is exactly why we've been running collect after every deploy.
 
-[DO: start it. Don't wait — go straight to the local run below and come back.]
+[DO: start it. Don't wait. Go straight to the local run.]
 
 ---
 
-## 17:00 — Watch the fan-out, locally
+## 17:00 — Watch the fan-out
 
-This is the first time you can see one request light up all three specialists at once.
+First time you can see one request light up all three specialists at once.
 
 [DO: second tab — the whole local backend.]
 
@@ -181,69 +215,73 @@ export RUN_LOCAL=true
 
 Wait for all five agents to report ✓.
 
-[DO: third tab — the Dev UI on the orchestrator, with the three A2A URLs exported.]
+[DO: third tab — Dev UI on the orchestrator, with the three A2A URLs exported.]
 
-Open it via Web Preview on port 8000, pick the orchestrator, and paste the request **as one line of JSON**.
-
-[SCREEN: the JSON request.]
+Open Web Preview on 8000. Pick the orchestrator. And paste the request **as one line of JSON.**
 
 ---
 
-## 18:30 — Why JSON, when English also works
+## 18:30 — Why JSON, when English works too
 
-The ingest node accepts either. But the natural-language path is deliberately small: it pulls out the **image link**, the **market**, and the **volume** — and nothing else.
+The ingest node takes either. But the plain-English path is deliberately small. It pulls out the **image link**, the **market**, and the **volume**. Nothing else.
 
-Describe the vendor, character, category or pricing in prose and those fields simply aren't extracted, so the agents do the sensible thing and ask you for them.
+Describe the vendor, character, category or pricing in prose, and those fields don't get extracted. So the agents do the sensible thing and ask you for them.
 
-That's fine for a quick "audit this image", and worth trying once to see the difference. But a full audit has eleven fields, and JSON is how the console sends them. These keys are exactly the ones the console's API uses.
+That's fine for a quick "audit this image". Try it once — it's instructive.
+
+But a full audit has eleven fields. And JSON is how the console sends them. These keys are exactly the ones the console's API uses.
 
 ---
 
 ## 19:30 — Why these values clear
 
-Nothing in that request is arbitrary. Each field dodges a block you've already met.
+Nothing in that request is arbitrary. Every field dodges a block you've already met.
 
-**The image and the character must agree.** Brand style looks at the artwork and compares. Point it at the Grogu mock-up while auditing stitch and you get a character mismatch.
+**The image and the character have to agree.** Brand style looks at the artwork and compares. Point it at the wrong character's mock-up and you get a mismatch.
 
-**The medium is supplied on purpose.** These images are character *artwork*, not product mock-ups. Left blank, brand style infers something like "artwork" — which isn't on the approved list, so the audit gets flagged. Supplying it says what the product actually is.
+**The medium is supplied on purpose.** These are character *artwork* files, not product mock-ups. Leave it blank and brand style infers something like "artwork" — which isn't on the approved list. Flagged.
 
 **Stitch, vinyl figures, North America** — no exclusivity lock. Stitch's lock is in Asia-Pacific.
 
-**VND-1007** already makes vinyl figures in North America, so no onboarding, no legal handoff, no approval question.
+**This vendor** already makes vinyl figures in North America. No onboarding. No legal handoff.
 
-**Volume 20,000** is under the 25,000 sourcing cap.
+**Volume 20,000** is under the 25,000 cap.
 
 **The rate, advance and MG** all clear what the card computes.
 
 [BEAT]
 
-Assembling a request that passes every guard is itself a good exercise — it forces you to hold the whole rule set in your head at once.
+Building a request that passes every guard is a decent exercise by itself. It forces you to hold the whole rule set in your head at once.
 
 ---
 
-## 21:00 — Watch it run
+## 21:00 — Run it
 
 [SCREEN: the Dev UI graph.]
 
-Dispatch fans out to brand style, vendor clearance and deal pricing **in parallel**. The merge node waits for all three. Contract finalize executes the licensing contract — and you get a contract id in the final report.
+Dispatch fans out. Brand style, vendor clearance, deal pricing — **in parallel.** The merge node waits for all three. Finalize executes the contract. You get a contract id.
 
 **Now change one field and watch a single branch fail.**
 
-Set the market to Asia-Pacific. The same request hits stitch's exclusivity lock in vendor clearance — while brand style and pricing still come back cleared.
+Set the market to Asia-Pacific. Same request now hits stitch's exclusivity lock in vendor clearance — while brand style and pricing still come back cleared.
 
-Or swap the image and only *brand style* fails, on the character mismatch.
+Or swap the image, and only *brand style* fails, on the character mismatch.
 
-That's the fan-out doing its job. One branch blocking doesn't stop the others reporting, and the merge shows you all three verdicts side by side.
+That's the fan-out doing its job. One branch blocking doesn't stop the others reporting.
 
 [BEAT]
 
-Compare that to a sequential pipeline that stops at the first failure. You'd know one thing was wrong. Here you know *everything* that's wrong, in one pass. When a vendor's deal has three problems, they'd rather hear all three today than one a day for three days.
+Compare that to a sequential pipeline that stops at the first failure. You'd know one thing was wrong.
+
+Here you know *everything* that's wrong. In one pass.
+
+When a vendor's deal has three problems, they'd rather hear all three today than one a day for three days.
 
 ---
 
 ## 23:00 — Verify
 
-[DO: Ctrl+C in both tabs, then verify.]
+[DO: Ctrl+C both tabs.]
 
 ```bash
 cd ~/vibeflix-audit
@@ -251,30 +289,32 @@ source ./env.sh
 ./deploy/verify/step5.sh
 ```
 
-Confirms the orchestrator engine is deployed with an agent identity.
-
 ---
 
 ## 23:30 — Do and don't
 
 **Do fan out work that's genuinely independent.** Three ten-second agents in parallel is ten seconds.
 
-**Don't fan out and then use only the first result.** If you don't need all of them, you didn't need a join — and probably didn't need a fan-out.
+**Don't fan out and then use only the first result.** If you don't need all of them, you didn't need a join.
 
 **Do put shared task state in shared storage.** The moment more than one replica can answer a poll, in-memory state is a bug waiting for traffic.
 
-**Don't debug replica roulette by adding retries.** You'll mask it, slow everything down, and it'll come back.
+**Don't fix replica roulette with retries.** You'll mask it, slow everything down, and it comes back.
 
-**Do keep the orchestrator an ordinary agent.** A privileged coordinator is a component your governance can't see.
+**Do keep the orchestrator ordinary.** A privileged coordinator is a component your governance can't see.
 
-**Don't confuse session memory with cross-run memory.** One run versus one history — different tools, different lifetimes.
+**Don't confuse session memory with cross-run memory.**
 
 ---
 
-## 25:00 — Recap and bridge
+## 25:00 — Recap and hook
 
-You have a real distributed system now: an orchestrator that fans out to three engines, joins their verdicts, and finalizes a contract — with task state in Firestore so that polls land regardless of which replica answers.
+You have a real distributed system. An orchestrator that fans out to three engines, joins their verdicts, finalizes a contract — with task state in Firestore so polls land no matter which replica answers.
 
-What you don't have is a way for a human to *use* it. Next step: the console. And the interesting part isn't the React — it's that **the agents generate the UI**. The report you see is painted by another agent, from a schema, because the shape of a result isn't known until the result exists.
+What you don't have is a way for a human to use it.
+
+Next: the console. And the interesting part isn't the React.
+
+**The agents generate the UI.** The report you see is painted by another agent — because the shape of a result isn't known until the result exists.
 
 See you there.

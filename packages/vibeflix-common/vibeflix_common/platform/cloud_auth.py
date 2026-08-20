@@ -100,14 +100,21 @@ class _TokenMinter:
         import google.auth.transport.requests
         return google.auth.transport.requests.Request()
 
-    def access_token(self) -> str:
+    def access_token(self, force: bool = False) -> str:
+        """`force=True` re-mints even when the cached credential still looks valid.
+
+        `creds.valid` is a PREDICTION: the metadata server can hand back a token carrying only
+        its remaining lifetime (see the note in a2a/engine.py), so a token can pass this check,
+        travel, and be rejected on arrival. When the target says 401 there is no point asking
+        the same cached object again — force a fresh mint.
+        """
         import google.auth
         with self._lock:
             if self._access_creds is None:
                 self._access_creds, _ = google.auth.default(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
-            if not self._access_creds.valid:
+            if force or not self._access_creds.valid:
                 self._access_creds.refresh(self._request())
             return self._access_creds.token
 
@@ -151,8 +158,12 @@ class _TokenMinter:
         id_creds.refresh(self._request())
         return id_creds.token
 
-    def id_token(self, audience: str) -> str:
+    def id_token(self, audience: str, force: bool = False) -> str:
         with self._lock:
+            if force:
+                # The 45-min cache TTL below can outlive the token's REAL exp (see the
+                # diagnostic on the next line), so a 401 must invalidate, not re-read.
+                self._id_tokens.pop(audience, None)
             cached = self._id_tokens.get(audience)
             if cached and cached[1] > time.time():
                 # DIAGNOSTIC: a cache HIT still 401s if the token's REAL exp is past —
@@ -250,83 +261,101 @@ def mcp_auth_header(url: str) -> dict:
         return {}
 
 
-def token_for(url: str) -> str:
-    """The right bearer token for this URL (access token for googleapis, else ID token)."""
+def token_for(url: str, force: bool = False) -> str:
+    """The right bearer token for this URL (access token for googleapis, else ID token).
+
+    `force=True` skips every cache — used by GoogleAuth's retry after a 401.
+    """
     parts = urlsplit(url)
     if parts.hostname and parts.hostname.endswith("googleapis.com"):
-        return _MINTER.access_token()
-    return _MINTER.id_token(f"{parts.scheme}://{parts.hostname}")
+        return _MINTER.access_token(force=force)
+    return _MINTER.id_token(f"{parts.scheme}://{parts.hostname}", force=force)
 
 
 class GoogleAuth(httpx.Auth):
     """httpx auth hook: attach a fresh Google token per request (sync + async)."""
 
     def auth_flow(self, request):
-        url = str(request.url)
-        parts = urlsplit(url)
-        host = parts.hostname or ""
+        """Attach Google credentials, and retry ONCE if the target rejects them.
+
+        Why the retry: tokens here can expire *in flight* — the cached credential passes
+        `creds.valid`, the request travels, and the endpoint answers 401. Every caller then
+        pays for it differently: the A2A poll surfaces the 401, while RemoteTaskStore swallows
+        it and falls back to local memory, so the engine answers "task not found" (404) for a
+        task that exists. One forced re-mint here fixes all of them at once, because every
+        client built with maybe_auth() shares this flow.
+        """
+        for _attempt in (0, 1):
+            force = _attempt == 1
+            url = str(request.url)
+            parts = urlsplit(url)
+            host = parts.hostname or ""
         
-        # If running inside a Reasoning Engine (Agent Runtime):
-        if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
-            access_tok = _MINTER.access_token()
-            # If the destination is a non-Google endpoint or mtls.googleapis.com (gateway-routed):
-            if "googleapis.com" not in host or "mtls.googleapis.com" in host:
-                # Egress goes through the gateway. Put the access token in Proxy-Authorization.
-                request.headers["Proxy-Authorization"] = f"Bearer {access_tok}"
-                if "googleapis.com" not in host:
-                    # Non-Google endpoint (e.g. Cloud Run MCP server) requires ID token
-                    try:
-                        aud = f"{parts.scheme}://{host}"
-                        id_tok = _MINTER.id_token(aud)
-                        request.headers["Authorization"] = f"Bearer {id_tok}"
-                    except Exception:
+            # If running inside a Reasoning Engine (Agent Runtime):
+            if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+                access_tok = _MINTER.access_token(force=force)
+                # If the destination is a non-Google endpoint or mtls.googleapis.com (gateway-routed):
+                if "googleapis.com" not in host or "mtls.googleapis.com" in host:
+                    # Egress goes through the gateway. Put the access token in Proxy-Authorization.
+                    request.headers["Proxy-Authorization"] = f"Bearer {access_tok}"
+                    if "googleapis.com" not in host:
+                        # Non-Google endpoint (e.g. Cloud Run MCP server) requires ID token
+                        try:
+                            aud = f"{parts.scheme}://{host}"
+                            id_tok = _MINTER.id_token(aud, force=force)
+                            request.headers["Authorization"] = f"Bearer {id_tok}"
+                        except Exception:
+                            request.headers.pop("Authorization", None)
+                        # ROOT-CAUSE PROBE: log what auth THIS request actually carries, so a
+                        # 401 can be correlated to the exact token sent. Cloud Run rejects
+                        # ('access token could not be verified') a token it treats as an ACCESS
+                        # token — so if a 401'd request shows Authorization=ID here, the token is
+                        # fine and the fault is transit/gateway; if it shows NONE or an access
+                        # token, it's client-side. proxy_fp vs auth_fp being equal would mean the
+                        # gateway's access token leaked into Authorization.
+                        _auth = request.headers.get("Authorization", "")
+                        _proxy = request.headers.get("Proxy-Authorization", "")
+                        _atok = _auth[7:] if _auth.startswith("Bearer ") else ""
+                        _ptok = _proxy[7:] if _proxy.startswith("Bearer ") else ""
+                        import hashlib as _h
+                        _fp = lambda t: _h.sha256(t.encode()).hexdigest()[:8] if t else "—"
+                        print(f"[mcp-auth] {request.method} {host} "
+                              f"Authorization=[{_peek_jwt(_atok) if _atok else 'NONE'} fp={_fp(_atok)}] "
+                              f"Proxy-Auth fp={_fp(_ptok)} "
+                              f"same_token={_atok == _ptok and bool(_atok)}", flush=True)
+                    elif "mtls.googleapis.com" in host:
+                        # Google API endpoint via mTLS subdomain/gateway egress
+                        request.headers["Authorization"] = f"Bearer {access_tok}"
+                    else:
                         request.headers.pop("Authorization", None)
-                    # ROOT-CAUSE PROBE: log what auth THIS request actually carries, so a
-                    # 401 can be correlated to the exact token sent. Cloud Run rejects
-                    # ('access token could not be verified') a token it treats as an ACCESS
-                    # token — so if a 401'd request shows Authorization=ID here, the token is
-                    # fine and the fault is transit/gateway; if it shows NONE or an access
-                    # token, it's client-side. proxy_fp vs auth_fp being equal would mean the
-                    # gateway's access token leaked into Authorization.
-                    _auth = request.headers.get("Authorization", "")
-                    _proxy = request.headers.get("Proxy-Authorization", "")
-                    _atok = _auth[7:] if _auth.startswith("Bearer ") else ""
-                    _ptok = _proxy[7:] if _proxy.startswith("Bearer ") else ""
-                    import hashlib as _h
-                    _fp = lambda t: _h.sha256(t.encode()).hexdigest()[:8] if t else "—"
-                    print(f"[mcp-auth] {request.method} {host} "
-                          f"Authorization=[{_peek_jwt(_atok) if _atok else 'NONE'} fp={_fp(_atok)}] "
-                          f"Proxy-Auth fp={_fp(_ptok)} "
-                          f"same_token={_atok == _ptok and bool(_atok)}", flush=True)
-                elif "mtls.googleapis.com" in host:
-                    # Google API endpoint via mTLS subdomain/gateway egress
-                    request.headers["Authorization"] = f"Bearer {access_tok}"
                 else:
-                    request.headers.pop("Authorization", None)
+                    # Direct Google API call: put the access token in Authorization.
+                    request.headers["Authorization"] = f"Bearer {access_tok}"
             else:
-                # Direct Google API call: put the access token in Authorization.
-                request.headers["Authorization"] = f"Bearer {access_tok}"
-        else:
-            # Local fallback (laptop running cloud services):
-            request.headers["Authorization"] = f"Bearer {token_for(url)}"
-        # Propagate the W3C traceparent so the callee (MCP server / app task store) joins
-        # THIS engine's trace — that is what lets the console's Agent Platform → Topology
-        # page draw the agent→MCP edge (it "builds edges from cross-service trace
-        # connections"; without it: "No recent trace connections detected"). The MCP servers
-        # are OTel-instrumented (instrument_fastmcp) and will honour the parent. Mirrors
-        # a2a_engine.py: gated on the SAME A2A_TRACE_PROPAGATION flag, and only when the
-        # current context is valid AND sampled — a bare inject of an UNSAMPLED context makes
-        # the callee drop its own spans (measured there: 68-span traces collapsed to 2).
-        if os.environ.get("A2A_TRACE_PROPAGATION", "").lower() == "on":
-            try:
-                from opentelemetry import trace as _ot
-                from opentelemetry.propagate import inject as _inject
-                _sc = _ot.get_current_span().get_span_context()
-                if _sc.is_valid and _sc.trace_flags.sampled:
-                    _inject(request.headers)
-            except Exception:  # noqa: BLE001 — tracing must never break the request
-                pass
-        yield request
+                # Local fallback (laptop running cloud services):
+                request.headers["Authorization"] = f"Bearer {token_for(url, force=force)}"
+            # Propagate the W3C traceparent so the callee (MCP server / app task store) joins
+            # THIS engine's trace — that is what lets the console's Agent Platform → Topology
+            # page draw the agent→MCP edge (it "builds edges from cross-service trace
+            # connections"; without it: "No recent trace connections detected"). The MCP servers
+            # are OTel-instrumented (instrument_fastmcp) and will honour the parent. Mirrors
+            # a2a_engine.py: gated on the SAME A2A_TRACE_PROPAGATION flag, and only when the
+            # current context is valid AND sampled — a bare inject of an UNSAMPLED context makes
+            # the callee drop its own spans (measured there: 68-span traces collapsed to 2).
+            if os.environ.get("A2A_TRACE_PROPAGATION", "").lower() == "on":
+                try:
+                    from opentelemetry import trace as _ot
+                    from opentelemetry.propagate import inject as _inject
+                    _sc = _ot.get_current_span().get_span_context()
+                    if _sc.is_valid and _sc.trace_flags.sampled:
+                        _inject(request.headers)
+                except Exception:  # noqa: BLE001 — tracing must never break the request
+                    pass
+            response = yield request
+            if response.status_code != 401 or _attempt == 1:
+                return
+            print(f"[auth] 401 from {request.url.host} — forcing a fresh token, retrying once",
+                  flush=True)
 
 
 def maybe_auth() -> httpx.Auth | None:
