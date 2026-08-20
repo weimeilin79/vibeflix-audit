@@ -17,6 +17,9 @@
 #   ./run_local.sh console           The whole product from .venv: MCP + agents +
 #                                    orchestrator + the console app on :8000.
 #                                    Same as `up`, without the seven image builds.
+#   ./stop_local.sh                  Stop everything this script started (run it if a previous
+#                                    session left orphans — see below)
+#
 #   ./run_local.sh mcp               Start all 4 MCP servers locally (Ctrl-C stops all)
 #   ./run_local.sh mesh              Start the full backend (4 MCP + 3 A2A agents) for
 #                                    testing the orchestrator, e.g. via `adk web`
@@ -226,6 +229,10 @@ case "${1:-up}" in
     VITE_API_URL="$API_BASE" npm run dev --prefix "$ROOT/frontend"
     ;;
   console)
+    # Clear any orphan from a previous run FIRST. A half-started uvicorn holds no port yet still
+    # competes for :8000, so two app processes coexist and neither ends up listening — which
+    # reads as "the console won't start". SKIP_STOP=1 opts out.
+    [ "${SKIP_STOP:-0}" = "1" ] || "$ROOT/stop_local.sh" >/dev/null 2>&1 || true
     # The whole product, WITHOUT Docker: the mesh you already know, plus the
     # orchestrator and the console app. `up` does the same thing in containers,
     # but pays for seven image builds first — this reuses .venv and starts in
@@ -241,6 +248,7 @@ case "${1:-up}" in
     wait
     ;;
   mesh)
+    [ "${SKIP_STOP:-0}" = "1" ] || "$ROOT/stop_local.sh" >/dev/null 2>&1 || true
     # Full backend (3 MCP + 5 A2A agent services) for testing the orchestrator
     # locally without Docker — e.g. via `adk web agents/orchestrator`.
     check_adc
@@ -257,6 +265,7 @@ case "${1:-up}" in
     wait
     ;;
   mcp)
+    [ "${SKIP_STOP:-0}" = "1" ] || "$ROOT/stop_local.sh" >/dev/null 2>&1 || true
     start_mcp_servers
     trap 'c_info "Stopping MCP servers…"; kill "${MCP_PIDS[@]}" 2>/dev/null || true' EXIT INT TERM
     c_info "All MCP servers running. Test an agent against them in another shell:"
