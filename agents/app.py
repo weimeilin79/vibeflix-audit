@@ -41,6 +41,7 @@ from agents.a2ui_surface import (
 )
 from vibeflix_common.agent.a2ui_format import parse_panel, text_of as a2ui_text
 from vibeflix_common.platform.cloud_auth import a2a_httpx_client, auth_headers, maybe_auth, a2a_card_url, is_engine_url
+from vibeflix_common.platform.telemetry import emit_event, set_run_id
 from vibeflix_common.agent.memory import (
     APP_NAME,
     build_session_service,
@@ -358,19 +359,29 @@ async def _present(reports: dict) -> list | None:
     `parse_panel` (a2ui-agent-sdk) does that against the real spec — unknown components, bad
     `usageHint` values and dangling id references all raise, which is exactly the "malformed
     LLM surface" case we want to fall back on rather than stream to the renderer."""
+    # ui_renderer is the ONE agent the app calls itself, so the orchestrator never emits a
+    # started/completed for it and its own events carry no run_id (its engine never sees one).
+    # With the console filtering on run_id, its box simply never appeared. Emit from here, where
+    # the run id is known — and report the REAL outcome, including "the agent answered but the
+    # A2UI didn't parse", which a fallback would otherwise hide.
+    emit_event("ui_renderer", "started", detail="rendering report panels")
     text = await _run_presenter(reports)
     if not text:
+        emit_event("ui_renderer", "failed", detail="no response — using the deterministic panels")
         return None
     try:
         panel = parse_panel(text)
     except Exception as e:
         print(f"[app] presenter emitted invalid A2UI ({type(e).__name__}: {e}); fallback", flush=True)
+        emit_event("ui_renderer", "failed", detail=f"invalid A2UI ({type(e).__name__})")
         return None
     # A structurally-valid but CONTENT-EMPTY panel (every Text blank) renders as an invisible
     # card — the LLM sometimes does this for a sparse report. The spec has no opinion on it, so
     # reject it here and let panels_fallback show "<name> — <status>" instead.
     if not panel or not any(a2ui_text(c).strip() for c in panel["components"]):
+        emit_event("ui_renderer", "failed", detail="empty panel — using the deterministic panels")
         return None
+    emit_event("ui_renderer", "completed", detail="A2UI panel rendered")
     return [panel]
 
 
@@ -1107,6 +1118,10 @@ async def _stream_audit(request: dict):
     # node event it emits carries it), and hand the same id to the browser below — the
     # console then renders only the events stamped with the run it is showing.
     run_id = f"run-{uuid.uuid4().hex[:12]}"
+    # Bind it to this request's context too. emit_event() stamps events from this contextvar,
+    # which is how the app's OWN mesh events (the ui_renderer box below) get scoped to the run
+    # the console is showing — the orchestrator parks the same id in ctx.state for its nodes.
+    set_run_id(run_id)
     request = {**request, "run_id": run_id}
     yield _sse({"event": "run", "run_id": run_id})
 
