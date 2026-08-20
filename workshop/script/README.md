@@ -34,7 +34,25 @@ hard cuts.
 ## Pacing maths
 
 These are written at **~140 words per minute**, which is an unhurried explaining
-pace. Roughly 2,600–3,200 spoken words per script.
+pace. Narration alone therefore runs 12–18 minutes per script; the rest of the
+runtime is **demo time** — running commands, reading output aloud, clicking through
+the Dev UI and the console.
+
+Measured narration length, so you can see which scripts have the most headroom:
+
+| Script | Words | Narration only |
+|---|---|---|
+| 1 · Setup & Foundations | ~2,500 | ~18 min |
+| 2 · Brand Style | ~2,380 | ~17 min |
+| 3 · Deal Pricing | ~1,850 | ~13 min |
+| 4 · Vendor Clearance + Legal | ~2,370 | ~17 min |
+| 5 · Orchestrator | ~2,140 | ~15 min |
+| 6 · UI Renderer / A2UI | ~1,910 | ~14 min |
+| 7 · Identity & Gateway | ~1,680 | ~12 min |
+| 8 · Run the Flows | ~1,815 | ~13 min |
+
+Steps 3, 6, 7 and 8 are the leanest — if a read-through lands short of the target,
+those are the ones to deepen first.
 
 The runtimes assume you **cut the waiting**. Several steps kick off a cloud deploy
 that takes 3–6 minutes; the scripts are written so you keep talking through a jump
@@ -43,14 +61,39 @@ background, the script says so.
 
 ## Voice
 
-Second person, present tense, no hype. Three rules that keep it consistent:
+**News anchor meets true-crime storyteller.** Think a broadcast segment crossed with
+Rotten Mango. Clear and factual, but it pulls you along.
 
-1. **Name the failure before the fix.** Every trap in these scripts is one that
-   actually happened during the build — say what it looks like when it goes wrong,
-   then what to do. That's the part viewers remember.
-2. **Never say "simply" or "just".** If it were simple it wouldn't need a video.
-3. **Explain the mechanic, not the menu.** Clicking is obvious; *why the system is
-   shaped this way* is not. When in doubt, cut a click and add a sentence of why.
+Two halves, and you need both:
+
+**The news half — clarity.**
+- Lead with the headline. Say the finding first, explain it second.
+- Short sentences. One idea each.
+- Plain words. *Stop*, not *cease*. *Shows*, not *demonstrates*.
+- No throat-clearing. Cut "it's worth noting", "I want you to", "let me be precise".
+- Never "simply" or "just".
+
+**The story half — pull.**
+- **Set a scene.** Not "there is a race condition". Instead: "The request leaves.
+  It lands on replica A. The poll comes back — and hits replica B."
+- **Ask the question the viewer is already thinking.** "So why not let one model do
+  all of it?" Then answer it.
+- **Hold the reveal.** State the symptom. Pause. Then the cause.
+- **Use fragments for punch.** "404. Task not found. For a task that is running fine,
+  three metres away."
+- **Present tense** for anything happening on screen.
+- **End every step on a hook** into the next one.
+
+Phrases that fit this voice: *Here's the thing. Watch what happens. And this is where
+it gets interesting. Nothing is broken — that's the point.*
+
+Bad: "Now, this is a detail worth dwelling on, because it speaks to something
+fundamental about how these systems are architected."
+
+Good: "Here's the part that catches everyone. Watch."
+
+Do not let the story half win over accuracy. Drama comes from the real failure, never
+from overselling it.
 
 ## The through-line
 

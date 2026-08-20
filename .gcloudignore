@@ -28,10 +28,10 @@ dist/
 # bundle is dead weight — and shipping it risks baking in a stale VITE_DEFAULT_IMAGE.
 frontend/dist/
 
-# Seed artefacts that reach the cloud by other means: the mock-ups are uploaded to GCS by
-# setup_buckets.sh, and the legal docs by setup_legal_rag.sh. Neither belongs in an image.
+# The mock-ups reach GCS via setup_buckets.sh — no image needs them (5.6 MB).
+# resource/legal/docs/ is NOT excluded: legal_kb falls back to a keyword search over those files
+# when RAG is unavailable, and they are only 13 KB.
 deploy/img/
-resource/legal/docs/
 
 # Terraform state + plugin caches.
 **/.terraform/
@@ -39,12 +39,18 @@ resource/legal/docs/
 *.tfstate.*
 
 # Docs, reports and workshop material — read by humans, never by a build.
-*.md
-docs/
-workshop/
-eng-report/
-deploy/docs/
-deploy-vibeflix-skill/
+#
+# NOTE: only ROOT-level *.md. A bare `*.md` also excludes agents/*/skills/*/SKILL.md, which the
+# agents load at IMPORT — the image then builds fine and dies on startup with
+# `FileNotFoundError: SKILL.md not found`. Skills are code here, not documentation.
+# Every path here is ANCHORED (leading /). An unanchored `docs/` matches a directory of that
+# name at ANY depth — it silently swallowed resource/legal/docs/ too.
+/*.md
+/docs/
+/workshop/
+/eng-report/
+/deploy/docs/
+/deploy-vibeflix-skill/
 
 # Local run artefacts.
 data/
