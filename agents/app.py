@@ -1742,7 +1742,11 @@ async def resume_audit(req: ResumeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_REQUEST_IMAGE_BUCKET = os.environ.get("REQUEST_IMAGE_BUCKET", "vibeflix-request-image")
+# Fall back to the PROJECT-PREFIXED name, not the original demo project's bucket: an unset
+# REQUEST_IMAGE_BUCKET otherwise allowlists someone else's bucket, and /api/image-preview then
+# 403s ("This bucket is not previewable") for the project's own images.
+_REQUEST_IMAGE_BUCKET = (os.environ.get("REQUEST_IMAGE_BUCKET")
+                         or f"{os.environ.get('GOOGLE_CLOUD_PROJECT', 'vibeflix')}-request-image")
 
 
 def _upload_blob(data: bytes, content_type: str, blob_name: str) -> str:

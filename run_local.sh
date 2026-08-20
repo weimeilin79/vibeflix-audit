@@ -176,6 +176,8 @@ start_app() {
     MCP_LICENSING_URL=http://127.0.0.1:9002/mcp \
     MCP_MARKET_URL=http://127.0.0.1:9003/mcp \
     MCP_BRAND_STYLE_URL=http://127.0.0.1:9004/mcp \
+    REQUEST_IMAGE_BUCKET="${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}" \
+    APPROVED_ASSETS_BUCKET="${APPROVED_ASSETS_BUCKET:-$PROJECT-approved-assets}" \
     FRONTEND_DIST="$ROOT/frontend/dist" \
     AUDIT_HISTORY_DIR="$ROOT/data/app" \
     "$VENV/bin/python" -m uvicorn agents.app:app --host 127.0.0.1 --port 8000 \
