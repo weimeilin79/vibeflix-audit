@@ -178,8 +178,11 @@ start_app() {
     "$VENV/bin/python" -m uvicorn agents.app:app --host 127.0.0.1 --port 8000 \
     >/tmp/app.log 2>&1 &
   APP_PID="$!"
-  for _ in $(seq 1 60); do
-    curl -sf "http://127.0.0.1:8000/api/ready" >/dev/null 2>&1 && {
+  # Probe /api/health (liveness), NOT /api/ready. /api/ready is the console's LAYER-2 gate: it
+  # deep-probes every agent AND its MCP servers, and returns not-ok until they're all warm — so
+  # using it here reports "console did NOT start" for an app that is up and serving.
+  for _ in $(seq 1 120); do
+    curl -sf "http://127.0.0.1:8000/api/health" >/dev/null 2>&1 && {
       c_info "  ✓ console       → http://127.0.0.1:8000"; return; }
     sleep 0.5
   done
