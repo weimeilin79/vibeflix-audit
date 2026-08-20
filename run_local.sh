@@ -31,6 +31,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# EVERYTHING this script starts is local — say so explicitly.
+#
+# cloud_auth.run_local() otherwise auto-detects by asking "am I on GCP?", and in CLOUD SHELL the
+# answer is yes. The app then takes the cloud branch and addresses the local orchestrator with the
+# Agent Runtime URL shape (…/a2a/v1/message:send) — a route stock `to_a2a` doesn't serve, so the
+# console fails with `404 … for url: http://127.0.0.1:8006/a2a/v1/message:send`. Same reason
+# docker-compose.yml pins RUN_LOCAL: "true". An explicit RUN_LOCAL still wins.
+export RUN_LOCAL="${RUN_LOCAL:-true}"
+
 API_BASE="${API_BASE:-http://localhost:8000}"
 VENV="$ROOT/.venv"
 # group -> local streamable-http port
