@@ -10,25 +10,47 @@ import asyncio
 import os
 
 
-async def _probe_one(url: str, timeout: float = 5.0) -> dict:
-    """Open a streamable-http MCP session and list tools; return {ok, detail}."""
-    try:
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+# The MCP servers run on Cloud Run with no minimum instances, so the first
+# handshake after an idle period pays a full cold start — container pull, uvicorn
+# boot, FastMCP init — before `initialize` even gets a reply. Five seconds did not
+# cover that, so a perfectly healthy server reported `TimeoutError` and the console
+# painted every MCP node red while real tool calls were succeeding. A probe that
+# cries wolf on a cold start is worse than no probe.
+_PROBE_TIMEOUT = float(os.environ.get("MCP_PROBE_TIMEOUT", "20"))
 
-        from vibeflix_common.platform.cloud_auth import auth_headers
 
-        async def _go() -> int:
-            async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    listed = await session.list_tools()
-                    return len(listed.tools)
+async def _probe_one(url: str, timeout: float | None = None) -> dict:
+    """Open a streamable-http MCP session and list tools; return {ok, detail}.
 
-        count = await asyncio.wait_for(_go(), timeout=timeout)
-        return {"ok": True, "detail": f"{count} tools"}
-    except Exception as e:  # handshake/connection/timeout — the thing we want loud
-        return {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:140]}"}
+    Retries once on timeout: the first attempt is what wakes a scaled-to-zero
+    server, so the retry is the one that measures a running service.
+    """
+    timeout = _PROBE_TIMEOUT if timeout is None else timeout
+
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    from vibeflix_common.platform.cloud_auth import auth_headers
+
+    async def _go() -> int:
+        async with streamablehttp_client(url, headers=auth_headers(url)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                return len(listed.tools)
+
+    last = "no attempt"
+    for attempt in (1, 2):
+        try:
+            count = await asyncio.wait_for(_go(), timeout=timeout)
+            warmed = " (after warm-up)" if attempt == 2 else ""
+            return {"ok": True, "detail": f"{count} tools{warmed}"}
+        except asyncio.TimeoutError:
+            last = f"TimeoutError: no MCP handshake within {timeout:g}s"
+            continue  # first attempt may have been spent on a cold start
+        except Exception as e:  # connection/handshake — real, don't retry
+            return {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:140]}"}
+    return {"ok": False, "detail": last}
 
 
 async def probe_mcp_from_env() -> list[dict]:

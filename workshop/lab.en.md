@@ -436,9 +436,9 @@ That file is how the rest of the workshop finds things:
 
 So it's regenerated after **every** deploy: a fact that didn't exist a minute ago now has to be written down for the next step to use.
 
-This is also why deploying is a *two-pass* affair later in the workshop: agents that call each
-other can't all know each other's addresses on the first pass, because the addresses don't exist
-yet. Deploy, collect, deploy again.
+This is also why the deploy order matters later on: agents that call each other can't all know
+each other's addresses up front, because an engine id doesn't exist until its engine does.
+Deploy, collect, then deploy whatever needed that address.
 
 ### 💻  Grant the agent its own access
 
@@ -1078,9 +1078,11 @@ python deploy/collect_agent_identities.py        # vendor_clearance's identity, 
 > ── skipping vendor_clearance: LEGAL_A2A_URL not resolved yet
 > ```
 >
-> This is the same two-pass shape as `TASK_STORE_URL` in Step 6, at a smaller scale: something
-> an agent needs is created by deploying *another* agent, so a deploy has to happen, be recorded,
-> and only then feed the next one.
+> **Why this one can't be computed away.** In Step 6 you'll meet the mirror image — the app's URL,
+> which the engines need — and it turns out to be *derivable* from the project number, so no
+> second pass is required there. Engine ids aren't: Agent Runtime mints a random one
+> (`…/reasoningEngines/7721660704905756672`), so the only way to learn legal's address is to
+> deploy it and read it back. Deploy, collect, then deploy the agent that calls it.
 
 > ⏱️ **This takes a few minutes — don't sit and watch it.** The deploy packages your agent code,
 > uploads it, and builds it into an engine in the cloud. Leave it running in this tab and skip
@@ -1932,9 +1934,10 @@ source ./env.sh
 python deploy/deploy_agents_a2a.py        # no arg = all six engines
 ```
 
-This is the same two-pass shape you saw with `TASK_STORE_URL` in Step 6: something an engine
-needs is created *after* the engine, so the engine is redeployed once the thing exists. Until
-this pass, the agents' egress isn't governed by the gateway.
+This is the one redeploy the workshop still needs. `TASK_STORE_URL` used to force another
+(Step 6) until it turned out to be computable — but a gateway attachment isn't a value you can
+predict: it's part of the engine's deployment spec, and the gateway simply didn't exist when
+these engines were created. Until this pass, the agents' egress isn't governed by the gateway.
 
 ### 👀 Verify
 
@@ -1945,6 +1948,42 @@ source ./env.sh
 ```
 
 It confirms the **gateway exists**, the **6 agents + 3 MCP servers are registered**, and **all six agents run under their own agent identity** (`principal://`).
+
+### 👀 Now run it for real — on the deployed console
+
+Scripts can tell you the wiring is right. The only thing that proves the mesh still *works* with
+governance in the path is a full audit through the deployed console — every hop now going through
+the gateway, every agent as its own identity.
+
+👉💻 Get your console's URL:
+
+```bash
+cd ~/vibeflix-audit
+source ./env.sh
+gcloud run services describe vibeflix-app --region "$REGION" --format 'value(status.url)'
+```
+
+👉 Open it in a browser, pick the **✅ Happy path** scenario, and hit **Run**.
+
+This is the same scenario you ran locally, but nothing about the run is local now: the app calls
+the **orchestrator engine** over A2A, which fans out to three more **engines**, each authenticating
+as its own principal and reaching the MCP servers through the **gateway**. Watch for:
+
+- the graph animating as each specialist starts and finishes — those events come from the
+  engines, over Pub/Sub, not from your machine;
+- the MCP tool LEDs firing, which means the gateway **allowed** those calls;
+- an executed **`LC-####`** contract at the end.
+
+> 🔎 **What a gateway failure looks like**, so you can recognise it: an agent reports
+> `403 Egress request is not authorized` and its branch fails while the others pass. That means
+> the destination isn't registered, or that agent has no `roles/iap.egressor` on it — the
+> deny-by-default working as designed. `./deploy/setup_gateway.sh policies` re-applies the grants.
+
+> ⏱️ IAM and gateway changes take **2–5 minutes** to propagate. If the first run after Step 7
+> fails on egress, wait and run it again before assuming something is wrong.
+
+If that audit executes a contract, your mesh is complete: six agents, three tool servers, one
+console — with identity, registry and gateway all in the path.
 
 ### 💡 What you learned
 
