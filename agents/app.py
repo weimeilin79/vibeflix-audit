@@ -932,6 +932,24 @@ async def database_dump():
 _UPLOADED_BLOB = re.compile(r"^[0-9a-f]{8}-")
 
 
+def _exc_chain(e: BaseException, limit: int = 3) -> str:
+    """Flatten an exception (including ExceptionGroup / TaskGroup wrappers) into a readable line.
+
+    anyio wraps real failures in an ExceptionGroup, so reporting `type(e).__name__` yields the
+    useless string "ExceptionGroup" — which is exactly what the console showed for a broken MCP
+    link, hiding whether it was a 403, a DNS failure, or a timeout.
+    """
+    out, stack = [], [e]
+    while stack and len(out) < limit:
+        x = stack.pop()
+        subs = getattr(x, "exceptions", None)
+        if subs:
+            stack.extend(subs)
+        else:
+            out.append(f"{type(x).__name__}: {x}".strip()[:200])
+    return " | ".join(out) or type(e).__name__
+
+
 def _clear_upload_bucket() -> int:
     """Delete the console's UPLOADED mockups, keeping the seeded scenario images.
 
@@ -1589,7 +1607,7 @@ async def mcp_tools_listing():
                     servers[short] = {"url": url, "tools": sorted(t.name for t in res.tools),
                                       "steps": steps}
         except Exception as e:
-            servers[short] = {"url": url, "tools": [], "steps": {}, "error": type(e).__name__}
+            servers[short] = {"url": url, "tools": [], "steps": {}, "error": _exc_chain(e)}
     _MCP_TOOLS_CACHE = {"servers": servers}
     return _MCP_TOOLS_CACHE
 
