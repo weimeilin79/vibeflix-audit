@@ -82,7 +82,7 @@ What makes this one nasty is where it doesn't happen.
 
 On your laptop it never happens, because there's one process and one task store, so every poll hits the right place and everything works. In a single-replica deployment it never happens either. It appears when you scale, which means it appears in production, under load, at the moment you'd least like a new class of failure.
 
-It also doesn't announce itself as an architecture problem. It looks like a timeout, or a flaky agent. In the real build of this system it showed up in traces as an enormous share of all spans — twenty-six percent of every span in the system was this bug.
+It also presents as a timeout, or a flaky agent, which sends you looking in the wrong place. In the real build of this system it showed up in traces as an enormous share of all spans — twenty-six percent of every span in the system was this bug.
 
 The general lesson is older than agents. Any time you have a stateful handle combined with a load balancer, ask where that state lives, and if the answer is that it lives in the memory of whichever instance happened to answer first, you have this bug. Web sessions have had the same problem for decades.
 

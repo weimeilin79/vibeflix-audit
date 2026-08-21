@@ -239,6 +239,23 @@ deploy_agent() {
 START_TS=$SECONDS
 
 # ── init ───────────────────────────────────────────────────────────────────────────────────
+# `init` is not like the other phases. What it produces — .venv, terraform on PATH, deploy/.env
+# — lives in the WORKING TREE, not in the cloud, and the state file only records that some
+# earlier run did it. Two situations make that record a lie:
+#   • Cloud Build hands every run a brand-new workspace, so a --resume finds no .venv at all;
+#   • a fresh clone (or a deleted .venv) does the same on a laptop.
+# In both, skipping init produces "✗ no .venv in … — run ./init.sh first" from a script whose
+# whole job is to run ./init.sh for you. So: run it whenever its output is MISSING, whatever the
+# state file says. It is idempotent and reuses an existing venv, so this costs nothing when the
+# workspace is already good.
+FORCED_INIT=0
+if ! want init && [ ! -x "$ROOT/.venv/bin/python" ]; then
+  FORCED_INIT=1
+  start_phase 01 init "rebuilding the workspace (no .venv here) before resuming"
+  run ./init.sh
+  # NO end_phase: this did not advance the install, so the resume pointer must stay put.
+fi
+
 if want init; then
   start_phase 01 init "$DESC_init"
   # init.sh PROMPTS for a project id if it cannot resolve one. That would hang an unattended

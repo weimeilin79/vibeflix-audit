@@ -45,7 +45,17 @@ if [ -z "$PROJECT_ID" ] && [ -f "$HOME/project_id.txt" ]; then
 fi
 [ -n "$PROJECT_ID" ] || PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
 if [ -z "${PROJECT_ID}" ] || [ "${PROJECT_ID}" = "(unset)" ]; then
-  read -r -p "Enter your Google Cloud Project ID: " PROJECT_ID
+  # Only ASK if someone is there to answer. Unattended runs — Cloud Build, nohup, CI — have no
+  # terminal, and a `read` there does not fail: it blocks forever on a closed stdin, which looks
+  # like a hung install with no error anywhere. Fail loudly with the fix instead.
+  if [ -t 0 ]; then
+    read -r -p "Enter your Google Cloud Project ID: " PROJECT_ID
+  else
+    echo "✗ No project id, and no terminal to ask on (running unattended)." >&2
+    echo "  Set it explicitly:  PROJECT=<your-project-id> ./init.sh" >&2
+    echo "  or:                 gcloud config set project <your-project-id>" >&2
+    exit 1
+  fi
 fi
 [ -n "${PROJECT_ID}" ] || { echo "No project id given — aborting." >&2; exit 1; }
 
