@@ -1,0 +1,35 @@
+# .gcloudignore-mesh — build context for deploy/cloudbuild-mesh.yaml (the INSTALL build).
+#
+# Not the same job as .gcloudignore, and it must not be. That file describes what the AGENT and
+# APP IMAGES need, so it excludes workshop/ and deploy/img/ as human material. This build runs
+# the installer itself: workshop/setup.sh IS the entry point, and deploy/img/ is the seed data
+# for the buckets. Reusing the image ignore-list here produces a build that dies on
+# "no such file: ./workshop/setup.sh".
+#
+# Pass it explicitly:  gcloud builds submit --ignore-file=.gcloudignore-mesh
+.git/
+.venv/
+.venv-tools/
+**/node_modules/
+**/__pycache__/
+*.pyc
+*.egg-info/
+frontend/dist/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# Run artefacts — the build makes its own.
+logs/
+.mesh_state
+data/
+.claude/
+.DS_Store
+**/.DS_Store
+
+# PER-PROJECT state: never ship a local copy into a build targeting another project. The build
+# restores these from GCS (see deploy/cloudbuild-mesh.yaml) or generates them fresh; uploading yours
+# would either trip deploy_mesh.sh's wrong-project guard or, worse, pass it while carrying
+# another project's engine addresses.
+deploy/.env
+deploy/agent_identities.json

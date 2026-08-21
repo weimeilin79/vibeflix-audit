@@ -62,7 +62,7 @@ gcloud pubsub subscriptions delete "${PUBSUB_SUBSCRIPTION:-$TOPIC-app}" --projec
 echo "▶ Terraform-managed infra (MCP services + SAs, then foundations: AR repo + topic)"
 terraform -chdir="$HERE/terraform/mcp" init -input=false >/dev/null 2>&1 || true
 terraform -chdir="$HERE/terraform/mcp" destroy -auto-approve \
-  -var project="$PROJECT" -var region="$REGION" -var deployer="user:$(gcloud config get-value account 2>/dev/null)" 2>/dev/null || true
+  -var project="$PROJECT" -var region="$REGION" -var deployer="$(iam_self_member)" 2>/dev/null || true
 terraform -chdir="$HERE/terraform/foundations" init -input=false >/dev/null 2>&1 || true
 terraform -chdir="$HERE/terraform/foundations" destroy -auto-approve \
   -var project="$PROJECT" -var region="$REGION" -var pubsub_topic="$TOPIC" 2>/dev/null || true

@@ -25,7 +25,7 @@ ROOT="$(dirname "$HERE")"
 PROJECT="${PROJECT:-${GOOGLE_CLOUD_PROJECT:?set PROJECT in deploy/.env}}"
 REGION="${REGION:-us-central1}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_setup.sh"
-DEPLOYER="user:$(gcloud config get-value account 2>/dev/null)"
+DEPLOYER="$(iam_self_member)"   # user: or serviceAccount:, whichever this caller is
 AR="$REGION-docker.pkg.dev/$PROJECT/vibeflix"
 
 echo "[mcp-deploy] project=$PROJECT region=$REGION deployer=$DEPLOYER"

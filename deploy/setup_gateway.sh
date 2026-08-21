@@ -131,7 +131,7 @@ if [ "$STEP" = all ] || [ "$STEP" = rewire ]; then
   gcloud iam service-accounts describe "vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 \
     || gcloud iam service-accounts create vibeflix-mcp-invoker --display-name "Vibeflix MCP invoker (gateway egress)"
   echo "  then: terraform -chdir=$HERE/terraform/mcp apply \\"
-  echo "    -var project=$PROJECT -var region=$REGION -var deployer=user:\$(gcloud config get-value account) \\"
+  echo "    -var project=$PROJECT -var region=$REGION -var deployer=\$(iam_self_member) \\"
   echo "    -var 'invoker_members=[\"serviceAccount:vibeflix-mcp-invoker@$PROJECT.iam.gserviceaccount.com\",\"serviceAccount:vibeflix-app@$PROJECT.iam.gserviceaccount.com\"]'"
   echo "  (pass vibeflix-mcp-invoker as --mcp-invoker-sa when attaching agents to the gateway;"
   echo "   the app keeps DIRECT access — the mTLS/PSC surface is agents-only)"

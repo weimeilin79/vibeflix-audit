@@ -92,3 +92,19 @@ ensure_apis() {
   done
   echo "  ✓ enabled ${#missing[@]} API(s)"
 }
+
+# iam_self_member — the ACTIVE credential as a correctly-prefixed IAM member.
+#
+# IAM member types are not interchangeable: a service account must be written
+# `serviceAccount:x@y.iam.gserviceaccount.com`, and `user:` on that same address is rejected
+# outright. Hardcoding `user:$(gcloud config get-value account)` therefore works perfectly for
+# every human and breaks the moment the same script runs as a service account — in Cloud Build,
+# on a VM, from CI — with an "invalid member" error that names IAM rather than the assumption.
+iam_self_member() {
+  local acct; acct="$(gcloud config get-value account 2>/dev/null)"
+  [ -n "$acct" ] || return 1
+  case "$acct" in
+    *.gserviceaccount.com) echo "serviceAccount:$acct" ;;
+    *)                     echo "user:$acct" ;;
+  esac
+}

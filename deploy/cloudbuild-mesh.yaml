@@ -39,6 +39,19 @@ steps:
         # build's ambient config.
         export PROJECT="$PROJECT_ID"
 
+        # ── restore state from an earlier build ───────────────────────
+        # A build starts from a fresh source upload every time, and deploy/.env is deliberately
+        # NOT uploaded (it is per-project). But init.sh mints a new TASK_STORE_KEY whenever it
+        # writes that file — so a second build would hand the remaining agents a DIFFERENT key
+        # from the ones the first build already deployed, and the shared A2A task store would
+        # start rejecting them. RAG_CORPUS lives there too, and .mesh_state is what --resume
+        # reads. So carry all three across builds.
+        STATE="gs://$PROJECT_ID-artifacts/mesh-state"
+        echo "── restoring state from $$STATE (if any) ─────────────────────"
+        gcloud storage cp "$$STATE/env" deploy/.env 2>/dev/null && echo "  ✓ deploy/.env" || echo "  · no saved deploy/.env (first build)"
+        gcloud storage cp "$$STATE/agent_identities.json" deploy/ 2>/dev/null && echo "  ✓ agent_identities.json" || true
+        gcloud storage cp "$$STATE/mesh_state" .mesh_state 2>/dev/null && echo "  ✓ .mesh_state ($$(cat .mesh_state))" || true
+
         echo "── ./deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
         ./deploy_mesh.sh ${_MESH_ARGS}
         rc=$$?
@@ -46,6 +59,15 @@ steps:
         # Upload the per-phase logs whether we passed or FAILED — a failed build is exactly when
         # you want them, and Cloud Build has no always-run step, so this has to live in the same
         # step as the thing that fails.
+        # ── save state + logs, pass or FAIL ───────────────────────────
+        # Cloud Build has no always-run step, so this lives in the same step as the thing that
+        # fails. A failed build is precisely when the next run needs the state and you need
+        # the logs.
+        echo "── saving state ──────────────────────────────────────────────"
+        gcloud storage cp deploy/.env "$$STATE/env" 2>/dev/null && echo "  ✓ deploy/.env saved" || true
+        gcloud storage cp deploy/agent_identities.json "$$STATE/agent_identities.json" 2>/dev/null || true
+        gcloud storage cp .mesh_state "$$STATE/mesh_state" 2>/dev/null || true
+
         echo "── uploading per-phase logs ──────────────────────────────────"
         if [ -d logs ]; then
           gcloud storage cp -r logs "gs://$PROJECT_ID-artifacts/mesh-logs/$BUILD_ID/" 2>/dev/null \
