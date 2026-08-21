@@ -149,10 +149,10 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ADK 2.0 Mesh Coordination Card */}
+                {/* ADK 2.3 Mesh Coordination Card */}
                 <div className="canvas-panel" style={{ flex: 1 }}>
                   <h3 className="panel-title" style={{ fontSize: '0.95rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                    <GitBranch size={16} style={{ color: 'var(--accent-blue)' }} /> Multi-Agent Auditing Mesh (ADK 2.0)
+                    <GitBranch size={16} style={{ color: 'var(--accent-blue)' }} /> Multi-Agent Auditing Mesh (ADK 2.3)
                   </h3>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                     Instead of sequential human reviews, the <strong>Sourcing Orchestrator</strong> routes packaging design mockups and volume orders to three domain compliance agents running concurrently — and Vendor &amp; Licensing hands off to a <strong>Legal Clearance agent</strong>. When <strong>every workflow passes</strong>, the orchestrator's <em>contract_finalize</em> step ensures the audit ends with an <strong>executed licensing contract</strong> (📜 Final Clearance Report); every completed run is archived in the <strong>Audit History</strong> tab, exportable as PDF.
@@ -357,7 +357,7 @@ export default function App() {
                   <tr>
                     <th>Operational Phase</th>
                     <th>The Manual Way (Status Quo)</th>
-                    <th>The Agentic Canvas Way (ADK 2.0 + MCP)</th>
+                    <th>The Agentic Canvas Way (ADK 2.3 + MCP)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -379,7 +379,7 @@ export default function App() {
                   <tr>
                     <td><strong>Out-of-Band Risk</strong></td>
                     <td className="manual">PR staff manually searching Taobao and eBay for early product leaks or bootleg pre-orders.</td>
-                    <td className="agentic">Proactive. Market Agents constantly scrape international e-commerce endpoints to catch leaks early.</td>
+                    <td className="agentic">Proactive. During an audit the mesh queries the market MCP server for international marketplace listings, catching leaks and bootlegs as part of the run.</td>
                   </tr>
                   <tr>
                     <td><strong>Resolution Timeline</strong></td>
@@ -421,14 +421,23 @@ export default function App() {
               {/* Architectural Design Theory */}
               <div className="canvas-panel">
                 <h3 className="panel-title" style={{ borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem', marginBottom: '0.75rem' }}>
-                  <Database size={16} style={{ color: 'var(--accent-purple)' }} /> Design Theory (A2UI & ADK 2.0)
+                  <Database size={16} style={{ color: 'var(--accent-purple)' }} /> Design Theory (A2UI & ADK 2.3)
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.8rem', marginTop: '0.5rem' }}>
                   <div>
-                    <strong style={{ color: 'var(--text-dark)' }}>• Agent-to-User Interface (A2UI):</strong> Instead of static, predefined layouts, the client interface is rendered dynamically base on tool payloads from agents, allowing UI controls to evolve adaptively.
+                    <strong style={{ color: 'var(--text-dark)' }}>• Agent-to-User Interface (A2UI v0.8):</strong> Instead of static, predefined layouts, a dedicated <strong>UI Renderer agent</strong> emits the interface itself — real A2UI messages, in the official <code>0.8</code> wire format, built from whatever reports the audit produced. The app validates them against the spec catalog and streams them to the browser; anything malformed falls back to deterministic panels, so a bad layout can never break the console.
                   </div>
                   <div>
-                    <strong style={{ color: 'var(--text-dark)' }}>• ADK 2.0 Python Agent Mesh:</strong> Multiple specialized compliance processes coordinate on an event-driven graph, loop-backing data updates dynamically when parameters resolve.
+                    <strong style={{ color: 'var(--text-dark)' }}>• ADK 2.3 Python Agent Mesh:</strong> Multiple specialized compliance processes coordinate on an event-driven graph, loop-backing data updates dynamically when parameters resolve. Each agent is its own deployed service; they talk <strong>agent-to-agent (A2A)</strong>, not through shared memory.
+                  </div>
+                  <div>
+                    <strong style={{ color: 'var(--text-dark)' }}>• Retrieval over tribal knowledge (RAG):</strong> Legal's process was never written down as rules — it lives in memos, checklists and meeting notes. The Legal agent answers from a <strong>Vertex AI RAG corpus</strong> built over those documents, and says so when the documents genuinely don't cover a question rather than inventing an answer.
+                  </div>
+                  <div>
+                    <strong style={{ color: 'var(--text-dark)' }}>• Human-in-the-loop (HITL):</strong> When a workflow needs a decision only a person can make — an over-cap volume, a missing vendor record — the run <strong>pauses and asks</strong>, then resumes with the answer instead of guessing or failing.
+                  </div>
+                  <div>
+                    <strong style={{ color: 'var(--text-dark)' }}>• Shared A2A task store:</strong> Agents run behind load balancers, so the replica that answers a status poll is rarely the one that started the task. A shared store makes the task readable from any replica — without it, most polls 404 on a mesh that is working perfectly.
                   </div>
                   <div>
                     <strong style={{ color: 'var(--text-dark)' }}>• Grouped Model Context Protocol (MCP):</strong> Decouples integration connectors (such as CV model parsing, trademark registers, scrapers) into modular, independent server instances.
