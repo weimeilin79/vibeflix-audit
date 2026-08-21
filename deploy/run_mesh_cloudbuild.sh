@@ -4,7 +4,7 @@
 #
 #     ./deploy/run_mesh_cloudbuild.sh                  # submit and stream
 #     ./deploy/run_mesh_cloudbuild.sh --resume         # continue where the last build stopped
-#     ./deploy/run_mesh_cloudbuild.sh --async          # submit, print the log URL, return
+#     ./deploy/run_mesh_cloudbuild.sh --wait            # stay attached and stream the log
 #     ./deploy/run_mesh_cloudbuild.sh --grant-owner    # grant the build SA owner, then submit
 #
 # The install takes the better part of an hour and Cloud Shell cannot be relied on to live that
@@ -31,11 +31,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; cd "$ROOT"
 [ -f "$HERE/.env" ] && { set -a; . "$HERE/.env"; set +a; }
 
-GRANT_OWNER=0; ASYNC=0; MESH_ARGS=""; JUST_GRANTED=0
+# Async by DEFAULT. The entire reason this path exists is that the install outlives a Cloud
+# Shell session — so blocking the terminal on it recreates the problem we came here to solve.
+# --wait opts back into streaming for anyone who wants to watch.
+GRANT_OWNER=0; ASYNC=1; MESH_ARGS=""; JUST_GRANTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --grant-owner) GRANT_OWNER=1; shift ;;
-    --async) ASYNC=1; shift ;;
+    --async) ASYNC=1; shift ;;          # kept for compatibility; already the default
+    --wait) ASYNC=0; shift ;;
     -h|--help) sed -n '3,10p' "$0"; exit 0 ;;
     *) MESH_ARGS="$MESH_ARGS $1"; shift ;;    # --resume / --from X / --skip-gateway
   esac
@@ -164,3 +168,26 @@ while :; do
   echo "! submit rejected before starting a build (attempt $n/4) — retrying in 45s"
   sleep 45; n=$((n + 1))
 done
+
+if [ "$ASYNC" = 1 ]; then
+  BUILD_ID="$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$OUT" | head -1)"
+  cat <<INFO
+
+════════════════════════════════════════════════════════════════════
+ Submitted. This shell is free — closing it will NOT stop the build.
+════════════════════════════════════════════════════════════════════
+
+  console : https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=$PNUM
+
+  status  : gcloud builds describe $BUILD_ID --project $PROJECT --format='value(status)'
+  follow  : gcloud builds log $BUILD_ID --project $PROJECT --stream
+  stop it : gcloud builds cancel $BUILD_ID --project $PROJECT
+
+  Per-phase logs land in gs://$PROJECT-artifacts/mesh-logs/$BUILD_ID/
+  once the foundations phase creates that bucket — on failure as well as success.
+
+  If it fails, fix the cause and re-run this script: the build restores
+  .env, agent_identities.json, terraform state and .mesh_state, so it
+  continues rather than starting over.
+INFO
+fi

@@ -776,7 +776,27 @@ whether a job is running — `tmux` and `nohup` don't survive that. A build does
 ```bash
 ./deploy/run_mesh_cloudbuild.sh --grant-owner     # first run
 ./deploy/run_mesh_cloudbuild.sh --resume          # continue a previous build
+./deploy/run_mesh_cloudbuild.sh --wait            # stay attached and stream the log
 ```
+
+It submits and **returns** — closing the shell does not stop the build. On submit it prints the
+console URL plus the commands to check status, follow the log, or cancel:
+
+```bash
+gcloud builds describe <id> --project <project> --format='value(status)'
+gcloud builds log     <id> --project <project> --stream
+```
+
+Because it returns at submit time, **the script cannot tell you whether the install worked** —
+only that the build was accepted. `SUCCESS` / `FAILURE` from `builds describe` is the source of
+truth. (Its "the build ran and failed" vs "the submit was rejected" reporting only applies under
+`--wait`, where it is still attached to watch.)
+
+A failed build leaves nothing to undo. It saved `deploy/.env`, `agent_identities.json`,
+terraform state and `.mesh_state` to `gs://<project>-artifacts/mesh-state/` on the way out, so
+re-running this script continues from the phase that failed instead of starting over. The
+per-phase logs are in `gs://<project>-artifacts/mesh-logs/<build-id>/` — read the one named for
+the failing phase rather than scrolling the whole build log.
 
 The catch is identity. In your shell you are the project owner and nothing is denied; a build
 runs as a **service account** that by default cannot create service accounts, edit project IAM,
