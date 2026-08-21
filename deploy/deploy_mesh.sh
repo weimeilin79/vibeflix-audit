@@ -376,6 +376,13 @@ fi
 # ── gateway ────────────────────────────────────────────────────────────────────────────────
 if want gateway && [ "$SKIP_GATEWAY" = 0 ]; then
   start_phase 08 gateway "$DESC_gateway"
+  # setup_gateway.sh SKIPS agent registration (with a warning, exit 0) when this file is
+  # missing — correct when workshop/setup.sh calls it at 9/9, before any agent exists, and
+  # wrong here: the build would report SUCCESS having registered the MCP servers and none of
+  # the agents, and the mesh would 403 at runtime for reasons nothing in the log mentions.
+  [ -s "$ROOT/deploy/agent_identities.json" ] || c_die "deploy/agent_identities.json is missing.
+   The gateway phase registers the six agents from it. Run the agent phases first:
+       ./deploy/deploy_mesh.sh --from brand"
   run ./deploy/setup_gateway.sh
   # The attach IS a redeploy (rule 4). No argument = all six engines.
   run python deploy/deploy_agents_a2a.py

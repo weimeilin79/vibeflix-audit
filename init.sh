@@ -52,7 +52,7 @@ if [ -z "${PROJECT_ID}" ] || [ "${PROJECT_ID}" = "(unset)" ]; then
     read -r -p "Enter your Google Cloud Project ID: " PROJECT_ID
   else
     echo "✗ No project id, and no terminal to ask on (running unattended)." >&2
-    echo "  Set it explicitly:  PROJECT=<your-project-id> ./init.sh" >&2
+    echo "  Set it explicitly:  ./init.sh <your-project-id>" >&2
     echo "  or:                 gcloud config set project <your-project-id>" >&2
     exit 1
   fi
