@@ -139,14 +139,28 @@ submit() {
     --service-account="projects/$PROJECT/serviceAccounts/$BUILD_SA" \
     $ASYNC_FLAG
 }
+# Retry ONLY a submit-side failure. Once a build has been created and run, a non-zero exit is
+# the INSTALL failing — re-running it four times just repeats a doomed 40-minute build and
+# reports it as "IAM propagation", which is both wrong and expensive. The two are easy to tell
+# apart: a rejected submit never gets a build id.
+OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
 n=1
-until submit; do
-  if [ "$n" -ge 4 ]; then
-    echo "✗ submit failed $n times." >&2
-    echo "  A 403 on storage.objects.get for $BUILD_SA is still-propagating IAM:" >&2
-    echo "  wait a couple of minutes and re-run this script — nothing needs undoing." >&2
+while :; do
+  if submit 2>&1 | tee "$OUT"; then break; fi
+  if grep -qE "BUILD FAILURE|completed with status|Build step failure" "$OUT"; then
+    echo >&2
+    echo "✗ the BUILD ran and failed — this is the install, not permissions." >&2
+    echo "  Read the phase failure above (or in the Cloud Build log), fix it, then re-run." >&2
+    echo "  Nothing is retried: the same build would fail the same way." >&2
+    grep -oE "https://console\.cloud\.google\.com/cloud-build/builds/[^ ]*" "$OUT" | head -1 >&2
     exit 1
   fi
-  echo "! submit failed (attempt $n/4) — retrying in 45s (usually IAM propagation)"
+  if [ "$n" -ge 4 ]; then
+    echo "✗ could not submit after $n attempts (never reached a build)." >&2
+    echo "  A 403 on storage.objects.get for $BUILD_SA is IAM still propagating — wait a" >&2
+    echo "  couple of minutes and re-run. Nothing needs undoing." >&2
+    exit 1
+  fi
+  echo "! submit rejected before starting a build (attempt $n/4) — retrying in 45s"
   sleep 45; n=$((n + 1))
 done

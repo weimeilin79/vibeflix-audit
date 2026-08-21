@@ -42,9 +42,22 @@ gcloud artifacts repositories describe vibeflix --location="$REGION" --project="
   }
 
 if [ "${1:-}" != "--no-build" ]; then
+# A build submitted from INSIDE a build has no default service account to fall back on. Projects
+# created after Google's 2024 change get no <number>@cloudbuild.gserviceaccount.com, and the
+# Compute Engine default SA only exists once compute.googleapis.com is enabled — so on a fresh
+# project a nested `gcloud builds submit` with no --service-account is rejected outright.
+# cloudbuild-mesh.yaml exports the account the outer build runs as; pass it down when present.
+# Empty (a normal laptop/Cloud Shell run) → the flag is omitted and gcloud picks the default.
+# A plain string, not an array: `"${arr[@]}"` on an EMPTY array is an "unbound variable" error
+# under `set -u` on bash 3.2, which is still what macOS ships — and these scripts are run by
+# hand there. The value never contains spaces, so unquoted expansion is safe and portable.
+BUILD_SA_FLAG=""
+[ -n "${CLOUDBUILD_SA:-}" ] && BUILD_SA_FLAG="--service-account=projects/$PROJECT/serviceAccounts/$CLOUDBUILD_SA"
+
   echo "[mcp-deploy] building images (parallel Cloud Build)…"
   for G in mcp_licensing mcp_market mcp_brand_style; do
     gcloud builds submit "$ROOT" --config "$HERE/cloudbuild-mcp.yaml" \
+      $BUILD_SA_FLAG \
       --substitutions "_GROUP=$G,_IMAGE=$AR/${G//_/-}" --async --format 'value(id)'
   done
   echo "[mcp-deploy] waiting for builds…"

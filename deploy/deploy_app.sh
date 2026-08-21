@@ -24,8 +24,21 @@ run() { gcloud run services describe "$1" --region "$REGION" --project "$PROJECT
 IMG="$REGION-docker.pkg.dev/$PROJECT/vibeflix/app"
 DEF="gs://${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image}/vendor_request_refine.png"
 
+# A build submitted from INSIDE a build has no default service account to fall back on. Projects
+# created after Google's 2024 change get no <number>@cloudbuild.gserviceaccount.com, and the
+# Compute Engine default SA only exists once compute.googleapis.com is enabled — so on a fresh
+# project a nested `gcloud builds submit` with no --service-account is rejected outright.
+# cloudbuild-mesh.yaml exports the account the outer build runs as; pass it down when present.
+# Empty (a normal laptop/Cloud Shell run) → the flag is omitted and gcloud picks the default.
+# A plain string, not an array: `"${arr[@]}"` on an EMPTY array is an "unbound variable" error
+# under `set -u` on bash 3.2, which is still what macOS ships — and these scripts are run by
+# hand there. The value never contains spaces, so unquoted expansion is safe and portable.
+BUILD_SA_FLAG=""
+[ -n "${CLOUDBUILD_SA:-}" ] && BUILD_SA_FLAG="--service-account=projects/$PROJECT/serviceAccounts/$CLOUDBUILD_SA"
+
 echo "[deploy_app] building image…"
 gcloud builds submit "$ROOT" --config "$HERE/cloudbuild-app.yaml" --project "$PROJECT" \
+  $BUILD_SA_FLAG \
   --substitutions "_IMAGE=$IMG,_DEFAULT_IMAGE=$DEF"
 
 echo "[deploy_app] resolving engine + MCP URLs…"

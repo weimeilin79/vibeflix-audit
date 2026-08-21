@@ -29,8 +29,14 @@ steps:
         echo "── preparing the build image ─────────────────────────────────"
         # The cloud-sdk image is Debian 12 (python3.11 — inside preflight's supported 3.10-3.13),
         # but ships without the handful of tools init.sh needs.
-        apt-get update -qq >/dev/null 2>&1
-        apt-get install -y -qq unzip jq git python3-venv >/dev/null 2>&1
+        # curl is NOT in the cloud-sdk image, and both preflight and init.sh need it (init.sh
+        # downloads terraform with it). Do not silence failures here: a missing package
+        # resurfaces later as "tool not found", which reads like a bug in the checker.
+        apt-get update -qq >/dev/null
+        apt-get install -y -qq curl ca-certificates unzip jq git python3-venv >/dev/null
+        for T in curl unzip jq git; do
+          command -v $$T >/dev/null || { echo "✗ $$T missing after apt-get install" >&2; exit 1; }
+        done
         python3 -V
         gcloud config set project "$PROJECT_ID" -q 2>/dev/null
 
@@ -38,6 +44,12 @@ steps:
         # other than the one it was asked for — set it explicitly rather than relying on the
         # build's ambient config.
         export PROJECT="$PROJECT_ID"
+
+        # Nested builds (the 3 MCP images + the app image) are submitted from inside this one,
+        # and have no default service account to fall back to on a fresh project. Hand them the
+        # account this build runs as. `gcloud config get-value account` is the build SA here.
+        export CLOUDBUILD_SA="$$(gcloud config get-value account 2>/dev/null)"
+        echo "  nested builds will run as: $$CLOUDBUILD_SA"
 
         # ── restore state from an earlier build ───────────────────────
         # A build starts from a fresh source upload every time, and deploy/.env is deliberately
@@ -51,6 +63,14 @@ steps:
         gcloud storage cp "$$STATE/env" deploy/.env 2>/dev/null && echo "  ✓ deploy/.env" || echo "  · no saved deploy/.env (first build)"
         gcloud storage cp "$$STATE/agent_identities.json" deploy/ 2>/dev/null && echo "  ✓ agent_identities.json" || true
         gcloud storage cp "$$STATE/mesh_state" .mesh_state 2>/dev/null && echo "  ✓ .mesh_state ($$(cat .mesh_state))" || true
+        # TERRAFORM STATE. Each build gets a clean workspace, and the state files are not in the
+        # source upload (they are per-project). Without this a SECOND build has no record of the
+        # Artifact Registry repo, topic and Cloud Run services the first one created, so
+        # `terraform apply` tries to create them again and fails on ALREADY_EXISTS — the resume
+        # path breaks on resources that are perfectly healthy.
+        for TFDIR in foundations mcp; do
+          gcloud storage cp "$$STATE/tfstate-$$TFDIR" "deploy/terraform/$$TFDIR/terraform.tfstate" 2>/dev/null             && echo "  ✓ terraform state ($$TFDIR)" || true
+        done
 
         echo "── ./deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
         ./deploy_mesh.sh ${_MESH_ARGS}
@@ -67,6 +87,9 @@ steps:
         gcloud storage cp deploy/.env "$$STATE/env" 2>/dev/null && echo "  ✓ deploy/.env saved" || true
         gcloud storage cp deploy/agent_identities.json "$$STATE/agent_identities.json" 2>/dev/null || true
         gcloud storage cp .mesh_state "$$STATE/mesh_state" 2>/dev/null || true
+        for TFDIR in foundations mcp; do
+          [ -f "deploy/terraform/$$TFDIR/terraform.tfstate" ]             && gcloud storage cp "deploy/terraform/$$TFDIR/terraform.tfstate" "$$STATE/tfstate-$$TFDIR" 2>/dev/null             && echo "  ✓ terraform state saved ($$TFDIR)" || true
+        done
 
         echo "── uploading per-phase logs ──────────────────────────────────"
         if [ -d logs ]; then
