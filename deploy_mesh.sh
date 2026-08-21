@@ -43,6 +43,24 @@
 #    itself while you looked. Each checkpoint retries before it believes a negative.
 #
 # Every phase is idempotent: re-running is the normal way to recover from a failure.
+# ── EXECUTE this file; never source it ─────────────────────────────────────────────────────
+# The workshop teaches `source ./env.sh`, so `source ./deploy_mesh.sh` is the natural next
+# thing to type — and it is destructive in a way that hides its own cause:
+#   • every `exit` below then exits YOUR SHELL. In Cloud Shell that closes the tab, so the
+#     error message this script printed a line earlier vanishes with it — the failure looks
+#     like "it just quit" and there is nothing left to read.
+#   • `set -euo pipefail` would arm your interactive shell too, so from then on any command
+#     that returns non-zero kills the terminal.
+# This check runs BEFORE `set -e` for that second reason, and returns rather than exits so
+# that refusing to run is itself survivable. (env.sh does the exact opposite check: it must
+# be sourced, because its whole job is to change the current shell.)
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  echo "✗ deploy_mesh.sh must be RUN, not sourced. Use:" >&2
+  echo "      ./deploy_mesh.sh" >&2
+  echo "  (sourcing it would close this terminal on the first error, hiding the error.)" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
 
@@ -80,7 +98,14 @@ INTENDED_PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 c_step() { printf "\n\033[1;36m━━━ %s\033[0m  %s\n" "$1" "${2:-}"; }
 c_ok()   { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 c_warn() { printf "\033[1;33m!\033[0m %s\n" "$*"; }
-c_die()  { printf "\033[1;31m✗ %s\033[0m\n" "$*" >&2; exit 1; }
+# Fatal errors go to the terminal AND to disk. A terminal is not a durable place to put the
+# only copy of an error message — the tab closes, the session times out, the scrollback is
+# lost — and then the failure is unreportable. The log file survives all three.
+c_die()  {
+  printf "\033[1;31m✗ %s\033[0m\n" "$*" >&2
+  [ -n "${PHASE_LOG:-}" ] && printf "FATAL: %s\n" "$*" >> "$PHASE_LOG" 2>/dev/null
+  exit 1
+}
 
 # ── logging ────────────────────────────────────────────────────────────────────────────────
 # One log FILE per phase, not one wall of text. A backgrounded run (nohup) is otherwise close
@@ -254,6 +279,7 @@ if want init; then
     gcloud beta services identity create --service="$API" --project="$PROJECT" >/dev/null 2>&1 || true
   done
   c_ok "service agents materialised (Vertex AI, Cloud Build, Cloud Run)"
+  end_phase
 fi
 reload_env
 : "${PROJECT:?deploy/.env has no PROJECT — run ./init.sh}"
