@@ -52,6 +52,14 @@ if have gcloud; then
   # Application Default Credentials (the python SDKs + terraform use ADC).
   if gcloud auth application-default print-access-token >/dev/null 2>&1; then
     ok "application-default credentials present"
+  elif curl -sf -H "Metadata-Flavor: Google" -m 2 \
+       "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+       >/dev/null 2>&1; then
+    # On GCE, Cloud Build and Cloud Run there is no ADC *file* — the metadata server IS the
+    # credential source, and every Google SDK finds it. Checking only for the file makes this
+    # script demand `gcloud auth application-default login` inside a build container, where
+    # that command cannot help and the credentials were never missing.
+    ok "application-default credentials present (metadata server)"
   else
     bad "ADC missing — run: gcloud auth application-default login"
   fi

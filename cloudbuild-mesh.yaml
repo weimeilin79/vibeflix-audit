@@ -1,0 +1,55 @@
+# cloudbuild-mesh.yaml — install the whole Vibeflix mesh SERVER-SIDE, in Cloud Build.
+#
+#     ./deploy/run_mesh_cloudbuild.sh            # submit (see that script for the IAM it needs)
+#     ./deploy/run_mesh_cloudbuild.sh --resume   # continue a previous run
+#
+# Why this exists: the install takes the better part of an hour, and Cloud Shell cannot be
+# relied on to stay alive that long — it reclaims an idle VM regardless of whether a job is
+# running, and neither tmux nor nohup survives that. A build runs on Google's infrastructure,
+# so nothing on your side — closed tab, dropped network, timed-out shell, closed laptop — can
+# interrupt it. The logs are permanent and readable afterwards, which the terminal's are not.
+#
+# Everything else about the install is unchanged: this runs the SAME ./deploy_mesh.sh you would
+# run by hand, so there is no second code path to keep in sync.
+timeout: 10800s          # 3h. The engine deploys dominate; 1h is cutting it close on a cold project.
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY   # required when a build runs as a user-specified service account
+substitutions:
+  _MESH_ARGS: ''         # passed straight through, e.g. '--resume' or '--from legal'
+steps:
+  - id: install-mesh
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:stable
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -uo pipefail
+
+        echo "── preparing the build image ─────────────────────────────────"
+        # The cloud-sdk image is Debian 12 (python3.11 — inside preflight's supported 3.10-3.13),
+        # but ships without the handful of tools init.sh needs.
+        apt-get update -qq >/dev/null 2>&1
+        apt-get install -y -qq unzip jq git python3-venv >/dev/null 2>&1
+        python3 -V
+        gcloud config set project "$PROJECT_ID" -q 2>/dev/null
+
+        # deploy_mesh.sh reads PROJECT (or gcloud config) and refuses to build into a project
+        # other than the one it was asked for — set it explicitly rather than relying on the
+        # build's ambient config.
+        export PROJECT="$PROJECT_ID"
+
+        echo "── ./deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
+        ./deploy_mesh.sh ${_MESH_ARGS}
+        rc=$$?
+
+        # Upload the per-phase logs whether we passed or FAILED — a failed build is exactly when
+        # you want them, and Cloud Build has no always-run step, so this has to live in the same
+        # step as the thing that fails.
+        echo "── uploading per-phase logs ──────────────────────────────────"
+        if [ -d logs ]; then
+          gcloud storage cp -r logs "gs://$PROJECT_ID-artifacts/mesh-logs/$BUILD_ID/" 2>/dev/null \
+            && echo "  logs → gs://$PROJECT_ID-artifacts/mesh-logs/$BUILD_ID/" \
+            || echo "  (no artifacts bucket yet — the phase logs are inline in this build log)"
+        fi
+        exit $$rc

@@ -274,12 +274,11 @@ if want init; then
   # failure — so on a fresh project they warn and continue, and the missing permission surfaces
   # much later as a 403 inside an agent report. Force them into existence up front.
   # Idempotent: on an existing project each call is a no-op that returns the same address.
-  # ONE batched enable, not three. serviceusage bills every mutation against a per-minute
-  # budget (120) on your ADC quota project, and the very next thing this script does is
-  # batch-enable twenty more in workshop/setup.sh — so a burst of singleton calls here is
-  # what pushes that batch over the edge and 429s the whole run.
-  gcloud services enable aiplatform.googleapis.com cloudbuild.googleapis.com \
-    run.googleapis.com --project="$PROJECT" >/dev/null 2>&1 || true
+  # ensure_apis reads what is already enabled before mutating anything, and retries a 429.
+  # This preflight used to fire singleton enables straight into the twenty-API batch that
+  # workshop/setup.sh runs seconds later, which is what tipped the per-minute budget over.
+  . "$ROOT/deploy/lib_setup.sh"
+  ensure_apis aiplatform.googleapis.com cloudbuild.googleapis.com run.googleapis.com
   for API in aiplatform.googleapis.com cloudbuild.googleapis.com run.googleapis.com; do
     gcloud beta services identity create --service="$API" --project="$PROJECT" >/dev/null 2>&1 || true
   done

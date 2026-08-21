@@ -24,12 +24,13 @@ REGION="${REGION:-us-central1}"          # RAG Engine is regional, not "global"
 BUCKET="${BUCKET:-vibeflix-artifacts}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PY:-$ROOT/.venv/bin/python}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib_setup.sh"
 
 echo "[setup_legal_rag] project=$PROJECT region=$REGION bucket=$BUCKET"
 [ -x "$PY" ] || { echo "No python at $PY — set PY=/path/to/python"; exit 1; }
 
 echo "[setup_legal_rag] 1/3 enabling APIs…"
-gcloud services enable aiplatform.googleapis.com storage.googleapis.com --project "$PROJECT"
+ensure_apis aiplatform.googleapis.com storage.googleapis.com
 
 echo "[setup_legal_rag] 2/3 ensuring provisioning SDK (deploy/requirements-legal-rag.txt)…"
 "$PY" -c "import agentplatform, pandas" 2>/dev/null \

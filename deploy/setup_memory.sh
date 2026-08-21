@@ -32,7 +32,7 @@ echo "[setup_memory] project=$PROJECT region=$REGION bucket=$BUCKET"
 gcloud config set project "$PROJECT" >/dev/null
 
 echo "[setup_memory] 1/3 enabling APIs…"
-gcloud services enable aiplatform.googleapis.com storage.googleapis.com
+ensure_apis aiplatform.googleapis.com storage.googleapis.com
 
 echo "[setup_memory] 2/3 creating private artifacts bucket…"
 ensure_created "gs://$BUCKET" \

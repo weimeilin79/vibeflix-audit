@@ -54,7 +54,7 @@ echo "[setup_pubsub] project=$PROJECT topic=$TOPIC subscription=$SUBSCRIPTION"
 gcloud config set project "$PROJECT" >/dev/null
 
 echo "[setup_pubsub] 1/4 enabling the Pub/Sub API…"
-gcloud services enable pubsub.googleapis.com
+ensure_apis pubsub.googleapis.com
 
 echo "[setup_pubsub] 2/4 verifying topic '$TOPIC' (owned by terraform/foundations)…"
 # The topic is created declaratively by terraform/foundations now — this script only owns the

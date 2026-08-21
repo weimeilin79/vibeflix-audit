@@ -54,3 +54,41 @@ ensure_created() {
     return 1
   done
 }
+
+# ensure_apis <api…> — enable only the APIs that are not already enabled.
+#
+# `gcloud services enable` is a MUTATE request even when the API is already on, and
+# serviceusage caps mutations at 120 per minute — charged to your ADC QUOTA project, which is
+# shared by every project you drive from one shell. Six setup scripts each re-enabling "their"
+# APIs (setup.sh enables twenty, then setup_firestore re-enables firestore, setup_pubsub
+# re-enables pubsub, deploy_mcp_cloudrun re-enables run+artifactregistry…) is what exhausts
+# it. The 429 then lands on whichever script happened to be running when the budget ran out —
+# so the error appears in a different place each run and looks unrelated to the real cause.
+# gcloud's "This may be due to network connectivity issues" tail sends you to check DNS.
+#
+# Listing enabled services is a READ, and reads do not count against that quota. So ask first:
+# on a re-run this costs ZERO mutations, and on a fresh project it makes exactly one batched
+# call for whatever is genuinely missing.
+ensure_apis() {
+  local missing=() a enabled n=1
+  enabled="$(gcloud services list --enabled --project="$PROJECT" --format='value(config.name)' 2>/dev/null)"
+  for a in "$@"; do
+    printf '%s\n' "$enabled" | grep -qx "$a" || missing+=("$a")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "  ✓ APIs already enabled ($# checked, 0 changes)"
+    return 0
+  fi
+  echo "  enabling ${#missing[@]} of $# APIs…"
+  until gcloud services enable --project="$PROJECT" "${missing[@]}"; do
+    if [ "$n" -ge 4 ]; then
+      echo "  ✗ could not enable: ${missing[*]}" >&2
+      echo "    A 429 here is the 'Mutate requests per minute' quota, not a failure: wait 60s" >&2
+      echo "    and re-run. The re-run skips every API that is already on." >&2
+      return 1
+    fi
+    echo "  ! enable failed (attempt $n/4) — waiting $((n * 30))s (limit: 120 mutations/min)"
+    sleep $((n * 30)); n=$((n + 1))
+  done
+  echo "  ✓ enabled ${#missing[@]} API(s)"
+}

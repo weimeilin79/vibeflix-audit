@@ -41,7 +41,7 @@ echo "[setup_firestore] project=$PROJECT region=$REGION database=$DATABASE"
 gcloud config set project "$PROJECT" >/dev/null
 
 echo "[setup_firestore] 1/4 enabling the Firestore API…"
-gcloud services enable firestore.googleapis.com
+ensure_apis firestore.googleapis.com
 
 echo "[setup_firestore] 2/4 creating the '$DATABASE' database (native mode)…"
 # Dedicated named DB — isolated from the project's shared (default) database.
