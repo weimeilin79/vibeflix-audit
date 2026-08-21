@@ -55,17 +55,45 @@ BUILD_SA_FLAG=""
 [ -n "${CLOUDBUILD_SA:-}" ] && BUILD_SA_FLAG="--service-account=projects/$PROJECT/serviceAccounts/$CLOUDBUILD_SA"
 
   echo "[mcp-deploy] building images (parallel Cloud Build)…"
+  IDS=""
   for G in mcp_licensing mcp_market mcp_brand_style; do
-    gcloud builds submit "$ROOT" --config "$HERE/cloudbuild-mcp.yaml" \
+    ID="$(gcloud builds submit "$ROOT" --config "$HERE/cloudbuild-mcp.yaml" \
       $BUILD_SA_FLAG \
-      --substitutions "_GROUP=$G,_IMAGE=$AR/${G//_/-}" --async --format 'value(id)'
+      --substitutions "_GROUP=$G,_IMAGE=$AR/${G//_/-}" --async --format 'value(id)')"
+    echo "  $G → $ID"
+    IDS="$IDS $ID"
   done
+
+  # Wait on OUR THREE BUILD IDS — never on "is anything still building in this project".
+  #
+  # The previous version polled `gcloud builds list --ongoing` until the count hit zero. That
+  # works on a laptop and DEADLOCKS inside Cloud Build: the parent build running this script is
+  # itself ongoing, so the count can never reach zero, and the parent cannot exit until this
+  # loop does. The images finish in minutes; the install then hangs until the 3h build timeout
+  # with nothing in the log but "waiting for builds…".
+  #
+  # It was also wrong in a quieter way — a colleague's unrelated build in the same project would
+  # have held it up, and the failure check ("last 3 builds, any not SUCCESS") could report THEIR
+  # failure as ours.
   echo "[mcp-deploy] waiting for builds…"
-  until [ "$(gcloud builds list --project "$PROJECT" --ongoing --format 'value(id)' | wc -l | tr -d ' ')" = "0" ]; do
-    sleep 15
+  RC=0
+  for ID in $IDS; do
+    while :; do
+      ST="$(gcloud builds describe "$ID" --project "$PROJECT" --format='value(status)' 2>/dev/null)"
+      case "$ST" in
+        SUCCESS) echo "  ✓ $ID SUCCESS"; break ;;
+        FAILURE|TIMEOUT|CANCELLED|EXPIRED|INTERNAL_ERROR)
+          # Name the status: TIMEOUT (too slow / machine too small) and FAILURE (the image
+          # genuinely does not build) need completely different fixes.
+          echo "  ✗ $ID $ST" >&2
+          echo "    https://console.cloud.google.com/cloud-build/builds/$ID?project=$PROJECT" >&2
+          RC=1; break ;;
+        "") echo "  ! could not read status for $ID — retrying" >&2; sleep 15 ;;
+        *) sleep 15 ;;
+      esac
+    done
   done
-  FAILED="$(gcloud builds list --project "$PROJECT" --limit 3 --filter 'status!=SUCCESS' --format 'value(id)')"
-  [ -z "$FAILED" ] || { echo "ERROR: build(s) failed: $FAILED" >&2; exit 1; }
+  [ "$RC" = 0 ] || { echo "ERROR: MCP image build(s) did not succeed — see the link(s) above" >&2; exit 1; }
 fi
 
 echo "[mcp-deploy] terraform apply…"

@@ -57,6 +57,30 @@ ensure_apis \
 
 echo "▶ 4/9 foundations: Artifact Registry repo + telemetry topic (Terraform)"
 terraform -chdir=deploy/terraform/foundations init -input=false >/dev/null
+
+# Adopt resources that already exist but are NOT in the state file.
+#
+# Terraform's state is the only record that it created something. Lose the state and `apply`
+# tries to create the resource again, which fails with ALREADY_EXISTS on a resource that is
+# perfectly healthy — and the fix looks like "delete your registry", which would take the
+# images in it with it.
+#
+# State goes missing more easily than it sounds: a Cloud Build run keeps it in the build
+# workspace and only persists it when the build ENDS, so a cancelled or timed-out install
+# leaves the resources created and the state gone. Importing first makes the step idempotent
+# with or without state.
+tf_adopt() {   # tf_adopt <terraform address> <import id>
+  terraform -chdir=deploy/terraform/foundations state show "$1" >/dev/null 2>&1 && return 0
+  terraform -chdir=deploy/terraform/foundations import \
+    -var project="$PROJECT" -var region="$REGION" \
+    -var pubsub_topic="${PUBSUB_TOPIC:-vibeflix-mesh-events}" "$1" "$2" >/dev/null 2>&1 \
+    && echo "  ✓ adopted pre-existing $1 into terraform state"
+  return 0   # not existing in the cloud either is the normal first-run case
+}
+tf_adopt google_artifact_registry_repository.vibeflix \
+  "projects/$PROJECT/locations/$REGION/repositories/${AR_REPO_ID:-vibeflix}"
+tf_adopt google_pubsub_topic.telemetry \
+  "projects/$PROJECT/topics/${PUBSUB_TOPIC:-vibeflix-mesh-events}"
 terraform -chdir=deploy/terraform/foundations apply -auto-approve \
   -var project="$PROJECT" -var region="$REGION" \
   -var pubsub_topic="${PUBSUB_TOPIC:-vibeflix-mesh-events}"
