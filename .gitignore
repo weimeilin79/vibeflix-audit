@@ -66,3 +66,7 @@ packages/vibeflix-common/build/
 # deploy. Committing it means a fresh clone starts holding ANOTHER project engine ids and
 # identity principals (see the guard in deploy/deploy_agents_a2a.py).
 deploy/agent_identities.json
+
+# deploy_mesh.sh per-phase logs + resume state
+logs/
+.mesh_state

@@ -56,12 +56,13 @@ DESC_orchestrator="orchestrator: deploy, collect, grant"
 DESC_app="ui_renderer, app IAM, app deploy"
 DESC_gateway="registry + gateway + egress policy, then redeploy all six to attach"
 
-SKIP_GATEWAY=0; VERIFY=1; FROM=""; ONLY=""
+SKIP_GATEWAY=0; VERIFY=1; FROM=""; ONLY=""; RESUME=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:?--from needs a phase}"; shift 2 ;;
     --only) ONLY="${2:?--only needs a phase}"; shift 2 ;;
     --skip-gateway) SKIP_GATEWAY=1; shift ;;
+    --resume) RESUME=1; shift ;;
     --no-verify) VERIFY=0; shift ;;
     --list)
       echo "phases, in order:"
@@ -81,7 +82,60 @@ c_ok()   { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 c_warn() { printf "\033[1;33m!\033[0m %s\n" "$*"; }
 c_die()  { printf "\033[1;31m✗ %s\033[0m\n" "$*" >&2; exit 1; }
 
+# ── logging ────────────────────────────────────────────────────────────────────────────────
+# One log FILE per phase, not one wall of text. A backgrounded run (nohup) is otherwise close
+# to undebuggable: the failure is thousands of lines up, interleaved with five other things,
+# and you cannot tell which phase it belonged to. Here each phase writes its own small file,
+# and a failure reprints the tail of that file at the very END of the output — where you look
+# first when you reconnect and find the job stopped.
+LOG_DIR="$ROOT/logs"; mkdir -p "$LOG_DIR"
+STATE_FILE="$ROOT/.mesh_state"
+PHASE_NAME="startup"; PHASE_LOG="$LOG_DIR/00-startup.log"; PHASE_START=$SECONDS
+: > "$PHASE_LOG"
+
+start_phase() {   # start_phase <nn> <name> <description>
+  PHASE_NAME="$2"; PHASE_LOG="$LOG_DIR/$1-$2.log"; PHASE_START=$SECONDS
+  : > "$PHASE_LOG"
+  c_step "$2" "$3"
+  printf "    log: %s\n" "${PHASE_LOG#$ROOT/}"
+}
+
+fail_phase() {    # fail_phase <what failed> <exit code>
+  printf "\n\033[1;31m✗ phase '%s' FAILED\033[0m — %s (exit %s)\n" "$PHASE_NAME" "$1" "$2" >&2
+  printf "\n── last 40 lines of %s ──\n" "${PHASE_LOG#$ROOT/}" >&2
+  tail -40 "$PHASE_LOG" >&2
+  printf -- "──\n\n" >&2
+  printf "full log : %s\n" "$PHASE_LOG" >&2
+  printf "resume   : ./deploy_mesh.sh --from %s\n" "$PHASE_NAME" >&2
+  exit 1
+}
+
+run() {           # run <command…> — stream to the console AND the phase log; die with context
+  set +e
+  "$@" 2>&1 | tee -a "$PHASE_LOG"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  [ "$rc" -eq 0 ] || fail_phase "$*" "$rc"
+}
+
+end_phase() {
+  echo "$PHASE_NAME" > "$STATE_FILE"
+  local d=$((SECONDS - PHASE_START))
+  c_ok "$PHASE_NAME complete in $((d / 60))m$((d % 60))s"
+}
+
 valid() { local p; for p in "${PHASES[@]}"; do [ "$p" = "$1" ] && return 0; done; return 1; }
+# --resume: pick up at the phase AFTER the last one that completed. Re-running the completed
+# phase would also be safe (they are all idempotent), just slower.
+if [ "$RESUME" = 1 ]; then
+  [ -s "$STATE_FILE" ] || c_die "nothing to resume — no $STATE_FILE from a previous run."
+  _last="$(cat "$STATE_FILE")"
+  for _i in "${!PHASES[@]}"; do
+    [ "${PHASES[$_i]}" = "$_last" ] && FROM="${PHASES[$((_i + 1))]:-}"
+  done
+  [ -n "$FROM" ] && echo "resuming after '$_last' → starting at '$FROM'" \
+                 || { c_ok "all phases already completed (last: $_last)"; exit 0; }
+fi
 [ -n "$FROM" ] && { valid "$FROM" || c_die "no such phase '$FROM' — see --list"; }
 [ -n "$ONLY" ] && { valid "$ONLY" || c_die "no such phase '$ONLY' — see --list"; }
 
@@ -137,7 +191,8 @@ verify() {
   local script="deploy/verify/$1" attempts="${2:-3}" n=1
   [ -x "$script" ] || { c_warn "$script not found — skipping"; return 0; }
   while :; do
-    if "$script"; then c_ok "$1 passed"; return 0; fi
+    set +e; "$script" 2>&1 | tee -a "$PHASE_LOG"; local rc=${PIPESTATUS[0]}; set -e
+    if [ "$rc" -eq 0 ]; then c_ok "$1 passed"; return 0; fi
     [ "$n" -ge "$attempts" ] && c_die "$1 failed after $n attempts — read the ✗ lines above.
    Fix the cause, then resume with:  ./deploy_mesh.sh --from <phase>"
     c_warn "$1 failed (attempt $n/$attempts) — IAM may still be propagating; retrying in 45s"
@@ -149,23 +204,23 @@ verify() {
 # precisely so it cannot be forgotten (rule 1).
 deploy_agent() {
   local dir="$1" name="$2"
-  python deploy/deploy_agents_a2a.py "$dir"
-  python deploy/collect_agent_identities.py
-  ./deploy/grant_agent_access.sh "$name"
+  run python deploy/deploy_agents_a2a.py "$dir"
+  run python deploy/collect_agent_identities.py
+  run ./deploy/grant_agent_access.sh "$name"
 }
 
 START_TS=$SECONDS
 
 # ── init ───────────────────────────────────────────────────────────────────────────────────
 if want init; then
-  c_step "init" "$DESC_init"
+  start_phase 01 init "$DESC_init"
   # init.sh PROMPTS for a project id if it cannot resolve one. That would hang an unattended
   # run forever, so establish it here instead and fail fast with an instruction.
   if [ -z "${PROJECT:-}" ] && [ -z "$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$')" ]; then
     c_die "no project set. Run:  gcloud config set project <your-project-id>
    (or:  PROJECT=<your-project-id> ./deploy_mesh.sh )"
   fi
-  ./init.sh
+  run ./init.sh
   reload_env
   assert_project    # before anything below spends a call on the wrong project
 
@@ -208,32 +263,35 @@ c_ok "project=$PROJECT region=${REGION:-us-central1}"
 
 # ── foundations ────────────────────────────────────────────────────────────────────────────
 if want foundations; then
-  c_step "foundations" "$DESC_foundations"
-  ./workshop/setup.sh
+  start_phase 02 foundations "$DESC_foundations"
+  run ./workshop/setup.sh
   reload_env
   verify step1.sh
+  end_phase
 fi
 
 # ── brand_style ────────────────────────────────────────────────────────────────────────────
 if want brand; then
-  c_step "brand_style" "$DESC_brand"
+  start_phase 03 brand "$DESC_brand"
   deploy_agent brand_style brand-style
   verify step2.sh
+  end_phase
 fi
 
 # ── deal_pricing ───────────────────────────────────────────────────────────────────────────
 if want pricing; then
-  c_step "deal_pricing" "$DESC_pricing"
+  start_phase 04 pricing "$DESC_pricing"
   deploy_agent deal_pricing deal-pricing
   verify step3.sh
+  end_phase
 fi
 
 # ── legal + vendor_clearance ───────────────────────────────────────────────────────────────
 if want legal; then
-  c_step "legal + vendor_clearance" "$DESC_legal"
+  start_phase 05 legal "$DESC_legal"
   # Corpus FIRST (rule 2) — it writes RAG_CORPUS into deploy/.env, which legal's engine env is
   # baked from. Then re-read .env before deploying anything.
-  ./deploy/setup_legal_rag.sh
+  run ./deploy/setup_legal_rag.sh
   reload_env
   [ -n "${RAG_CORPUS:-}" ] || c_die "setup_legal_rag.sh did not write RAG_CORPUS to deploy/.env.
    Deploying legal now would ship an agent that silently answers from the keyword fallback."
@@ -243,34 +301,38 @@ if want legal; then
   # vendor_clearance's env needs LEGAL_A2A_URL, which deploy_agent's collect just wrote.
   deploy_agent vendor_clearance vendor-clearance
   verify step4.sh
+  end_phase
 fi
 
 # ── orchestrator ───────────────────────────────────────────────────────────────────────────
 if want orchestrator; then
-  c_step "orchestrator" "$DESC_orchestrator"
+  start_phase 06 orchestrator "$DESC_orchestrator"
   deploy_agent orchestrator orchestrator
   verify step5.sh
+  end_phase
 fi
 
 # ── ui_renderer + the app ──────────────────────────────────────────────────────────────────
 if want app; then
-  c_step "ui_renderer + app" "$DESC_app"
+  start_phase 07 app "$DESC_app"
   deploy_agent ui_renderer ui-renderer
   # App IAM before the app itself (rule 3) — deploy_app.sh runs the service as this SA, and this
   # is where the app gets run.invoker on the three MCP servers.
-  ./deploy/setup_app_iam.sh
-  ./deploy/deploy_app.sh
+  run ./deploy/setup_app_iam.sh
+  run ./deploy/deploy_app.sh
   verify step6.sh
+  end_phase
 fi
 
 # ── gateway ────────────────────────────────────────────────────────────────────────────────
 if want gateway && [ "$SKIP_GATEWAY" = 0 ]; then
-  c_step "gateway" "$DESC_gateway"
-  ./deploy/setup_gateway.sh
+  start_phase 08 gateway "$DESC_gateway"
+  run ./deploy/setup_gateway.sh
   # The attach IS a redeploy (rule 4). No argument = all six engines.
-  python deploy/deploy_agents_a2a.py
-  python deploy/collect_agent_identities.py
+  run python deploy/deploy_agents_a2a.py
+  run python deploy/collect_agent_identities.py
   verify step7.sh
+  end_phase
 elif [ "$SKIP_GATEWAY" = 1 ]; then
   c_warn "gateway phase skipped (--skip-gateway) — engines run WITHOUT governed egress."
 fi

@@ -59,3 +59,7 @@ data/
 **/.DS_Store
 deploy/agent_identities.json
 deploy/.env
+
+# deploy_mesh.sh run logs — never needed in a build context
+/logs/
+/.mesh_state
