@@ -20,7 +20,7 @@ What stops it from calling the licensing server and writing itself a contract?
 
 Right now: its own IAM. And nothing else.
 
-That's real. It's not nothing. But it's coarse. It says *this agent may reach that server.* It does not say *this agent may call this one tool, and nothing else.*
+That's real, and it's coarse. IAM grants reach to a whole server. The thing it can't express is *this agent may call this one tool, and nothing else.*
 
 Today we close that gap. And the word that matters is **path.**
 
@@ -136,7 +136,7 @@ Compare that to Step 6. The task-store URL turned out to be computable, so no se
 
 This one is a relationship to a thing that didn't exist yet.
 
-**Until this pass, the agents' egress isn't governed.** So this isn't a formality. This is the step where the guardrail actually goes into the path.
+**Until this pass, the agents' egress isn't governed.** This is the step where the guardrail actually goes into the path.
 
 ---
 
@@ -226,9 +226,7 @@ Let's put it together. This is the payoff of the entire workshop.
 
 [BEAT]
 
-At no point did we write a document saying what should be allowed.
-
-At every point we changed what is **possible.**
+At every step we changed what is **possible.** The allowlist is the running system.
 
 That's what guardrails means here. Physics.
 

@@ -86,7 +86,7 @@ That's the fan-out earning its keep.
 
 A sequential pipeline stops at the first failure and tells you one thing. Here, the vendor gets told everything that's true about their deal, in one pass. The artwork is fine. The money is fine. There's a contract in the way.
 
-And notice the block is **specific.** Not "rejected". A named partner. A named category. A contract expiry date.
+And notice the block is **specific.** A named partner. A named category. A contract expiry date.
 
 That came out of a registry row, through a deterministic tool. Exactly the kind of fact you never want a model inferring from prose.
 
@@ -108,7 +108,7 @@ Answer it. The run continues. The vendor gets onboarded. Clearance hands off to 
 
 Two things to call out.
 
-First — **this is the same conversation you had in the Dev UI in Step 4.** But here you can just answer. Because the console has a **form.** The state fields come from the form, not from your sentence.
+First — **this is the same conversation you had in the Dev UI in Step 4.** But here you can just answer. Because the console has a **form.** The state fields come from the form.
 
 Same agent. Different transport. Much better experience. Worth having seen both halves.
 
@@ -242,7 +242,7 @@ And the ideas underneath. MCP. Deterministic versus non-deterministic work. Skil
 
 If you remember one sentence from all eight steps, make it this one.
 
-**The model does the fuzzy work. Code does the deciding. Governance sits in the path, not in a document.**
+**The model does the fuzzy work. Code does the deciding. Governance sits in the traffic path.**
 
 Every design decision in this system is that sentence, applied at a different altitude.
 
@@ -280,7 +280,7 @@ Three things.
 
 **Read the design docs** in the repo. The architecture notes go deeper than a workshop can.
 
-**And the operational runbook** — if you want to run something like this for real, not just for a day.
+**And the operational runbook** — if you want to run something like this beyond a workshop day.
 
 [BEAT]
 
@@ -288,8 +288,6 @@ Thanks for building this with me.
 
 You now have a mesh where six agents move real money and sign real contracts.
 
-And the interesting engineering was never about making them smart.
-
-It was deciding, over and over, which decisions they were never allowed to make.
+And the interesting engineering was all in one question, asked over and over: which decisions are these agents allowed to make?
 
 [SCREEN: the finished console, one last time.]

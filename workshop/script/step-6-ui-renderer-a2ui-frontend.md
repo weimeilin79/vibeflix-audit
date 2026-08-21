@@ -80,9 +80,7 @@ So what does the app actually do?
 
 It runs the audit by calling the **orchestrator** over A2A. It turns reports into panels by calling the **renderer** over A2A. And it hosts the shared task store the engines read and write — the piece from Step 5.
 
-What it does **not** do is run any agent workflow itself. No fan-out. No reasoning. No business logic.
-
-Thin client, plus one piece of shared infrastructure.
+Every workflow runs somewhere else. The app stays a thin client, plus one piece of shared infrastructure.
 
 Which is why it runs pinned to a single instance. It's the one component holding state that everything else depends on.
 
@@ -214,7 +212,7 @@ Try a second one — **exclusivity block.** Same request, North America, where a
 
 [BEAT]
 
-Give that ten seconds of appreciation. One branch failed. It didn't take down the run. It didn't hide the other results. And it produced a specific reason a vendor can act on.
+Give that ten seconds of appreciation. One branch failed. The run carried on, the other two verdicts still came back, and the vendor got a specific reason they can act on.
 
 [DO: Ctrl+C.]
 

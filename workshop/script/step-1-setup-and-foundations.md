@@ -24,7 +24,7 @@ Six agents, deployed separately. Each one has its own identity. They call three 
 
 This is where we start. Nothing.
 
-Today we don't build an agent. Today we build the ground the agents stand on. And I want you watching *why* we build it this way — because almost every decision in the next seven steps traces back to something we do in the next twenty minutes.
+Today we build the ground the agents stand on. And I want you watching *why* we build it this way — because almost every decision in the next seven steps traces back to something we do in the next twenty minutes.
 
 ---
 
@@ -221,7 +221,7 @@ This is the single most common way people lose twenty minutes on this workshop.
 
 A new tab starts in your home directory with a clean environment. Skip those two lines, and you're running Cloud Shell's *system* Python instead of the project's.
 
-And watch what that failure looks like. It doesn't say "wrong Python". It says `ImportError`. From somewhere deep inside a Google library. You will chase that for a while.
+And watch what that failure looks like. You get an `ImportError`, from somewhere deep inside a Google library. You will chase that for a while.
 
 Note the `source`. Running `./env.sh` on its own does nothing — a script can't change the shell that launched it. It'll tell you if you get it backwards.
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# deploy_mesh.sh — build the entire Vibeflix mesh, init.sh through the gateway, in one command.
+# deploy/deploy_mesh.sh — build the entire Vibeflix mesh, init.sh through the gateway, in one command.
 #
-#     ./deploy_mesh.sh                  # everything, on a fresh project
-#     ./deploy_mesh.sh --from legal     # resume from a phase (see --list)
-#     ./deploy_mesh.sh --only app       # run exactly one phase
-#     ./deploy_mesh.sh --list           # what the phases are
-#     ./deploy_mesh.sh --skip-gateway   # stop after the app (Steps 1-6)
-#     ./deploy_mesh.sh --no-verify      # skip the verify/step*.sh checkpoints (not advised)
+#     ./deploy/deploy_mesh.sh                  # everything, on a fresh project
+#     ./deploy/deploy_mesh.sh --from legal     # resume from a phase (see --list)
+#     ./deploy/deploy_mesh.sh --only app       # run exactly one phase
+#     ./deploy/deploy_mesh.sh --list           # what the phases are
+#     ./deploy/deploy_mesh.sh --skip-gateway   # stop after the app (Steps 1-6)
+#     ./deploy/deploy_mesh.sh --no-verify      # skip the verify/step*.sh checkpoints (not advised)
 #
 # This is the workshop lab (workshop/lab.en.md) with the prose removed — same scripts, same
 # order. The lab remains the source of truth for WHY; this file exists so a second service can
@@ -44,7 +44,7 @@
 #
 # Every phase is idempotent: re-running is the normal way to recover from a failure.
 # ── EXECUTE this file; never source it ─────────────────────────────────────────────────────
-# The workshop teaches `source ./env.sh`, so `source ./deploy_mesh.sh` is the natural next
+# The workshop teaches `source ./env.sh`, so `source ./deploy/deploy_mesh.sh` is the natural next
 # thing to type — and it is destructive in a way that hides its own cause:
 #   • every `exit` below then exits YOUR SHELL. In Cloud Shell that closes the tab, so the
 #     error message this script printed a line earlier vanishes with it — the failure looks
@@ -56,13 +56,15 @@
 # be sourced, because its whole job is to change the current shell.)
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   echo "✗ deploy_mesh.sh must be RUN, not sourced. Use:" >&2
-  echo "      ./deploy_mesh.sh" >&2
+  echo "      ./deploy/deploy_mesh.sh" >&2
   echo "  (sourcing it would close this terminal on the first error, hiding the error.)" >&2
   return 1 2>/dev/null || exit 1
 fi
 
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
+# This script lives in deploy/ but every path below is relative to the REPO ROOT (./init.sh,
+# ./workshop/setup.sh, python deploy/…, . ./env.sh). Climb one level and work from there.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 
 PHASES=(init foundations brand pricing legal orchestrator app gateway)
 DESC_init="init.sh — CLI checks, venv + pinned deps, terraform, deploy/.env"
@@ -131,7 +133,7 @@ fail_phase() {    # fail_phase <what failed> <exit code>
   tail -40 "$PHASE_LOG" >&2
   printf -- "──\n\n" >&2
   printf "full log : %s\n" "$PHASE_LOG" >&2
-  printf "resume   : ./deploy_mesh.sh --from %s\n" "$PHASE_NAME" >&2
+  printf "resume   : ./deploy/deploy_mesh.sh --from %s\n" "$PHASE_NAME" >&2
   exit 1
 }
 
@@ -195,7 +197,7 @@ assert_project() {
      For a NEW project, regenerate the config from scratch:
          rm deploy/.env deploy/agent_identities.json
          rm -rf deploy/terraform/*/.terraform deploy/terraform/*/terraform.tfstate*
-         PROJECT=$INTENDED_PROJECT ./deploy_mesh.sh
+         PROJECT=$INTENDED_PROJECT ./deploy/deploy_mesh.sh
      To keep building the existing one, unset PROJECT and set gcloud to $PROJECT."
   fi
 
@@ -219,7 +221,7 @@ verify() {
     set +e; "$script" 2>&1 | tee -a "$PHASE_LOG"; local rc=${PIPESTATUS[0]}; set -e
     if [ "$rc" -eq 0 ]; then c_ok "$1 passed"; return 0; fi
     [ "$n" -ge "$attempts" ] && c_die "$1 failed after $n attempts — read the ✗ lines above.
-   Fix the cause, then resume with:  ./deploy_mesh.sh --from <phase>"
+   Fix the cause, then resume with:  ./deploy/deploy_mesh.sh --from <phase>"
     c_warn "$1 failed (attempt $n/$attempts) — IAM may still be propagating; retrying in 45s"
     sleep 45; n=$((n + 1))
   done
@@ -243,7 +245,7 @@ if want init; then
   # run forever, so establish it here instead and fail fast with an instruction.
   if [ -z "${PROJECT:-}" ] && [ -z "$(gcloud config get-value project 2>/dev/null | grep -v '^(unset)$')" ]; then
     c_die "no project set. Run:  gcloud config set project <your-project-id>
-   (or:  PROJECT=<your-project-id> ./deploy_mesh.sh )"
+   (or:  PROJECT=<your-project-id> ./deploy/deploy_mesh.sh )"
   fi
   run ./init.sh
   reload_env

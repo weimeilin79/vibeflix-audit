@@ -9,7 +9,7 @@
 # so nothing on your side — closed tab, dropped network, timed-out shell, closed laptop — can
 # interrupt it. The logs are permanent and readable afterwards, which the terminal's are not.
 #
-# Everything else about the install is unchanged: this runs the SAME ./deploy_mesh.sh you would
+# Everything else about the install is unchanged: this runs the SAME ./deploy/deploy_mesh.sh you would
 # run by hand, so there is no second code path to keep in sync.
 timeout: 10800s          # 3h. The engine deploys dominate; 1h is cutting it close on a cold project.
 options:
@@ -40,7 +40,7 @@ steps:
         python3 -V
         gcloud config set project "$PROJECT_ID" -q 2>/dev/null
 
-        # deploy_mesh.sh reads PROJECT (or gcloud config) and refuses to build into a project
+        # deploy/deploy_mesh.sh reads PROJECT (or gcloud config) and refuses to build into a project
         # other than the one it was asked for — set it explicitly rather than relying on the
         # build's ambient config.
         export PROJECT="$PROJECT_ID"
@@ -72,8 +72,8 @@ steps:
           gcloud storage cp "$$STATE/tfstate-$$TFDIR" "deploy/terraform/$$TFDIR/terraform.tfstate" 2>/dev/null             && echo "  ✓ terraform state ($$TFDIR)" || true
         done
 
-        echo "── ./deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
-        ./deploy_mesh.sh ${_MESH_ARGS}
+        echo "── ./deploy/deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
+        ./deploy/deploy_mesh.sh ${_MESH_ARGS}
         rc=$$?
 
         # Upload the per-phase logs whether we passed or FAILED — a failed build is exactly when

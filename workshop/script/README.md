@@ -116,6 +116,6 @@ from overselling it.
 Every step is a variation on one idea, and each script restates it in its own terms:
 
 > The model does the **fuzzy** work. Deterministic code does the **deciding**.
-> Governance sits **in the path**, not in a document.
+> Governance sits **in the traffic path**.
 
 If a segment doesn't serve that, it's a candidate for the cutting-room floor.

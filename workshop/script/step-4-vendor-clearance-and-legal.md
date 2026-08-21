@@ -128,7 +128,7 @@ So how does one agent call another?
 
 The *task* is the unit of work. Remember that. It matters enormously in Step 5.
 
-In ADK you don't write those calls by hand. You construct a remote agent with the target's card, and from then on you invoke it like a local sub-agent.
+In ADK, you construct a remote agent with the target's card, and from then on you invoke it like a local sub-agent. The HTTP is handled for you.
 
 [BEAT]
 
@@ -161,7 +161,7 @@ python deploy/deploy_agents_a2a.py vendor_clearance
 python deploy/collect_agent_identities.py
 ```
 
-Look at that order. There's a `collect` **in between**. That's not decoration.
+Look at that order. There's a `collect` **in between**. That one is load-bearing.
 
 Vendor clearance calls legal. So it has to deploy knowing legal's A2A URL. That URL contains legal's engine id. Which doesn't exist until legal is deployed. The deploy script reads it from the identities file — and only `collect` writes that file.
 

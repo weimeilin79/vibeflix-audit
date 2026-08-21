@@ -712,7 +712,7 @@ Everything lives in **`deploy/`** (scripts + Terraform), with the full guide in
 **[`deploy/docs/README.md`](deploy/docs/README.md)** and the teaching version — the same steps
 with the reasoning — in **[`workshop/lab.en.md`](workshop/lab.en.md)**.
 
-### 🚀 Install the whole mesh: `./deploy_mesh.sh`
+### 🚀 Install the whole mesh: `./deploy/deploy_mesh.sh`
 
 One command takes a **brand-new project** from empty to a running mesh: foundations, 3 MCP
 servers, 6 agents, the RAG corpus, the console app, and the gateway.
@@ -720,10 +720,10 @@ servers, 6 agents, the RAG corpus, the console app, and the gateway.
 ```bash
 gcloud config set project <new-project-id>
 git clone https://github.com/weimeilin79/vibeflix-audit && cd vibeflix-audit
-./deploy_mesh.sh
+./deploy/deploy_mesh.sh
 ```
 
-**Run it, don't source it.** `./deploy_mesh.sh`, never `. deploy_mesh.sh` — sourcing makes
+**Run it, don't source it.** `./deploy/deploy_mesh.sh`, never `. deploy/deploy_mesh.sh` — sourcing makes
 every `exit` in the script exit *your shell*, which in Cloud Shell closes the tab and takes the
 error message with it. The script refuses to be sourced for exactly this reason (`env.sh` is
 the opposite: it must be sourced, because its job is to change your shell).
@@ -747,7 +747,7 @@ old project from `.env`, succeeds, and reports success.
 | `app` | `ui_renderer`, app IAM, console app |
 | `gateway` | registry + gateway + egress policy, then redeploy all six to attach |
 
-`./deploy_mesh.sh --list` prints them; `--skip-gateway` stops after the app.
+`./deploy/deploy_mesh.sh --list` prints them; `--skip-gateway` stops after the app.
 
 **When it fails** — and on a cold project something usually does once — every phase writes its
 own log, and the failure is reprinted at the *end* of the output rather than buried:
@@ -757,15 +757,15 @@ own log, and the failure is reprinted at the *end* of the output rather than bur
 ── last 40 lines of logs/05-legal.log ──
 ERROR: vectorsearch PERMISSION_DENIED …
 ──
-resume   : ./deploy_mesh.sh --from legal
+resume   : ./deploy/deploy_mesh.sh --from legal
 ```
 
 Every phase is idempotent, so re-running is the normal way to recover:
 
 ```bash
-./deploy_mesh.sh --resume        # continue after the last phase that completed
-./deploy_mesh.sh --from legal    # or name one
-./deploy_mesh.sh --only app      # just one
+./deploy/deploy_mesh.sh --resume        # continue after the last phase that completed
+./deploy/deploy_mesh.sh --from legal    # or name one
+./deploy/deploy_mesh.sh --only app      # just one
 ```
 
 #### Running it in Cloud Build instead

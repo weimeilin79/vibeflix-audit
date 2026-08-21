@@ -134,7 +134,7 @@ Here's what makes this one genuinely nasty.
 
 It appears when you scale. Which is to say — it appears in production, under load, at exactly the moment you least want a new class of failure.
 
-And it doesn't look like an architecture problem. It looks like a timeout. Or a flaky agent.
+And it looks like a timeout. Or a flaky agent.
 
 In the real build of this system, this showed up in traces as a huge share of every span. Twenty-six percent of all spans in the system were this bug.
 
@@ -144,7 +144,7 @@ Here's the general lesson, and it's older than agents.
 
 **Any time you have a stateful handle plus a load balancer — ask where the state lives.**
 
-If the answer is "in the memory of whichever instance answered first", you have this bug. It doesn't matter that these are agents. This is as old as web sessions.
+If the answer is "in the memory of whichever instance answered first", you have this bug. This one is as old as web sessions.
 
 ---
 
@@ -237,7 +237,7 @@ Nothing in that request is arbitrary. Every field dodges a block you've already 
 
 **The image and the character have to agree.** Brand style looks at the artwork and compares. Point it at the wrong character's mock-up and you get a mismatch.
 
-**The medium is supplied on purpose.** These are character *artwork* files, not product mock-ups. Leave it blank and brand style infers something like "artwork" — which isn't on the approved list. Flagged.
+**The medium is supplied on purpose.** These files are character *artwork*. Leave it blank and brand style infers something like "artwork" — which isn't on the approved list. Flagged.
 
 **Stitch, vinyl figures, North America** — no exclusivity lock. Stitch's lock is in Asia-Pacific.
 
