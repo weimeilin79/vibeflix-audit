@@ -57,9 +57,14 @@ BUILD_SA_FLAG=""
   echo "[mcp-deploy] building images (parallel Cloud Build)…"
   IDS=""
   for G in mcp_licensing mcp_market mcp_brand_style; do
+    # tail -n1: `--format 'value(id)'` puts the id on stdout and progress on stderr, but a
+    # deprecation notice or warning landing on stdout would make ID multi-line and every later
+    # `describe "$ID"` fail. Take the last line and strip whitespace.
     ID="$(gcloud builds submit "$ROOT" --config "$HERE/cloudbuild-mcp.yaml" \
       $BUILD_SA_FLAG \
-      --substitutions "_GROUP=$G,_IMAGE=$AR/${G//_/-}" --async --format 'value(id)')"
+      --substitutions "_GROUP=$G,_IMAGE=$AR/${G//_/-}" --async --format 'value(id)' \
+      | tail -n1 | tr -d '[:space:]')"
+    [ -n "$ID" ] || { echo "ERROR: $G build was submitted but returned no build id." >&2; exit 1; }
     echo "  $G → $ID"
     IDS="$IDS $ID"
   done
@@ -78,6 +83,7 @@ BUILD_SA_FLAG=""
   echo "[mcp-deploy] waiting for builds…"
   RC=0
   for ID in $IDS; do
+    MISSES=0
     while :; do
       ST="$(gcloud builds describe "$ID" --project "$PROJECT" --format='value(status)' 2>/dev/null)"
       case "$ST" in
@@ -88,8 +94,15 @@ BUILD_SA_FLAG=""
           echo "  ✗ $ID $ST" >&2
           echo "    https://console.cloud.google.com/cloud-build/builds/$ID?project=$PROJECT" >&2
           RC=1; break ;;
-        "") echo "  ! could not read status for $ID — retrying" >&2; sleep 15 ;;
-        *) sleep 15 ;;
+        "") # Unreadable status: a transient API blip is fine, but never wait forever on it —
+            # that would trade one unterminable loop for another.
+            MISSES=$((MISSES + 1))
+            if [ "$MISSES" -ge 8 ]; then
+              echo "  ✗ cannot read status of $ID after $MISSES tries (2 min) — giving up." >&2
+              RC=1; break
+            fi
+            echo "  ! could not read status for $ID ($MISSES/8) — retrying" >&2; sleep 15 ;;
+        *) MISSES=0; sleep 15 ;;
       esac
     done
   done

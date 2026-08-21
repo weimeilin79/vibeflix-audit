@@ -8,115 +8,77 @@
 
 [SCREEN: a deal sheet — 10% royalty, 30,000 units. Next to it, a rate card showing 14%.]
 
-A vendor agrees to a 10% royalty. And they've got a reason.
+A vendor has agreed to a 10% royalty and attached a justification, which is that they qualify for a high-volume discount.
 
-High-volume discount, they say.
+If you look at the rate card, the base rate for this character is 14%, and there genuinely is a volume discount band. The band begins at 100,000 units a year, and this vendor projects 30,000, so the discount they're claiming doesn't apply to them and the deal is underpriced by a wide margin.
 
-[BEAT]
-
-Here's the rate card. Base rate for this character: 14%. And yes — there *is* a volume discount band.
-
-It starts at 100,000 units.
-
-This vendor projects 30,000.
-
-[BEAT]
-
-So the discount they're claiming doesn't apply to them. The deal is underpriced by a wide margin.
-
-Now look at where the difficulty actually was. **The arithmetic was never in question.** Any spreadsheet multiplies a base rate by a modifier.
-
-The hard part was testing a *claim* against the tier the vendor actually qualifies for.
-
-That's this step. One agent, running a small reasoning loop inside itself — while every number it reports comes from a tool.
+What I want you to notice is where the difficulty actually sat. Multiplying a base rate by a category modifier is arithmetic that any spreadsheet can do. The hard part was testing the vendor's claim against the tier they actually qualify for, and that's the job this agent does.
 
 ---
 
-## 02:00 — Why one agent isn't one model call
+## 02:00 — Why this can't be a single model call
 
-Last agent was one shot. Look at the image. Call a tool. Report.
+The last agent was one shot: look at the image, call a tool, report the answer. Pricing needs a different shape, and it's worth being precise about why.
 
-Pricing can't work like that. Here's why.
+The agent has to pull the expected deal from the rate card and compare it to what was agreed, component by component. It notices that the royalty rate is off, but the vendor has attached a reason for it. It can't simply accept that reason, and it can't simply reject it either, so it has to go and check whether the claimed factor genuinely applies before it decides anything.
 
-The agent has to pull the expected deal from the rate card. Compare it to what was agreed, line by line. Spot that the royalty rate is off — but the vendor attached a *reason*.
+That's several model calls, in a particular order, with a decision point in the middle of them.
 
-It can't just accept the reason. It can't just reject it either. It has to go check whether the claimed factor actually applies. Then decide.
-
-That's several model calls. In a specific order. With a decision point in the middle.
-
-[BEAT]
-
-And this is where a lot of agent designs go wrong.
-
-The temptation is one enormous prompt. "Think step by step. Check the claim. Decide." And hope the model holds the whole procedure in its head.
-
-It will. Most of the time.
-
-And then on the run that matters, it skips a step. Or loops forever. Or decides it already checked something it never checked.
+This is the point where a lot of agent designs go wrong. The tempting approach is one very large prompt that says think step by step, check the claim, then decide, and to trust the model to hold that whole procedure in its head. It usually will. Then on the run that matters it skips a step, or loops indefinitely, or convinces itself it has already checked something it hasn't.
 
 ---
 
 ## 04:00 — Loop engineering
 
-The fix is what I'd call **loop engineering**. Keep the model for judgment. Put the *control flow* in code.
+The alternative is what I'd call loop engineering, where you keep the model for judgment and move the control flow into code.
 
 [SCREEN: `START ──► evaluate ──► reconcile (LOOP) ──► finalize`]
 
-So this agent is a small graph. An `evaluate` node pulls the rate card and compares. A `reconcile` node handles unresolved claims — and that one is a **bounded loop**, with a hard maximum. Then `finalize`.
+So this agent is a small graph. An evaluate node pulls the rate card and compares it against the agreed terms. A reconcile node handles any unresolved claims, and that node is a bounded loop with a hard maximum number of rounds. Then a finalize node produces the verdict.
 
-Three things you get from that. A mega-prompt gives you none of them.
+That structure gives you three properties a single large prompt can't.
 
-**It terminates.** The max rounds is a number in Python. The model doesn't get a vote.
+It terminates, because the maximum number of rounds is a number in Python and the model has no vote in whether to go round again.
 
-**The steps always happen, in order.** The model can't skip evaluation and jump to a verdict. The edge decides.
+The steps always happen in the right order, because the model can't skip evaluation and jump straight to a verdict when the edge between those nodes decides what runs next.
 
-**It's inspectable.** Something breaks, you know which node. Debugging a graph is doable. Debugging "the model didn't follow step four" is not.
+And it's inspectable, so when something goes wrong you can see which node it went wrong in. Debugging a graph is tractable in a way that debugging "the model didn't follow step four" never is.
 
-Same idea as last step, one level up. Before: the model extracts, the tool decides. Now: the model reasons, the **graph** controls.
+It's the same idea as the previous step, applied one level up. There, the model extracted facts and the tool decided. Here, the model reasons and the graph controls what happens when.
 
 ---
 
 ## 06:30 — Skills
 
-Second concept. One of the more useful ideas in ADK.
+The second concept in this step is one of the more useful ideas in ADK.
 
-A **Skill** is a written procedure. A markdown file. It describes how to do a job — the steps, in order, and which tools to use at each one. You hand it to the agent. The agent follows it.
+A Skill is a written procedure — a markdown file describing how to do a job, listing the steps in order and which tools to use at each one. You hand it to the agent and the agent follows it.
 
 [SCREEN: the Skill anatomy — SKILL.md plus a references folder.]
 
-Why not put that in the instruction? Three reasons.
+The obvious question is why that shouldn't just live in the instruction, and there are three answers.
 
-**It's versioned.** It's a file in the repo. It gets reviewed in a pull request. Someone who isn't the prompt author can read it and say "that's not our process."
+It's versioned, because it's a file in the repository that gets reviewed in a pull request, which means somebody who isn't the prompt author can read it and say that isn't how the process works.
 
-**It carries resources.** A skill ships reference files alongside it — like the full rate-card tier table — that the agent loads on demand instead of hauling around in every prompt.
+It can carry resources, so a skill ships reference files alongside it — like the full rate-card tier table — that the agent loads on demand rather than hauling around inside every prompt.
 
-**And it's the natural home for the rule that matters.** For pricing, that rule is written down in plain words: **defer the exact math to the tool.**
+And it's the natural home for the rule that matters most here, which for pricing is written out in plain words: defer the exact math to the tool. That sentence lives in the file, versioned and reviewable, so if somebody changes it the change shows up in a diff.
 
-[BEAT]
-
-That sentence is in the file. Written down, versioned, reviewable. Someone changes it, it shows up in a diff.
-
-If you take one practice home from this workshop, this is a strong candidate. The moment your prompt starts containing a *procedure* — pull it out into a file. Treat it like the operational document it already is.
+If you take one practice away from this workshop, this is a strong candidate. As soon as your prompt starts containing a procedure, pull it out into a file and treat it as the operational document it already is.
 
 ---
 
-## 09:00 — The loop in code
+## 09:00 — The loop in the code
 
 [SCREEN: `agents/deal_pricing/agent.py` — the nodes, the bounded `for`.]
 
-Look at the reconcile node. There's a `for` loop with a fixed bound. Inside it, a resolver agent gets asked one question: does this claimed factor actually apply to this vendor?
+Look at the reconcile node and you'll find a for loop with a fixed bound. Inside that loop a resolver agent gets asked one question, which is whether the claimed factor actually applies to this vendor.
 
-That's the division.
-
-The **loop** is deterministic. How many rounds. What ends it. What happens at the bound.
-
-The **judgment inside each round** is the model's.
-
-Non-deterministic judgment, living inside a deterministic control structure. That's the pattern.
+That's the division of labour. The loop is deterministic — how many rounds run, what ends them, what happens when the bound is reached — and the judgment inside each round belongs to the model. Non-deterministic reasoning living inside a deterministic control structure is the pattern to take away from this step.
 
 ---
 
-## 10:30 — Deploy
+## 10:30 — Deploying it
 
 ```bash
 cd ~/vibeflix-audit
@@ -127,11 +89,9 @@ python deploy/collect_agent_identities.py
 
 [DO: start it. Jump cut.]
 
-Same shape as last time. Deploy, then collect — the engine id and principal don't exist until the deploy finishes.
+Same shape as last time, with the deploy followed by a collect, because the engine id and the principal don't exist until the deploy has finished. Don't wait for it — we'll go and work locally while it builds.
 
-Don't wait. We're going local while it builds.
-
-Then, once it's done:
+Once it's done, grant it its access:
 
 ```bash
 cd ~/vibeflix-audit
@@ -139,11 +99,11 @@ source ./env.sh
 ./deploy/grant_agent_access.sh deal-pricing
 ```
 
-Own principal. Own roles. Own reach to the MCP servers.
+Its own principal, its own roles, and its own route to the MCP servers, exactly as with brand style.
 
 ---
 
-## 12:00 — Run it locally
+## 12:00 — Running it locally
 
 [DO: second tab — skip if the MCP servers are still up from Step 2.]
 
@@ -167,69 +127,43 @@ adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/deal_pricing
 
 ---
 
-## 14:00 — Read the reply
+## 14:00 — Reading the reply
 
-The reply is long. Here are the parts that matter.
+The reply is long, so let's take the parts that matter.
 
 [SCREEN: the trimmed JSON.]
 
-**`rate_card` is what the agent fetched at run time.**
+The `rate_card` block is what the agent fetched at run time. The licensing tool returned Grogu's card, which includes the A-list tier, the 0.14 base rate and the modifier tables, and none of that appears anywhere in the prompt or in the model's own knowledge. The practical consequence is that if somebody updates the rate card in Firestore tomorrow, this agent prices differently tomorrow, with no redeploy and no prompt change.
 
-The licensing tool returned Grogu's card. A-list tier. 0.14 base rate. The modifier tables. None of that is in the prompt or in the model's head.
+The `expected` block is what that card computes to for this particular deal: 0.14, multiplied by 1.2 for vinyl figures, multiplied by 1.0 for North America, multiplied by 1.0 for volume, which comes to 0.168.
 
-Which means: update the rate card in Firestore tomorrow, and this agent prices differently tomorrow. No redeploy. No prompt change.
+That last multiplier is where the vendor's claim gets rejected. The first tier that earns a discount begins at 100,000 units and this deal is for 30,000, so the multiplier stays at 1.0. The arithmetic belongs entirely to the tool, which is the skill's instruction about deferring the math showing up on screen.
 
-**`expected` is what that card computes to.** 0.14, times 1.2 for vinyl figures, times 1.0 for North America, times 1.0 for volume.
+The `components` block is the line-by-line comparison against what the vendor agreed, and all three lines are discrepancies. The minimum guarantee also carries a below-floor flag, because 30,000 sits under the card's floor of 150,000.
 
-**0.168.**
+Look closely at the royalty rate line, though, because it is above the floor. A rate of 0.10 is exactly the card's minimum, so the agreed rate is legal while still being far under what the card says this deal should have been. Whether something is permitted and whether it's correctly priced are two separate questions, and the card answers both of them. That's precisely the kind of nuance that disappears when you let a model summarise a deal in prose.
 
-[BEAT]
-
-And that last multiplier is the whole story.
-
-**That's the volume-discount claim being rejected.** The first tier that earns a discount starts at 100,000 units. This deal is 30,000. So the multiplier stays at 1.0.
-
-The arithmetic belongs to the tool. Defer the exact math to the tool — right there, on screen.
-
-**`components` is the line-by-line comparison** against what the vendor agreed. All three are a discrepancy. And `mg` carries `below_floor: true` — 30,000 against a floor of 150,000.
-
-Now look closely at `royalty_rate`. It is **not** below floor. 0.10 is exactly the minimum.
-
-[BEAT]
-
-So it's legal. It's just far under what the card says this deal should be.
-
-Legal, and what-we-should-have-charged, are two different questions. The card answers both.
-
-That kind of nuance is exactly what gets flattened when you let a model summarise a deal in prose.
-
-**`verdict` and `status` are the tool's.** Derived from those components. The model drove the loop. It never picked the verdict.
+Finally, the verdict and the status come from the tool, derived from those components. The model drove the loop and resolved the claim, and it never chose the verdict.
 
 ---
 
-## 17:30 — Break it
+## 17:30 — Changing one number
 
 [DO: re-run with volume 120000.]
 
-Change one field. Volume goes to 120,000.
+Let's change one field and set the volume to 120,000.
 
-Now the tier *is* met. The volume multiplier becomes 0.95. Expected rate drops to 0.1596.
+Now the tier is met, so the volume multiplier becomes 0.95 and the expected effective rate drops to 0.1596. That's still above the agreed 0.10, so the verdict remains underpriced.
 
-Still above the agreed 0.10 — so the verdict stays underpriced.
-
-Same graph. Same skill. Different arithmetic. All of it read off the card.
-
-That's the property you want. You changed the **data**, and the answer changed correctly. Nobody edited a prompt.
+The graph is the same, the skill is the same, and the arithmetic is different because the card said so. That's the property you're aiming for, where changing the data changes the answer correctly and nobody has to edit a prompt.
 
 ---
 
-## 19:00 — Verify and shut down
+## 19:00 — Verifying and shutting down
 
-[DO: Ctrl+C in the adk web tab **and** the MCP tab.]
+[DO: Ctrl+C in the adk web tab and in the MCP tab.]
 
-Stop both this time.
-
-The next section starts the whole local mesh, which brings up its own MCP servers on the same ports. If the old ones are still holding them, the new ones exit instantly — and the error looks nothing like "port in use".
+Stop both tabs this time. The next section starts the whole local mesh, which brings up its own MCP servers on the same ports, and if the old ones are still holding those ports the new ones exit immediately with an error that looks nothing like a port conflict.
 
 ```bash
 cd ~/vibeflix-audit
@@ -237,40 +171,30 @@ source ./env.sh
 ./deploy/verify/step3.sh
 ```
 
-Then send the same deal to the deployed engine with `ask_agent.py`.
-
-Watch it pull the expected deal. Mark the royalty unresolved. Run the loop. Reject the claim. Land on a verdict.
+Then send the same underpriced deal to the deployed engine using the ask-agent script, and watch it pull the expected deal, mark the royalty as unresolved, run the reconcile loop, reject the claim and land on a verdict.
 
 ---
 
 ## 21:00 — Do and don't
 
-**Do put control flow in code and judgment in the model.** The model decides what's true. The graph decides what happens next.
+Put the control flow in code and the judgment in the model. The model works out what's true and the graph works out what happens next.
 
-**Don't rely on a prompt to enforce a procedure.** It works until it doesn't. And it fails quietly.
+Don't rely on a prompt to enforce a procedure, because it works until it doesn't and it fails quietly when it goes.
 
-**Do write the procedure down as a Skill.** Versioned. Reviewable. Can carry reference data.
+Write the procedure down as a Skill, so it's versioned, reviewable and able to carry reference data.
 
-**Don't let a model do arithmetic you'd put in a contract.** You can't prove it multiplied the same way twice.
+Keep a model away from arithmetic that ends up in a contract, because you can't prove it multiplied the same way twice.
 
-**Do keep the rate card in data.** Changing a business rule should be a data change.
+Keep the rate card in data, so that changing a business rule is a data change.
 
-**Don't leave local MCP servers running** when the next section needs those ports.
+And stop the local MCP servers before the next section needs those ports.
 
 ---
 
-## 23:00 — Recap and hook
+## 23:00 — Where that leaves us
 
-You've got an agent that's really a small workflow. Evaluate. Reconcile in a bounded loop. Finalize. It reasons about claims and defers every number to a tool.
+You now have an agent that's really a small workflow — evaluate, reconcile in a bounded loop, finalize — which reasons about claims and defers every number to a tool.
 
-So far, every agent has been self-contained.
+Every agent so far has been self-contained, and that changes in the next step. Vendor clearance has to hand work to a completely separate agent called legal, running in its own engine, across a network boundary. Legal also has a problem none of our agents have had, which is that the process it's meant to follow was never written down anywhere. It has to reconstruct that process from an email thread, somebody's personal checklist, and a wiki page that stops mid-sentence.
 
-That ends now.
-
-Next: **vendor clearance** has to hand work to a completely separate agent — **legal** — running in its own engine, across a network.
-
-And legal has a problem none of our agents have had. The process it's supposed to follow **isn't written down anywhere.**
-
-It has to reconstruct it. From an email thread. Somebody's personal checklist. And a wiki page that stops mid-sentence.
-
-Biggest step in the workshop. See you there.
+It's the biggest step in the workshop. See you there.

@@ -118,7 +118,7 @@ class _TokenMinter:
                 self._access_creds.refresh(self._request())
             return self._access_creds.token
 
-    def _id_token_via_impersonation(self, audience: str) -> str:
+    def _id_token_via_impersonation(self, audience: str, sa: str | None = None) -> str:
         """Mint an audience-bound OIDC token by impersonating MCP_INVOKER_SA.
 
         An AGENT_IDENTITY engine runs as `principal://…/reasoningEngines/<id>` with
@@ -135,7 +135,7 @@ class _TokenMinter:
         import google.auth
         from google.auth import impersonated_credentials
 
-        sa = os.environ.get("MCP_INVOKER_SA")
+        sa = sa or os.environ.get("MCP_INVOKER_SA")
         if not sa:
             raise RuntimeError(
                 "MCP_INVOKER_SA not set — an agent-identity engine cannot mint an "
@@ -157,6 +157,24 @@ class _TokenMinter:
         )
         id_creds.refresh(self._request())
         return id_creds.token
+
+    def _current_sa_email(self) -> str | None:
+        """The service account THIS process runs as, or None if we're a human.
+
+        Used to mint an ID token by impersonating ourselves — see the Cloud Build note in
+        id_token(). google.auth reports "default" for metadata-server credentials, so fall
+        through to the metadata /email endpoint, which works even where /identity does not.
+        """
+        try:
+            import google.auth
+            creds, _ = google.auth.default()
+            email = getattr(creds, "service_account_email", None)
+            if email and email != "default":
+                return email
+            from google.auth.compute_engine import _metadata
+            return _metadata.get(self._request(), "instance/service-accounts/default/email")
+        except Exception:
+            return None
 
     def id_token(self, audience: str, force: bool = False) -> str:
         with self._lock:
@@ -189,17 +207,39 @@ class _TokenMinter:
             print(f"[idtoken] {audience} ⚠️ impersonation FAILED "
                   f"({type(_imp_exc).__name__}: {str(_imp_exc)[:120]}) → ADC fallback",
                   flush=True)
-            # User ADC (local dev against cloud services): gcloud ADC includes the
-            # openid scope, so a refresh carries an id_token. NOTE: not audience-
-            # bound — Cloud Run accepts it for user principals.
-            import google.auth
-            creds, _ = google.auth.default()
-            creds.refresh(self._request())
-            token = getattr(creds, "id_token", None)
+            token = None
+            # CLOUD BUILD (and anything whose metadata server serves access tokens but NOT
+            # `/identity` — it 404s with "please provide a user-specified service account",
+            # even when the build runs as a user-specified SA). We are a service account with
+            # no way to fetch an ID token directly, but an ACCESS token is enough to call
+            # iamcredentials, so mint the audience-bound ID token by impersonating OURSELVES.
+            # Requires roles/iam.serviceAccountTokenCreator on our own service account.
+            self_sa = self._current_sa_email()
+            if self_sa:
+                try:
+                    token = self._id_token_via_impersonation(audience, sa=self_sa)
+                    print(f"[idtoken] {audience} MINTED via SELF-impersonation as {self_sa} "
+                          f"{_peek_jwt(token)}", flush=True)
+                except Exception as _self_exc:
+                    print(f"[idtoken] {audience} ⚠️ self-impersonation as {self_sa} FAILED "
+                          f"({type(_self_exc).__name__}: {str(_self_exc)[:160]})", flush=True)
+
+            if not token:
+                # User ADC (local dev against cloud services): gcloud ADC includes the
+                # openid scope, so a refresh carries an id_token. NOTE: not audience-
+                # bound — Cloud Run accepts it for user principals.
+                import google.auth
+                creds, _ = google.auth.default()
+                creds.refresh(self._request())
+                token = getattr(creds, "id_token", None)
             if not token:
                 raise RuntimeError(
-                    "RUN_LOCAL=false but no ID token available — run "
-                    "`gcloud auth application-default login` or use a service account."
+                    "RUN_LOCAL=false but no ID token available.\n"
+                    "  • as a human: run `gcloud auth application-default login`\n"
+                    f"  • as a service account ({self_sa or 'unknown'}): it needs\n"
+                    "    roles/iam.serviceAccountTokenCreator ON ITSELF, so it can mint an\n"
+                    "    audience-bound ID token via iamcredentials. Cloud Build's metadata\n"
+                    "    server cannot issue one directly."
                 )
             print(f"[idtoken] {audience} ADC-fallback token {_peek_jwt(token)} "
                   f"(NOT audience-bound — Cloud Run will 401 an agent identity)", flush=True)

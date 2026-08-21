@@ -14,7 +14,7 @@ Everything on this screen is really running. The six agents were each deployed s
 
 [SCREEN: cut to an empty Cloud Shell.]
 
-We're starting from nothing, and in this first step we won't build an agent at all. We're going to build the layer that everything else stands on, and I'll spend a fair bit of time on why it's shaped this way, because most of the decisions in the next seven steps only make sense once you understand what we set up here.
+We're starting from nothing. This first step builds the layer that everything else stands on, and I'll spend a fair bit of time on why it's shaped the way it is, because most of the decisions in the next seven steps only make sense once you understand what we set up here.
 
 ---
 
@@ -76,9 +76,7 @@ The third piece we provision in this step is the Agent Registry, and it's the on
 
 The registry is a catalogue. Every MCP server gets an entry in it, and later every agent does too, recording its name, its address and the interface it speaks. Given that the agents already receive their URLs through environment variables, it's reasonable to wonder what the catalogue is for.
 
-The first answer is discovery, which is how the console can list every available tool without anyone grepping through the codebase. That's useful, but it isn't the real reason.
-
-The real reason arrives in Step 7, when we put a governed gateway in front of all this traffic. That gateway works on a deny-by-default basis and it only routes requests to destinations that appear in the registry. Anything unregistered becomes unreachable, which turns registration into the enrolment step that makes governance possible at all. We do it now for the MCP servers, and again in Step 7 for the agents.
+The first answer is discovery, which is how the console can list every available tool without anyone grepping through the codebase. The more consequential answer arrives in Step 7, when we put a governed gateway in front of all this traffic. That gateway works on a deny-by-default basis and it only routes requests to destinations that appear in the registry. Anything unregistered becomes unreachable, which turns registration into the enrolment step that makes governance possible at all. We do it now for the MCP servers, and again in Step 7 for the agents.
 
 ---
 
@@ -209,7 +207,7 @@ And run `cd` and `source ./env.sh` in every new tab. That's the third time I've 
 
 [SCREEN: architecture diagram, foundation layer lit.]
 
-At this point you have three deterministic, IAM-gated tool servers registered in the Agent Registry, along with a seeded database, a telemetry topic and an image registry. What you don't have is a single agent, and that's deliberate — the interesting decisions in the next seven steps are only available to us because this fairly unglamorous layer exists first.
+At this point you have three deterministic, IAM-gated tool servers registered in the Agent Registry, along with a seeded database, a telemetry topic and an image registry. There are no agents yet, deliberately, because the interesting decisions in the next seven steps are only available to us once this fairly unglamorous layer exists.
 
 In the next step we build the first agent, brand style. It looks at a product mock-up, works out what it's looking at, and hands those facts to a tool that produces the actual verdict. That's the fuzzy-versus-exact split running for real, and it takes about fifteen minutes.
 

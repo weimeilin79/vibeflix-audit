@@ -6,67 +6,41 @@
 
 ## 00:00 — Cold open
 
-[SCREEN: the finished mesh. Six agents, three tool servers. All green.]
+[SCREEN: the finished mesh. Six agents, three tool servers, all green.]
 
-Everything works. Six agents. Three tool servers. A console. You can run a full audit end to end.
+Everything works at this point. Six agents, three tool servers, a console, and a full audit that runs end to end.
 
-[BEAT]
+So here's a question worth sitting with. If one of those agents were compromised tomorrow — say through a prompt injection buried in a vendor's document — what stops it from calling the licensing server and writing itself a contract?
 
-Now. One of those agents gets compromised tomorrow. A prompt injection buried in a vendor's document.
+The answer today is its own IAM, and that's genuine but coarse. IAM grants an agent reach to a whole server. The thing it can't express is that this agent may call one specific tool on that server and nothing else.
 
-What stops it from calling the licensing server and writing itself a contract?
-
-[BEAT]
-
-Right now: its own IAM. And nothing else.
-
-That's real, and it's coarse. IAM grants reach to a whole server. The thing it can't express is *this agent may call this one tool, and nothing else.*
-
-Today we close that gap. And the word that matters is **path.**
+This step closes that gap, and the word that matters throughout is path.
 
 ---
 
-## 01:30 — A document is not a control
+## 01:30 — Governance that sits in the traffic path
 
-Most organisations have governance. It's in a spreadsheet. Which system may talk to which. Who approved it. When it was last reviewed.
+Most organisations already have governance, and it lives in a spreadsheet describing which system may talk to which, who approved it and when it was last reviewed. That spreadsheet describes what somebody intended, and the gap between the intention and the running system is where every interesting incident lives.
 
-That spreadsheet describes what somebody *intended*.
+What we're building instead is governance in the traffic path: a component that requests physically travel through, which applies the rules and refuses anything outside them.
 
-And the gap between the spreadsheet and the running system is where every interesting incident lives.
-
-[BEAT]
-
-What we're building instead is governance **in the traffic path.** A component that traffic physically goes through, that applies the rules, and that says no.
-
-Here's the test. **Can you violate the policy without changing the policy?**
-
-If yes, you have a document. If no, you have a guardrail.
+The test for whether you have one is simple enough to apply to your own systems. Can you violate the policy without changing the policy? If you can, what you have is a document. If you can't, what you have is a guardrail.
 
 ---
 
-## 03:00 — Three pieces
+## 03:00 — Three pieces that compose
 
-Three things here. People mix them up constantly. Let's separate them.
+There are three things involved here and people mix them up constantly, so let's separate them.
 
-**Agent Identity.** Every agent is its own principal, with its own name.
+Agent Identity means every agent is its own principal with its own name, which is what makes an action attributable and what makes least privilege possible at all. You've been building this since Step 2.
 
-That's what makes an action *attributable*. And it's what makes least privilege possible at all. You've been building this since Step 2.
+The Registry is the catalogue of what exists and where it lives, covering every MCP server and every agent. You registered the servers back in Step 1.
 
-**The Registry.** The catalogue of what exists and where. Every MCP server. Every agent. You registered the servers back in Step 1.
+The Gateway is the governed front door that traffic goes through. It works on a deny-by-default basis and it only routes to destinations that appear in the registry.
 
-**The Gateway.** The governed front door. Traffic goes through it. It is **deny-by-default.** And it only routes to destinations that are in the registry.
+The way those three compose is the elegant part. Identity answers who is calling, the registry answers what may be called, and the gateway is the place where those two facts meet and a decision gets made. None of the three is sufficient on its own, and together they're a policy engine.
 
-[BEAT]
-
-Now watch how they compose. This is the neat part.
-
-Identity answers *who is calling.* The registry answers *what may be called.* The gateway is where those two facts meet and a decision happens.
-
-None of the three is enough alone. Together they're a policy engine.
-
-And notice what happens to registration. An unregistered destination is **unreachable.**
-
-Enrolment becomes enforcement.
+It also changes what registration means. An unregistered destination is unreachable, so enrolment becomes enforcement.
 
 ---
 
@@ -74,23 +48,17 @@ Enrolment becomes enforcement.
 
 [SCREEN: `deploy/policies.yaml`.]
 
-Open the policy file. It maps each agent to the exact tools it may call. Brand style may call the brand audit tool. Deal pricing may call the pricing lookup.
+Open the policy file and you'll find each agent mapped to the exact tools it's allowed to invoke, so brand style may call the brand audit tool and deal pricing may call the pricing lookup.
 
-[BEAT]
+That's the difference between saying an agent can reach the licensing server and saying it can call one specific tool on it, and the difference matters more than it might appear.
 
-That's the difference between *"this agent can reach the licensing server"* and *"this agent can call **only** this one tool on it."*
+The licensing server also exposes tools that change things: updating a vendor, writing a contract, resetting the store. Deal pricing has no business calling any of them, and under coarse IAM it could. Under per-tool policy it can't, and the attempt gets refused in the path and logged.
 
-Think about what that buys you.
-
-The licensing server also exposes tools that *change* things. Update a vendor. Write a contract. Reset the store.
-
-Deal pricing has no business calling any of them. Under coarse IAM — it could. Under per-tool policy, it cannot. The attempt is refused in the path, and logged.
-
-That's blast radius, made concrete. A compromised pricing agent can look up prices. It cannot write a contract.
+That's blast radius made concrete. A compromised pricing agent can look up prices, and it has no route to writing a contract.
 
 ---
 
-## 07:00 — Register, gate, grant
+## 07:00 — Register, gate and grant
 
 ```bash
 cd ~/vibeflix-audit
@@ -100,23 +68,15 @@ source ./env.sh
 
 [DO: run it.]
 
-Four things, in order.
+Four things happen in order.
 
-**Registry** — the six agents get registered. The MCP servers already were.
+The six agents get registered, since the MCP servers already were. The governed front door gets created. The authorization extension gets attached, which is what makes the gateway consult policy on every request. And then it calls the IAM script, which adds the egress grants on top of the per-agent access you granted in Steps 2 through 5.
 
-**Gateway** — the governed front door gets created.
-
-**Policies** — the authorization extension is attached. That's what makes the gateway consult policy per request.
-
-**Grants** — then it calls the IAM script, which adds the **egress grants** on top of the per-agent access from Steps 2 through 5.
-
-That last distinction matters. Until now, each agent's grants were about what it may *do.* These new ones are about where it may *go.*
-
-Two different questions. Two different grants.
+That last distinction is worth holding on to. Until now, each agent's grants described what it may do. These new ones describe where it may go, which is a separate question answered by a separate grant.
 
 ---
 
-## 09:00 — Attach the engines
+## 09:00 — Attaching the engines
 
 ```bash
 cd ~/vibeflix-audit
@@ -124,23 +84,17 @@ source ./env.sh
 python deploy/deploy_agents_a2a.py
 ```
 
-This is the **one redeploy the workshop still needs.** And it's worth knowing why you can't dodge it.
+This is the one redeploy the workshop still requires, and it's worth knowing why it can't be avoided.
 
-The gateway exists **now.** It didn't when you deployed these engines in Steps 2 through 5. Each deploy said so at the time — deploying without governed egress.
+The gateway exists now, and it didn't exist when you deployed these engines in Steps 2 through 5 — each deploy said as much at the time, reporting that it was deploying without governed egress. An engine's gateway attachment is part of its deployment spec, baked in when the engine is created.
 
-An engine's gateway attachment is part of its **deployment spec.** It's baked in when the engine is created.
+Compare that with Step 6, where the task-store URL turned out to be computable and no second pass was needed. This one is a relationship to a thing that didn't exist yet, which is a different kind of problem.
 
-[BEAT]
-
-Compare that to Step 6. The task-store URL turned out to be computable, so no second pass was needed there.
-
-This one is a relationship to a thing that didn't exist yet.
-
-**Until this pass, the agents' egress isn't governed.** This is the step where the guardrail actually goes into the path.
+Until this pass runs, the agents' egress is ungoverned, so this is the step where the guardrail actually goes into the path.
 
 ---
 
-## 11:00 — Verify the wiring
+## 11:00 — Verifying the wiring
 
 ```bash
 cd ~/vibeflix-audit
@@ -148,17 +102,13 @@ source ./env.sh
 ./deploy/verify/step7.sh
 ```
 
-Confirms the gateway exists. The six agents and three MCP servers are registered. And all six agents run under their own agent identity.
+That confirms the gateway exists, that the six agents and three MCP servers are registered, and that all six agents run under their own agent identity.
 
 ---
 
-## 12:00 — Now run it for real
+## 12:00 — Running it for real
 
-[BEAT]
-
-A script can tell you the wiring is right.
-
-The only thing that proves the mesh still **works** with governance in the path is a full audit through the deployed console.
+A script can confirm the wiring is correct. The only thing that demonstrates the mesh still works with governance in the path is a full audit through the deployed console.
 
 ```bash
 cd ~/vibeflix-audit
@@ -166,96 +116,68 @@ source ./env.sh
 gcloud run services describe vibeflix-app --region "$REGION" --format 'value(status.url)'
 ```
 
-[DO: open the console. Happy path. Run.]
+[DO: open the console, pick the happy path, run it.]
 
-Same scenario you ran locally in Step 6. But nothing about this run is local.
+This is the same scenario you ran locally in Step 6, and everything about this run happens in the cloud. The app calls the orchestrator engine over A2A, which fans out to three more engines, each authenticating as its own principal and reaching the MCP servers through the gateway.
 
-The app calls the **orchestrator engine** over A2A. That fans out to three more **engines.** Each one authenticates as its own principal. Each reaches the MCP servers **through the gateway.**
-
-Watch three things.
-
-**The graph animating** — and note where those events come from. The engines publish them over Pub/Sub, and the console subscribes.
-
-**The tool LEDs firing** — which means the gateway **allowed** those calls. Every blink is a policy decision that came back yes.
-
-**And a contract at the end.**
+Three things to watch. The graph animates, and those events come from the engines over Pub/Sub, with the console subscribing to the stream. The tool LEDs fire, and each blink means the gateway allowed that call, so every one of them is a policy decision that came back yes. And the run ends with a contract.
 
 ---
 
 ## 15:00 — What a failure looks like
 
-Learn this shape. You will see it eventually, and it's much less alarming once you recognise it.
+This shape is worth learning to recognise, because you'll see it eventually and it's much less alarming once you know it.
 
 [SCREEN: a branch failing — 403, egress request is not authorized.]
 
-An agent reports **403. Egress request is not authorized.** Its branch fails. The others pass.
+An agent reports a 403 saying the egress request is not authorized, its branch fails, and the others pass. That means either the destination isn't registered, or that agent lacks the egress role on it.
 
-That means one of two things. The destination isn't registered. Or that agent doesn't have the egress role on it.
+The mindset shift I'd encourage here is that this is the system working. Deny-by-default means a misconfiguration fails closed, so you find out about it immediately. In an ungoverned system the same mistake produces no error at all, the call goes through, and you find out during an audit or a breach.
 
-[BEAT]
+Re-applying the policies fixes it, and the valuable part is the immediacy of the feedback.
 
-And here's the mindset shift I want you to make.
-
-**That's the system working.**
-
-Deny-by-default means a misconfiguration fails closed.
-
-In an ungoverned system, the same mistake produces no error at all. The call goes through. And you find out during an audit. Or a breach.
-
-Re-applying the policies fixes it. But the important part is that you found out **immediately.**
-
-One practical note. **IAM and gateway changes take two to five minutes to propagate.** If the first run right after this step fails on egress — wait, and run it again, before you assume something's broken.
-
-That one has caught a lot of people.
+One practical note: IAM and gateway changes take two to five minutes to propagate, so if the first run right after this step fails on egress, wait and run it again before concluding that something is wrong. That one has caught a lot of people.
 
 ---
 
 ## 17:30 — The whole security story
 
-Let's put it together. This is the payoff of the entire workshop.
+Let's put the pieces together, because this is the payoff of the entire workshop.
 
-[SCREEN: build the chain, one layer at a time.]
+[SCREEN: build the chain up, one layer at a time.]
 
-**Step 1.** The tool servers went up with no public access. A browser gets a 403. They still do.
+In Step 1 the tool servers went up with no public access, so a browser gets a 403, and that's still true today.
 
-**Steps 2 to 5.** Every agent got its own identity and its own narrow roles. No shared service account anywhere. And because an agent identity can't authenticate to Cloud Run directly, each one reaches the tool servers by *impersonating* an invoker service account — a deliberate, grantable, revocable relationship.
+In Steps 2 through 5 every agent received its own identity and its own narrow set of roles, with no shared service account anywhere. Because an agent identity can't authenticate to Cloud Run directly, each one reaches the tool servers by impersonating an invoker service account, which is a deliberate relationship that can be granted and revoked.
 
-**Step 6.** The app got its own identity too.
+In Step 6 the app got its own identity on the same basis.
 
-**Step 7.** A gateway in the path. Deny-by-default. Per-tool policy. And destinations that must be registered to be reachable at all.
+And in Step 7 a gateway went into the path, working deny-by-default, applying per-tool policy, with destinations that have to be registered before they can be reached at all.
 
-[BEAT]
-
-At every step we changed what is **possible.** The allowlist is the running system.
-
-That's what guardrails means here. Physics.
+At every step we changed what is possible, and the allowlist is the running system rather than a document describing it. That's what guardrails means here, and it's closer to physics than to advice.
 
 ---
 
 ## 19:30 — Do and don't
 
-**Do give every agent its own identity.** A shared service account destroys attribution and makes least privilege impossible.
+Give every agent its own identity, because a shared service account destroys attribution and makes least privilege impossible.
 
-**Don't confuse a policy document with enforcement.** If you can violate it without editing it, it isn't a control.
+Treat a policy document and enforcement as different things, using the test from earlier: if you can violate it without editing it, it isn't a control.
 
-**Do scope policy per tool, not per server.** "May reach the licensing server" and "may call one read-only tool on it" are very different blast radii.
+Scope policy per tool rather than per server, since reaching a server and calling one read-only tool on it are very different blast radii.
 
-**Don't treat a gateway 403 as something to route around.** It's the guardrail reporting. Fix the policy or the registration. Never the guardrail.
+Resist routing around a gateway 403, because it's the guardrail reporting, and the thing to fix is the policy or the registration.
 
-**Do register everything you intend to be reachable.** Under deny-by-default, the registry *is* the allowlist.
+Register everything you intend to be reachable, since under deny-by-default the registry is the allowlist.
 
-**Don't debug a fresh gateway change in the first five minutes.** Propagation is real.
+And give a fresh gateway change five minutes before you start debugging it.
 
 ---
 
-## 21:30 — Recap and hook
+## 21:30 — Where that leaves us
 
-Governance is in the path now. Every hop is checked. Every agent is attributable. A misconfiguration fails loudly instead of quietly succeeding.
+Governance sits in the traffic path now. Every hop is checked, every agent is attributable, and a misconfiguration fails loudly and immediately.
 
-One step left.
-
-We're going to *use* the thing. Four scenarios. Four different endings — and the same graph every time, driven entirely by data.
-
-Then we look at the whole system through three lenses. And tear it all down.
+One step remains, and in it we actually use the thing. Four scenarios that each end differently, driven entirely by the data rather than by different code paths. Then we look at the whole system through three observability lenses, and tear it all down.
 
 See you there.

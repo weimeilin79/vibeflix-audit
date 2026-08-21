@@ -6,41 +6,25 @@
 
 ## 00:00 — Cold open
 
-[SCREEN: an email thread. A personal checklist. A wiki page that stops mid-sentence.]
+[SCREEN: an email thread, a personal checklist, a wiki page that stops mid-sentence.]
 
-Somewhere in your company there's a process.
+Almost every company has a process that works, that everyone follows, and that has never been written down in one place. It lives in an email thread from eighteen months ago, in somebody's onboarding checklist on their own laptop, and in a Confluence page that stops in the middle of a sentence.
 
-It works. Everyone follows it. And it has never been written down in one place.
-
-It lives in an email thread from eighteen months ago. In somebody's onboarding checklist, on their own laptop. In a Confluence page that just... stops.
-
-[BEAT]
-
-That's today.
-
-We're building an agent whose job is to reconstruct a process from the wreckage. Then hand it real work — from another agent, across a network, with a human interrupting in the middle.
-
-Three hard things at once. In order.
+This step builds an agent whose job is to reconstruct a process from exactly that kind of wreckage, and then hands it real work from another agent, across a network boundary, with a human interrupting partway through. That's three hard problems at once, so we'll take them in order.
 
 ---
 
 ## 01:30 — The tribal-knowledge problem
 
-Legal clearance at Vibeflix is a real process. Certification rules for apparel. Royalty tier definitions. Insurance minimums. The steps for a contract amendment.
+Legal clearance at Vibeflix is a real process. There are certification rules for apparel, definitions for the royalty tiers, insurance minimums, and a set of steps for amending a contract. None of it sits in a database, because it's prose scattered across documents that were never meant to be read together.
 
-None of it is in a database. It's prose. Scattered across documents that were never meant to be read together.
+You could put a lawyer in a room for a week and turn all of that into a decision table. Companies do it, it's expensive, it goes stale, and the moment the process changes you're doing it again.
 
-You could sit a lawyer down for a week and turn it into a decision table. Companies do that. It's expensive, it goes stale, and the moment the process changes you're doing it again.
-
-The alternative is **retrieval**. Don't memorise the process — look it up. Every time. From the documents themselves.
-
-Documents change, agent behaviour changes. No retraining. No re-prompting.
-
-That's RAG. And this is the case where it genuinely earns its place.
+The alternative is retrieval, where instead of memorising the process the agent looks it up every time, from the documents themselves. When the documents change the agent's behaviour changes with them, without retraining and without rewriting a prompt. That's what RAG is for, and this is a case where it genuinely earns its place.
 
 ---
 
-## 03:00 — Build the knowledge base
+## 03:00 — Building the knowledge base
 
 ```bash
 cd ~/vibeflix-audit
@@ -50,39 +34,29 @@ source ./env.sh
 
 [DO: run it. Slow — several minutes.]
 
-Four things happen. It uploads the documents. Creates a corpus with an embedding model. Imports the files. RAG Engine chunks, embeds and indexes everything behind the scenes.
+Four things happen while that runs. It uploads the documents to a bucket, creates a corpus configured with an embedding model, imports the files, and then RAG Engine chunks, embeds and indexes every document behind the scenes.
 
-**The import is the slow part.** You'll see it importing files, and it will sit there. For minutes. It's working. Let it finish.
+The import is the slow part. You'll see it report that it's importing files and then apparently do nothing for several minutes, and it is in fact working, so let it finish.
 
-On a brand-new project you might also see it retry on Vector Search permissions still propagating. Also expected. Enabling the API grants the service agent its role, and that grant takes a couple of minutes to land. The script waits it out.
+On a brand-new project you may also see it retry because Vector Search permissions are still propagating. That's expected as well, since enabling the API grants the RAG service agent its role and that grant takes a couple of minutes to take effect. The script waits it out.
 
-And when it's done, it **writes the corpus id straight into your `.env`**. Nothing to copy and paste. The next `source ./env.sh` exports it, and when you deploy legal in a minute, it travels with the agent.
+When it finishes it writes the corpus id straight into your `.env` file, so there's nothing to copy and paste. The next time you source that file it gets exported, and when you deploy legal in a few minutes the value travels with the agent.
 
 ---
 
-## 05:30 — Ask the corpus directly
+## 05:30 — Asking the corpus directly
 
-Before we build anything on top of this — let's ask it a question. No agent. No model. Just the RAG API.
+Before we build anything on top of this, let's ask the corpus a question with no agent and no model involved, going straight at the RAG API.
 
 [DO: run the retrieveContexts curl.]
 
 [SCREEN: three excerpts, with sources and scores.]
 
-Look at what came back. Three excerpts. From **three different documents.**
+Three excerpts come back, and they come from three different documents: an email thread, somebody's onboarding checklist, and a wiki page.
 
-An email thread. Somebody's onboarding checklist. A wiki page.
+That result is the tribal-knowledge problem in miniature. The answer to one straightforward question about apparel certifications is spread across three artefacts, none of which is authoritative and none of which is complete.
 
-[BEAT]
-
-There it is. The tribal-knowledge problem, in one result.
-
-The answer to one simple question — what certifications does apparel need — is spread across three artefacts. None of them authoritative. None of them complete.
-
-One thing that trips people up: **lower score means closer match** here.
-
-And one thing that isn't a failure. If `contexts` comes back empty right after the import, indexing hasn't caught up. Wait a minute. Run it again.
-
-It's the one case where "nothing found" doesn't mean something is wrong.
+Two practical notes. A lower score means a closer match here, which catches people out. And if the contexts come back empty immediately after the import, indexing hasn't caught up yet, so wait a minute and run it again — this is the one situation where finding nothing doesn't indicate a problem.
 
 ---
 
@@ -90,67 +64,45 @@ It's the one case where "nothing found" doesn't mean something is wrong.
 
 [SCREEN: `agents/legal/legal_kb.py`.]
 
-The agent gets one tool for this. It has two backends.
-
-If the corpus is configured, it queries Vertex RAG Engine. If it isn't — or Vertex is unreachable — it falls back to a local keyword search over the same files. So the agent still runs offline.
+The agent gets a single tool for this, and it has two backends. If the corpus is configured it queries Vertex RAG Engine, and if it isn't configured, or Vertex is unreachable, it falls back to a local keyword search across the same files so the agent keeps working offline.
 
 [DO: run the Python heredoc that calls the tool directly.]
 
 [SCREEN: `retriever: vertex_rag` and three hits.]
 
-Now. **Watch the `retriever` field.** This is the whole reason we're running this by hand.
+The field to watch in that output is `retriever`, and it's the reason we're running this by hand rather than through the agent.
 
-[BEAT]
+The fallback is deliberate, because an agent shouldn't die just because RAG is unavailable. The consequence is that a broken corpus keeps answering questions, using keyword matches instead of semantic retrieval, and it does so confidently.
 
-That fallback is deliberate. The agent shouldn't die because RAG is down.
+Run the same command with the corpus unset and you'll see `retriever: local_keyword`, and the top hit for a certifications question becomes a document about customs codes. The answer looks plausible, it's wrong, and there's no error anywhere in the output. So whenever legal's answers start feeling subtly off, that field is the first thing to check.
 
-But here's what it means. **A broken corpus doesn't look broken.**
-
-The agent keeps answering. It just answers from keyword matches instead of real retrieval.
-
-Run the same command with the corpus unset and watch. `retriever: local_keyword`. And the top hit for a certifications question becomes a document about customs codes.
-
-Plausible. Confident. Wrong. And no error anywhere.
-
-So when legal's answers seem subtly off — check that field first. `vertex_rag` means the corpus is being used. `local_keyword` means it isn't.
-
-General lesson: **a fallback that's silent is a fallback that will fool you.** Build one, and make its state visible.
+The general lesson is that a silent fallback will eventually fool you, so if you build one, make its state visible.
 
 ---
 
-## 10:30 — A2A
+## 10:30 — A2A, and calling another agent
 
-Second thing. Vendor clearance needs legal to do something. Legal is a separate agent, in its own engine, with its own identity.
+The second problem in this step is that vendor clearance needs legal to do something, and legal is a separate agent in its own engine with its own identity.
 
-So how does one agent call another?
+A2A is a small HTTP contract that every ADK agent speaks. Each agent publishes an agent card at a known URL describing what it is and how to reach it. To call one you POST a message to its endpoint, which returns a task id, and then you poll that task until it's finished. The task is the unit of work, which is a detail that matters enormously in Step 5.
 
-**A2A.** A small HTTP contract every ADK agent speaks. Each agent publishes an **agent card** at a known URL — what it is, how to reach it. You POST a message to it, get back a **task id**. Then you poll that task until it's done.
-
-The *task* is the unit of work. Remember that. It matters enormously in Step 5.
-
-In ADK, you construct a remote agent with the target's card, and from then on you invoke it like a local sub-agent. The HTTP is handled for you.
-
-[BEAT]
-
-**Treat an agent in another engine as a step you can call.** That's the mental model.
+In ADK you construct a remote agent with the target's card and from then on you invoke it like a local sub-agent, so the HTTP is handled for you. The mental model to carry forward is that an agent running in another engine is a step you can call.
 
 ---
 
 ## 12:30 — Two things this mesh had to add
 
-Thirty seconds, because these cost a day each if nobody tells you.
+There are two details here that cost about a day each if nobody warns you.
 
-**The agent card names the wrong host.** Agent Runtime hardcodes the plain host into the card each engine serves. But the gateway in Step 7 only authorises the mTLS host, and refuses the plain one. Every standard A2A client just follows the card. So you have to build the card yourself.
+The agent card names the wrong host. Agent Runtime's template hardcodes the plain aiplatform host into the card each engine serves, while the Agent Gateway in Step 7 only authorises the mTLS host and refuses the plain one. Since every standard A2A client just follows whatever the card says, you end up having to build the card yourself.
 
-**The stock client sends blocking, not send-and-poll.** A2A is a send-then-poll protocol — but the stock client holds one long request open. Agent Runtime kills that at around 180 seconds. While the callee is still working perfectly well.
+The stock client also sends blocking requests rather than send-and-poll. A2A is a send-then-poll protocol, but the stock client holds one long request open, and Agent Runtime terminates that at around 180 seconds while the callee is still working perfectly well. Fast hops never notice, and a long one fails in a way that's hard to interpret.
 
-Fast hops never notice. A long one fails, confusingly.
-
-Both are hidden inside a subclass, so every call site stays ordinary ADK. Now you know why it exists.
+Both fixes are hidden inside a subclass so that every call site stays ordinary ADK, and now you know why that subclass exists.
 
 ---
 
-## 14:30 — Deploy both, and the collect in the middle
+## 14:30 — Deploying both, and the collect in the middle
 
 ```bash
 cd ~/vibeflix-audit
@@ -161,47 +113,35 @@ python deploy/deploy_agents_a2a.py vendor_clearance
 python deploy/collect_agent_identities.py
 ```
 
-Look at that order. There's a `collect` **in between**. That one is load-bearing.
+There's a collect in the middle of that sequence and it's load-bearing.
 
-Vendor clearance calls legal. So it has to deploy knowing legal's A2A URL. That URL contains legal's engine id. Which doesn't exist until legal is deployed. The deploy script reads it from the identities file — and only `collect` writes that file.
+Vendor clearance calls legal, so it has to be deployed already knowing legal's A2A URL. That URL contains legal's engine id, which doesn't exist until legal has been deployed, and the deploy script reads it out of the identities file that only the collect script writes. Deploy both back to back and vendor clearance looks up a URL that hasn't been recorded yet, so it skips and tells you it's skipping.
 
-Deploy both back to back and vendor clearance looks up a URL that isn't recorded yet. It'll skip, and say so.
+It's reasonable to ask why this one can't be computed away. In Step 6 you'll meet the mirror image of this problem, where the engines need the app's URL, and that one turns out to be derivable from your project number, so no second pass is required. Engine ids work differently, because Agent Runtime mints a random one, and the only way to learn legal's address is to deploy it and read it back.
 
-[BEAT]
+[DO: start the deploys. Two agents here, so it's the longest wait in the workshop — jump cut.]
 
-**Why can't this one be computed away?**
-
-In Step 6 you'll meet the mirror image — the app's URL, which the engines need. And that one turns out to be *derivable* from your project number. No second pass needed.
-
-Engine ids aren't. Agent Runtime mints a random one. The only way to learn legal's address is to deploy it and read it back.
-
-Deploy. Collect. Then deploy the agent that calls it.
-
-[DO: start the deploys. Two agents — longest wait in the workshop. Jump cut.]
-
-Then grant each its own access.
+Then grant each of them its own access.
 
 ---
 
-## 17:00 — Talk to legal alone first
+## 17:00 — Talking to legal on its own first
 
-Before we watch the handoff — let's talk to legal **directly**.
-
-Worth doing separately. In the handoff, legal answers from inside another agent's workflow. So if retrieval came back empty, you'd see a vague vendor-clearance result instead of the real cause.
+Before we watch the handoff, it's worth talking to legal directly, because in the handoff legal answers from inside another agent's workflow. If retrieval came back empty you'd see a vague vendor-clearance result rather than the actual cause.
 
 [DO: mesh tab, then Dev UI on agents/legal.]
 
-Two questions. In this order. They're a **matched pair** — and the second one is *supposed* to come up empty.
+Ask it two questions in this order, because they're a matched pair and the second one is supposed to come up empty.
 
-**One. Something only the scattered documents know.**
+The first is something only the scattered documents know:
 
 > What does "annual-volume band" mean, and what are the options?
 
 [SCREEN: an answer, with the royalty tiers.]
 
-Watch the trace. It calls the search tool. And the answer is assembled from documents that never state it in one place.
+Watch the trace and you'll see it call the search tool, and the answer it assembles comes from documents that never state it in one place.
 
-**Two. Something the documents don't contain.**
+The second is something the documents don't contain:
 
 > Are there style guidelines for grogu, and any exclusivity in North America?
 
@@ -209,31 +149,17 @@ Watch the trace. It calls the search tool. And the answer is assembled from docu
 
 ---
 
-## 20:00 — Why the second one has no answer
+## 20:00 — Why the second question has no answer
 
-Nothing is broken.
-
-Those two facts exist in your project. They're just **not in legal's corpus**.
+Nothing is broken here. Those two facts exist in your project, they're just held somewhere other than legal's corpus.
 
 [SCREEN: the two-row table.]
 
-Here's the split, and it mirrors everything else in this workshop.
+There's a split here that mirrors everything else in this workshop. How the process works — the certification rules, the royalty tiers, the insurance minimums — lives in documents, in the RAG corpus, and legal reads it. The records themselves — exclusivity contracts, trademarks, style guidelines, the rate card — live in Firestore registries and the MCP servers read them through deterministic tools.
 
-How the process **works** — cert rules, royalty tiers, insurance minimums — lives in documents. In the RAG corpus. Read by legal.
+Prose that has to be interpreted belongs in RAG, and facts that have to be looked up exactly belong in a registry behind a tool. An exclusivity conflict is the second kind, and it's not something you want a language model inferring from a wiki page, which is why that check belongs to vendor clearance instead.
 
-The **records** — exclusivity contracts, trademarks, style guidelines, the rate card — live in Firestore registries. Read by MCP servers, through deterministic tools.
-
-[BEAT]
-
-Prose that has to be *interpreted* goes in RAG.
-
-Facts that must be *looked up exactly* go in a registry behind a tool.
-
-An exclusivity conflict is not something you want a language model inferring from a wiki page.
-
-That's why the exclusivity check belongs to vendor clearance. You'll watch it fire in a minute.
-
-And notice what legal did **not** do. It didn't invent an answer. "I could not find any information" is correct behaviour for a retrieval agent. That's worth more than a confident guess.
+It's also worth noticing what legal did when it couldn't find an answer, which is that it said so. Admitting a gap is correct behaviour for a retrieval agent and it's worth considerably more than a confident guess.
 
 ---
 
@@ -241,82 +167,50 @@ And notice what legal did **not** do. It didn't invent an answer. "I could not f
 
 [DO: stop both tabs. Start the mesh, then Dev UI on vendor_clearance.]
 
-Stop what's running first. Both tabs. Vendor clearance's Dev UI wants port 8000, and legal's Dev UI is holding it. And the mesh starts its own MCP servers on the ports the old ones have.
+Stop both tabs first, because vendor clearance's Dev UI wants port 8000 which legal's Dev UI is holding, and the mesh starts its own MCP servers on the ports the current ones are using.
 
-The mesh brings up all three MCP servers **and every agent as an A2A service** — including legal.
-
-[BEAT]
-
-That's the shift worth catching.
-
-A minute ago you were *typing at* legal in a playground. Now the same agent is running as a **service**. Waiting to be called by another agent.
-
-Nothing about legal changed. Only who talks to it.
+The mesh brings up all three MCP servers along with every agent as an A2A service, including legal. That's a shift worth noticing: a few minutes ago you were typing at legal in a playground, and now the same agent is running as a service, waiting to be called by another agent. Nothing about legal changed, only who talks to it.
 
 ---
 
 ## 23:30 — Three turns
 
-You're going to onboard a vendor to a category it doesn't already have. That, and only that, triggers the handoff.
+What you're going to do is onboard a vendor into a category it doesn't already have, because that's the only thing that triggers the handoff.
 
-**The category has to be genuinely new.** This vendor already makes action figures, vinyl figures and resin statues. Ask for any of those and the agent clears the vendor and stops — correctly. There's nothing to onboard.
+The category genuinely has to be new for that vendor. This one already makes action figures, vinyl figures and resin statues, so if you ask for any of those the agent correctly clears the vendor and stops, since there's nothing to onboard. Apparel is one it doesn't have.
 
-Apparel is one it doesn't have.
+The gate lives in the code, and legal only runs when the report comes back cleared and the reasoner actually called update or create on the vendor. A quiet, correct no-op looks very similar to a broken handoff, so if legal doesn't fire, check the vendor's existing categories before you check anything else.
 
-The gate is in the code: legal runs only when the report comes back cleared **and** the reasoner actually called update or create. A quiet, correct no-op looks exactly like a broken handoff. If legal doesn't fire, check the vendor's existing categories first.
+This takes three messages. The first is the request, and it comes back asking for approval before it touches the vendor record.
 
-**This takes three messages.**
+The second is where you approve, and you also have to restate the whole request. Answering with just "yes" comes back blocked, asking for the vendor, character, territory and category all over again, which surprises everyone the first time.
 
-**Turn one.** The request. It comes back asking for approval before it touches the vendor record.
+The reason is worth understanding. The reasoner's brief is a template of state fields, and its instruction tells it to take anything missing from the user's message. In the console you build in Step 6 those fields come from a form, so a user really can just click yes. The Dev UI has no form, so your message is the only channel available and every turn has to carry the whole picture. Same agent, different transport.
 
-**Turn two.** Approve — **and restate the whole request.**
+The third turn answers the human-in-the-loop question. Legal reconstructs its process, discovers it needs a safety-certification ID, and finds that value exists in no record anywhere, so it asks, and the question travels back up to you.
 
-[BEAT]
-
-Because here's what surprises everyone. **Answering just "yes" will not work.**
-
-It comes back blocked, asking for the vendor, character, territory and category all over again.
-
-And the reason is worth understanding. The reasoner's brief is a template of state fields. Its instruction says: take anything missing from the user's message.
-
-In the **console** you build in Step 6, those fields come from a **form**. So the user really can just click yes.
-
-The **Dev UI has no form.** Your message is the only channel. So every turn has to carry the whole picture.
-
-Same agent. Different transport.
-
-**Turn three.** The human-in-the-loop question. Legal reconstructs its process and finds it needs a **safety-certification ID**. A value that exists in no record anywhere. It asks. And the question travels back up to you.
-
-The id is arbitrary. **Any string works.** Because no document in the corpus defines a format for it.
-
-That's the point the documents themselves make. One of them has an open action item to *document the safety cert ID step*. Another has somebody complaining they've asked three times for it to be written down.
-
-**The one field that blocks every contract is the one nobody specified.**
+The id itself is arbitrary and any string works, because no document in the corpus defines a format for it. That's the point the documents themselves are making. One of them contains an unresolved action item to document the safety cert ID step, and another has somebody complaining that they've asked three times for it to be written down. The one field that blocks every contract is the one nobody ever specified.
 
 ---
 
 ## 26:30 — Do and don't
 
-**Do use RAG for process, and a registry for records.** Interpretation versus exact lookup.
+Use RAG for process and a registry for records, which is the interpretation-versus-exact-lookup split applied one level up.
 
-**Don't build a silent fallback.** Expose which path ran, or you'll debug bad answers for hours.
+Don't build a silent fallback. Expose which path ran, or you'll spend hours debugging answers that look fine.
 
-**Do talk to a sub-agent directly before testing it inside a handoff.** Isolate the failure before you nest it.
+Talk to a sub-agent directly before you test it inside a handoff, so you isolate failures before you nest them.
 
-**Don't assume "yes" is enough input** when nothing is supplying state. Transport shapes conversation.
+Don't assume a bare "yes" is enough input when nothing is supplying state, because the transport shapes the conversation.
 
-**Do let the agent say it doesn't know.** A retrieval agent that admits a gap is working.
+And let the agent say it doesn't know, because a retrieval agent that admits a gap is working properly.
 
 ---
 
-## 27:30 — Recap and hook
+## 27:30 — Where that leaves us
 
-Two more agents. And the first time work crossed an agent boundary. Legal reconstructs an undocumented process from scattered prose. Vendor clearance calls it over A2A. And a question from deep inside legal travelled all the way up to you.
+You've added two more agents and watched work cross an agent boundary for the first time. Legal reconstructs an undocumented process from scattered prose, vendor clearance calls it over A2A, and a question from deep inside legal travelled all the way back up to you.
 
-Next: the **orchestrator**. One agent calling three others, at the same time.
-
-And that's where a genuinely brutal bug lives. It doesn't show up on your laptop. It doesn't show up in testing.
-
-It shows up in production. And it turns most of your polls into 404s.
+Next we build the orchestrator, which calls three agents at once rather than one. That's also where a genuinely difficult bug lives — one that never appears on your laptop or in testing, shows up under production load, and turns most of your polls into 404s.
 
 See you there.

@@ -85,6 +85,19 @@ if ! gcloud iam service-accounts describe "$BUILD_SA" --project="$PROJECT" >/dev
 fi
 echo "▶ build runs as: $BUILD_SA"
 
+# The build must be able to impersonate ITSELF.
+#
+# Cloud Build's metadata server issues access tokens but NOT ID tokens — /identity 404s with
+# "please provide a user-specified service account" even when a user-specified SA is in use.
+# The install needs an audience-bound ID token to call the IAM-gated MCP servers (make_toolspec
+# reads their tool schemas), and the only way to get one is iamcredentials.generateIdToken,
+# which requires tokenCreator on the target — here, the build SA on itself. roles/owner does
+# not reliably confer it, so grant it explicitly. Idempotent.
+gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" --project="$PROJECT" \
+  --member="serviceAccount:$BUILD_SA" --role=roles/iam.serviceAccountTokenCreator -q >/dev/null 2>&1 \
+  && echo "▶ self-impersonation enabled (can mint ID tokens for IAM-gated services)" \
+  || echo "! could not grant tokenCreator on $BUILD_SA — the gateway registry step may fail" >&2
+
 # Does it already have enough? Only owner is checked, because that is the only answer this
 # script offers; a curated role set is a deliberate choice made outside it.
 HAS_OWNER="$(gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' \

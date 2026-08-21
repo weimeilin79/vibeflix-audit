@@ -61,55 +61,39 @@ background, the script says so.
 
 ## Voice
 
-**News anchor meets true-crime storyteller.** Think a broadcast segment crossed with
-Rotten Mango. Clear and factual, but it pulls you along.
+**Connected prose, plainly written.** Somebody explaining their own system to a
+colleague, in full sentences, at an unhurried pace.
 
-Two halves, and you need both:
+**Write in complete sentences and let them vary in length.** Paragraphs are
+paragraphs, not stacks of fragments. "Four kinds of expertise. Four people. Three
+weeks." should be "That's four kinds of expertise, which in practice means four
+people, a shared inbox, and roughly three weeks of back and forth."
 
-**Banned construction — read this first.**
+**Make the point in the sentence where it arrives.** Do not set something up and then
+drop a one-line reveal underneath it. The rhythm of tension-and-payoff reads as
+performance, and it gets tiring across eight videos.
 
-Never write "it's not X, it's Y". Never "X isn't A. It's B". Never "not because…,
-because…". Never a trailing "Not a prompt." / "Not the decision." fragment.
+**Join ideas with connectives** — because, so, which means, given that, once, after,
+and that's why. Causal explanation carries the weight that dramatic pauses were
+carrying before.
 
-State the positive claim on its own. If the contrast genuinely helps, make it a
-separate sentence that stands up alone — do not lean the whole point on the
-negation.
+**Never define something by what it is not.** No "it's not X, it's Y". No "we don't
+X, we do Y". No trailing "Not a prompt." fragment. State the positive claim and move
+on. If a misconception genuinely needs naming, give it a full sentence of its own.
+
+**No `[BEAT]` markers.** Pacing should come from sentence construction. Keep
+`[SCREEN: …]` and `[DO: …]`, which are production notes rather than delivery cues.
+
+**Plain words.** Stop rather than cease, shows rather than demonstrates. Avoid
+"simply" and "just" entirely — if it were simple it wouldn't need a video.
+
+**Name the failure, then the fix.** Every trap in these scripts is one that really
+happened during the build. Describe what it looks like when it goes wrong and what to
+do about it, in ordinary sentences.
 
 Bad: "That's not a bug we're tolerating. That's the test passing."
-Good: "That 403 means the test passed."
-
-Bad: "Registration isn't paperwork. It's the enrolment step that makes governance
-possible."
-Good: "Registration is the enrolment step that makes governance possible."
-
-**The news half — clarity.**
-- Lead with the headline. Say the finding first, explain it second.
-- Short sentences. One idea each.
-- Plain words. *Stop*, not *cease*. *Shows*, not *demonstrates*.
-- No throat-clearing. Cut "it's worth noting", "I want you to", "let me be precise".
-- Never "simply" or "just".
-
-**The story half — pull.**
-- **Set a scene.** Not "there is a race condition". Instead: "The request leaves.
-  It lands on replica A. The poll comes back — and hits replica B."
-- **Ask the question the viewer is already thinking.** "So why not let one model do
-  all of it?" Then answer it.
-- **Hold the reveal.** State the symptom. Pause. Then the cause.
-- **Use fragments for punch.** "404. Task not found. For a task that is running fine,
-  three metres away."
-- **Present tense** for anything happening on screen.
-- **End every step on a hook** into the next one.
-
-Phrases that fit this voice: *Here's the thing. Watch what happens. And this is where
-it gets interesting. Nothing is broken — that's the point.*
-
-Bad: "Now, this is a detail worth dwelling on, because it speaks to something
-fundamental about how these systems are architected."
-
-Good: "Here's the part that catches everyone. Watch."
-
-Do not let the story half win over accuracy. Drama comes from the real failure, never
-from overselling it.
+Good: "That 403 is the test passing, because those services are deployed with no
+public access and nothing has been granted the invoker role yet."
 
 ## The through-line
 
