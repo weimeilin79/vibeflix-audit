@@ -31,7 +31,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"; cd "$ROOT"
 [ -f "$HERE/.env" ] && { set -a; . "$HERE/.env"; set +a; }
 
-GRANT_OWNER=0; ASYNC=0; MESH_ARGS=""
+GRANT_OWNER=0; ASYNC=0; MESH_ARGS=""; JUST_GRANTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --grant-owner) GRANT_OWNER=1; shift ;;
@@ -96,6 +96,7 @@ if [ -z "$HAS_OWNER" ]; then
     gcloud projects add-iam-policy-binding "$PROJECT" \
       --member="serviceAccount:$BUILD_SA" --role=roles/owner --condition=None -q >/dev/null
     echo "  ✓ granted"
+    JUST_GRANTED=1
   else
     cat >&2 <<MSG
 
@@ -115,15 +116,37 @@ MSG
   fi
 fi
 
+# An IAM grant is not in force the moment it is written. The policy reads back with the new
+# binding immediately, but enforcement — GCS especially — lags by a minute or more, so a submit
+# fired straight after --grant-owner fails with a 403 on the source tarball that looks exactly
+# like a missing role. Give it a head start rather than making the first attempt the canary.
+if [ "$JUST_GRANTED" = 1 ]; then
+  echo "▶ waiting 60s for the owner grant to take effect (IAM is eventually consistent)…"
+  sleep 60
+fi
+
 echo "▶ submitting…"
 # --ignore-file: the DEFAULT .gcloudignore is written for the agent/app IMAGE builds and drops
 # workshop/ and deploy/img/ — the installer's own entry point and its seed data. See
 # .gcloudignore-mesh.
-set -x
-gcloud builds submit "$ROOT" \
-  --project="$PROJECT" \
-  --config="$HERE/cloudbuild-mesh.yaml" \
-  --ignore-file="$ROOT/.gcloudignore-mesh" \
-  --substitutions="_MESH_ARGS=$MESH_ARGS" \
-  --service-account="projects/$PROJECT/serviceAccounts/$BUILD_SA" \
-  $( [ "$ASYNC" = 1 ] && echo --async )
+ASYNC_FLAG=""; [ "$ASYNC" = 1 ] && ASYNC_FLAG="--async"
+submit() {
+  gcloud builds submit "$ROOT" \
+    --project="$PROJECT" \
+    --config="$HERE/cloudbuild-mesh.yaml" \
+    --ignore-file="$ROOT/.gcloudignore-mesh" \
+    --substitutions="_MESH_ARGS=$MESH_ARGS" \
+    --service-account="projects/$PROJECT/serviceAccounts/$BUILD_SA" \
+    $ASYNC_FLAG
+}
+n=1
+until submit; do
+  if [ "$n" -ge 4 ]; then
+    echo "✗ submit failed $n times." >&2
+    echo "  A 403 on storage.objects.get for $BUILD_SA is still-propagating IAM:" >&2
+    echo "  wait a couple of minutes and re-run this script — nothing needs undoing." >&2
+    exit 1
+  fi
+  echo "! submit failed (attempt $n/4) — retrying in 45s (usually IAM propagation)"
+  sleep 45; n=$((n + 1))
+done
