@@ -601,6 +601,21 @@ def main():
             # the agent identity IS the workload identity (verified: 400 otherwise).
             "identity_type": types.IdentityType.AGENT_IDENTITY,
             "staging_bucket": STAGING,
+            # PER-AGENT staging directory. The SDK stages the pickle, the requirements and the
+            # dependency tarball to `{staging_bucket}/{gcs_dir_name}/` and defaults gcs_dir_name
+            # to the literal "agent_engine" — the SAME path for every agent. We deploy six of
+            # them through a ThreadPoolExecutor, so without this they race for one set of
+            # objects: whoever uploads last wins, and each engine is then built from whatever
+            # requirements.txt and agent_engine.pkl happened to be there when its build started.
+            #
+            # Nothing fails at deploy time. The engine reports success and breaks at RUNTIME, in
+            # whatever way the mismatch happens to bite:
+            #   • ui_renderer built from another agent's requirements → its a2ui-agent-sdk line
+            #     is missing → every render dies with `No module named 'a2ui'` and the console
+            #     blames the A2UI format (observed in vibeflix-test-2, 2026-08-20).
+            #   • the .pkl losing the race → an engine running a DIFFERENT agent's code, which
+            #     is what the "cloudpickle agent_name mixup" behind the empty-audits bug was.
+            "gcs_dir_name": f"agent_engine_{name}",
             "env_vars": env,
             "requirements": requirements(name),
             "extra_packages": ["agents", _vendored_common()],
