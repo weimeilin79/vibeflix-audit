@@ -351,6 +351,28 @@ def _presented_json(text: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _render_failure(text: str, exc: Exception) -> str:
+    """Why the presenter's reply isn't a panel — in the words of the actual failure.
+
+    Three very different things arrive here as "text that isn't A2UI", and the parser reports
+    all three identically ("A2UI tags not found"), which sends you to the renderer's prompt:
+
+      • the remote engine FAILED — it never ran. Our A2A client hands the failure back as a
+        marker string (vibeflix_common/a2a/engine.py), so the reply is an error, not a panel.
+        A missing dependency in the engine image looks exactly like this.
+      • the agent answered, but in the WRONG format — its skill has a second, non-A2UI task,
+        and a reply with no block at all is usually the model having chosen that one.
+      • the block is there but MALFORMED — the only case where the prompt is a suspect, and
+        the only one the streaming recovery parser can't already save.
+    """
+    if text.startswith("[A2A engine execution FAILED]"):
+        return f"the renderer ENGINE failed, it never rendered — {text[:300]}"
+    if "<a2ui-json>" not in text:
+        return ("the reply contains NO A2UI block at all — the agent errored, or answered in "
+                f"its other (non-A2UI) format. First 200 chars: {text[:200]!r}")
+    return f"the A2UI block is malformed ({type(exc).__name__}: {exc})"
+
+
 async def _present(reports: dict) -> list | None:
     """Reports → the AGENT-EMITTED A2UI panel(s), as `{root, components}` in wire form.
     None on failure → caller uses the deterministic panels_fallback.
@@ -380,10 +402,11 @@ async def _present(reports: dict) -> list | None:
         # tags split across parts, a truncated reply, a stray preamble) — and they are
         # indistinguishable without the payload. First/last 200 chars is enough to tell.
         _t = (text or "").strip()
-        print(f"[app] presenter emitted invalid A2UI ({type(e).__name__}: {e}); fallback\n"
-              f"      len={len(_t)} head={_t[:200]!r}\n"
-              f"      tail={_t[-200:]!r}", flush=True)
-        emit_event("ui_renderer", "failed", detail=f"invalid A2UI ({type(e).__name__})")
+        reason = _render_failure(_t, e)
+        print(f"[app] presenter produced no usable panel; falling back.\n"
+              f"      reason: {reason}\n"
+              f"      len={len(_t)} tail={_t[-200:]!r}", flush=True)
+        emit_event("ui_renderer", "failed", detail=reason[:300])
         return None
     # A structurally-valid but CONTENT-EMPTY panel (every Text blank) renders as an invisible
     # card — the LLM sometimes does this for a sparse report. The spec has no opinion on it, so
