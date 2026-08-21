@@ -1,6 +1,6 @@
 # Step 7 — Identity, Gateway & Registry
 
-**Target runtime:** 14–17 min · **Lab section:** `Identity, Gateway & Registry`
+**Target runtime:** 22–26 min · **Lab section:** `Identity, Gateway & Registry`
 
 ---
 
@@ -14,35 +14,121 @@ If one of those agents were compromised tomorrow, through a prompt injection bur
 
 Its own IAM, which is coarse. IAM grants an agent reach to a whole server. It can't express that this agent may call one specific tool and nothing else.
 
----
-
-## 01:00 — Governance in the traffic path
-
-Most organisations have governance in a spreadsheet describing which system may talk to which, who approved it, and when it was reviewed. That spreadsheet describes an intention, and the gap between the intention and the running system is where incidents live.
-
-We're building a component that requests physically travel through, which applies the rules and refuses anything outside them.
-
-The test for your own systems: can you violate the policy without changing the policy? If you can, it's a document. If you can't, it's a guardrail.
+This step closes that gap. We'll go through where an agent's identity actually comes from, what travels on the wire when it makes a call, and which component checks which claim.
 
 ---
 
-## 02:00 — Three pieces
+## 01:15 — Where the principal comes from
 
-Agent Identity means every agent is its own principal with its own name, which makes an action attributable and makes least privilege possible. You've been building this since Step 2.
+Open `agent_identities.json` and look at a principal.
 
-The Registry is the catalogue of what exists and where, covering every MCP server and agent. You registered the servers in Step 1.
+```
+principal://agents.global.org-<ORG>.system.id.goog/…/reasoningEngines/<ID>
+```
 
-The Gateway is the governed front door traffic goes through. It's deny-by-default and only routes to destinations in the registry.
+That's a SPIFFE ID. SPIFFE is a standard for naming a running workload with a URI that the workload can prove is its own. The spec writes it `spiffe://` and Google's IAM renders the same thing as `principal://`.
 
-Identity answers who is calling, the registry answers what may be called, and the gateway is where those two facts meet and a decision gets made. An unregistered destination is unreachable, so enrolment becomes enforcement.
+Read it in three parts. `agents.global.org-<ORG>.system.id.goog` is the **trust domain**, scoped to your organization, so a name issued in somebody else's org can never be mistaken for one of yours. Then the path down to `reasoningEngines/<ID>` names one specific engine.
+
+The agent proves that name with an **X.509 certificate**. The SPIFFE ID sits in the certificate's subject-alternative-name field, and the engine presents that certificate during the TLS handshake. The host verifies it against the trust domain, and the call proceeds as that agent's principal.
 
 ---
 
-## 03:30 — The policy map
+## 03:00 — Can you switch it to something else?
+
+No, and the reason is worth understanding, because it changes how you think about the whole model.
+
+Agent identity **replaces** the service account. In `deploy_agents_a2a.py` the engine is created with `identity_type: AGENT_IDENTITY`, and if you also try to set `service_account` on that config the API returns a 400. You get one or the other.
+
+Without agent identity, an engine runs as a service account — the Reasoning Engine Service Agent, or a custom one you attach. A service account is shared by whatever you attach it to, it can be impersonated, and it outlives the workload. With agent identity there is no service account behind the metadata server at all.
+
+What you get instead is one principal per agent that starts with zero permissions, is attributable to exactly one engine, and disappears when that engine is deleted.
+
+That last property explains a rule you'll see in the docs: don't delete an engine to redeploy it. Deleting the engine destroys the identity, which orphans every role you granted to that principal, so the redeployed engine comes back with a new name and none of its access.
+
+---
+
+## 05:00 — The token is bound to the certificate
+
+There's a detail here that caused a hard outage during the build, and it explains three environment flags you'll see on every engine.
+
+An agent-identity token is **certificate-bound**. The certificate is the only way to mint a fresh one. Underneath, google-auth reads the agent identity certificate, and if the certificate says a bound token should be requested, it sends the certificate fingerprint along with the token request and gets back a fresh bound token.
+
+Turn the mTLS flags off and that path is skipped entirely. google-auth asks for an unbound token, and the metadata server hands back the platform's shared, pre-minted token whose expiry is frozen at replica boot. Refreshing re-fetches the identical dead token.
+
+So roughly sixty minutes after a replica boots, every call from that replica starts returning 401. Sessions fail first, because session preparation runs before your agent code, then MCP, then A2A. The measured fuse in this project was between 59 and 63 minutes from each replica's own boot.
+
+The fix is leaving those flags at their defaults rather than explicitly opting out. It's a good example of a security mechanism where turning off something that looks like transport configuration silently breaks credential lifetime.
+
+---
+
+## 07:30 — One gateway, on both sides of the agent
+
+[SCREEN: client → INGRESS → agent → EGRESS → MCP / APIs / peer agents.]
+
+Now the gateway, and the first thing to get right is the topology. **The same gateway resource governs traffic coming in and traffic going out.** Drawing it as two separate products misrepresents what it is.
+
+**Ingress is Client-to-Agent.** It answers which clients may call your agents, and what security policies apply to those calls. The client here is something like Cursor, a CLI, or somebody's app.
+
+**Egress is Agent-to-Anywhere.** It answers what this agent may reach, and whether what it's sending is safe. The destinations are MCP servers, third-party APIs, and peer agents.
+
+Model Armor attaches to either direction, with a template **per direction**. On ingress it evaluates the request going in and the response coming back. On egress it intercepts the outbound payload before it reaches an LLM, a third-party agent, or an MCP server.
+
+Vibeflix configures egress only. Look at `deploy/agent-gateway.yaml` and you'll find `governedAccessPath: AGENT_TO_ANYWHERE` and no Model Armor template. Ingress isn't set up because the console calls the agents over A2A from its own app, so there's no third-party client to gate. If you were exposing these agents to external callers, that's the half you'd turn on.
+
+---
+
+## 10:00 — Two tokens on every call
+
+[SCREEN: the two headers on an outbound MCP call.]
+
+Now what actually travels on the wire. An outbound MCP call carries **two** authorization headers, and they're for two different readers.
+
+`Proxy-Authorization` carries the agent's own access token, issued by its agent identity. **The gateway reads this one.** It's how the gateway knows which agent is calling.
+
+`Authorization` carries an ID token minted for the MCP server's URL, obtained by impersonating the MCP invoker service account. **Cloud Run reads this one.**
+
+Two readers, two questions. The gateway asks whether this agent may go there. Cloud Run asks whether this caller may come in. Neither can answer the other's question, so both headers are on the call.
+
+For an A2A hop to a peer agent, the same access token appears in both headers, because the far end is another engine rather than a Cloud Run service, and it verifies the agent identity directly.
+
+---
+
+## 12:00 — Why an ID token and not an access token
+
+The choice of an **ID** token for the Cloud Run hop looks like a detail and isn't.
+
+Cloud Run has to verify an access token **remotely**, by calling Google's token introspection endpoint. Under a concurrent fan-out — three agents hitting MCP servers at once — that introspection flakes, and it surfaces as an intermittent 401 saying the access token could not be verified.
+
+An ID token is verified **locally**, by checking the signature against Google's public keys and checking that the audience matches the receiving service's own URL. Nothing has to be called, so it can't flake that way.
+
+There's an implementation wrinkle worth knowing if you hit it. ADK's MCP session manager injects the agent's access token into `Authorization` itself, and it skips doing that when the header is already present. So this codebase pre-sets the ID token through a header provider, which makes ADK leave it alone.
+
+---
+
+## 13:30 — What checks what
+
+[SCREEN: the layers, in order.]
+
+Follow one MCP call from the agent to the tool and count the checkpoints.
+
+**At the gateway**, three checks in sequence. Is this destination registered in the Agent Registry? Does this agent hold `roles/iap.egressor` on that entry? And does the CEL condition on that grant allow this specific tool? All three read `Proxy-Authorization` to work out who's asking.
+
+**At Cloud Run**, two checks. Does the token's audience match this service's own URL, and is the signature real and unexpired? Those read `Authorization`.
+
+**At a peer engine**, on an A2A hop, the far side asks Google's token service whether the token is valid and whose it is, then resolves which agent identity sits behind it.
+
+**At a Google API**, the check is different again, because the token is certificate-bound. The API verifies that the token was issued to the certificate on this connection, and that the certificate is this engine's own SPIFFE identity.
+
+Different layers verify different claims, and no single layer is doing all of it.
+
+---
+
+## 16:00 — The policy map
 
 [SCREEN: `deploy/policies.yaml`.]
 
-Each agent is mapped to the exact tools it may invoke, so brand style may call the brand audit tool and deal pricing may call the pricing lookup.
+Each agent is mapped to the exact tools it may invoke, so brand style may call the brand audit tool and deal pricing may call the pricing lookup. Those entries become the CEL conditions the gateway evaluates.
 
 The licensing server also exposes tools that change things: updating a vendor, writing a contract, resetting the store. Deal pricing has no business calling any of them, and under coarse IAM it could. Under per-tool policy the attempt is refused in the path and logged.
 
@@ -50,7 +136,7 @@ A compromised pricing agent can look up prices and has no route to writing a con
 
 ---
 
-## 04:30 — Register, gate and grant
+## 17:15 — Register, gate and grant
 
 ```bash
 cd ~/vibeflix-audit
@@ -60,13 +146,15 @@ source ./env.sh
 
 [DO: run it.]
 
-Four things in order. The six agents get registered, since the MCP servers already were. The governed front door gets created. The authorization extension gets attached, which makes the gateway consult policy per request. Then it calls the IAM script, which adds egress grants on top of the per-agent access from Steps 2 through 5.
+Four things in order. The six agents get registered, since the MCP servers already were in Step 1. The gateway gets created. The authorization extension gets attached, which is what makes the gateway consult policy per request rather than just routing. Then it calls the IAM script, which adds the egress grants.
 
-Until now each agent's grants described what it may do. These describe where it may go.
+Until now each agent's grants described what it may do. These describe where it may go, and they're the `iap.egressor` roles the gateway checks.
+
+The registry matters more than it looks. Under deny-by-default, an unregistered destination is unreachable, so the registry is the allowlist.
 
 ---
 
-## 05:45 — Attaching the engines
+## 18:45 — Attaching the engines
 
 ```bash
 cd ~/vibeflix-audit
@@ -78,13 +166,13 @@ This is the one redeploy the workshop still requires.
 
 The gateway didn't exist when you deployed these engines in Steps 2 through 5, and each deploy said so at the time. An engine's gateway attachment is part of its deployment spec, baked in when the engine is created.
 
-In Step 6 the task-store URL turned out computable, so no second pass was needed. This one is a relationship to a thing that didn't exist yet.
+In Step 6 the task-store URL turned out to be computable, so no second pass was needed. This one is a relationship to a thing that didn't exist yet.
 
-Until this pass runs, the agents' egress is ungoverned, so this is where the guardrail goes into the path.
+Until this pass runs, the agents' egress is ungoverned.
 
 ---
 
-## 07:00 — Verify the wiring
+## 19:45 — Verify and run it for real
 
 ```bash
 cd ~/vibeflix-audit
@@ -92,77 +180,65 @@ source ./env.sh
 ./deploy/verify/step7.sh
 ```
 
-Confirms the gateway exists, the six agents and three MCP servers are registered, and all six agents run under their own agent identity.
+Confirms the gateway exists, the six agents and three MCP servers are registered, and all six agents run under their own agent identity — you'll see the `principal://` form in the output.
 
----
-
-## 07:45 — Running it for real
-
-A script confirms the wiring. A full audit through the deployed console demonstrates the mesh still works with governance in the path.
-
-```bash
-cd ~/vibeflix-audit
-source ./env.sh
-gcloud run services describe vibeflix-app --region "$REGION" --format 'value(status.url)'
-```
+Then run a full audit through the deployed console, because a script confirms the wiring and only a real run demonstrates the mesh still works with governance in the path.
 
 [DO: open the console, pick the happy path, run it.]
 
-Same scenario as Step 6, all of it in the cloud. The app calls the orchestrator engine over A2A, which fans out to three more engines, each authenticating as its own principal and reaching the MCP servers through the gateway.
-
-The graph animates from events the engines publish over Pub/Sub. The tool LEDs fire, and each blink is a gateway decision that came back yes. And the run ends with a contract.
+The tool LEDs firing means the gateway allowed those calls, so every blink is three checks that came back yes.
 
 ---
 
-## 09:30 — What a failure looks like
+## 21:00 — What a failure looks like
 
 [SCREEN: a branch failing — 403, egress request is not authorized.]
 
-An agent reports a 403 saying egress is not authorized, its branch fails, and the others pass. Either the destination isn't registered, or that agent lacks the egress role on it.
+An agent reports a 403 saying egress is not authorized, its branch fails, and the others pass. That points at one of the three gateway checks: the destination isn't registered, the agent lacks `iap.egressor` on it, or the CEL condition excludes that tool.
 
 This is the system working. Deny-by-default means a misconfiguration fails closed and you find out immediately. In an ungoverned system the same mistake produces no error, the call goes through, and you find out during an audit or a breach.
 
-Re-applying the policies fixes it.
+Re-applying the policies fixes it. IAM and gateway changes take two to five minutes to propagate, so if the first run right after this step fails on egress, wait and run it again.
 
-IAM and gateway changes take two to five minutes to propagate, so if the first run right after this step fails on egress, wait and run it again.
+A 401 rather than a 403 points somewhere else entirely — that's the credential path, not the policy path, and the sixty-minute frozen-token failure from earlier is the one to check for.
 
 ---
 
-## 11:00 — The whole security story
+## 22:30 — The whole security story
 
 [SCREEN: build the chain up, one layer at a time.]
 
 In Step 1 the tool servers went up with no public access, and a browser still gets a 403 today.
 
-In Steps 2 through 5 every agent got its own identity and its own narrow roles, with no shared service account. Because an agent identity can't authenticate to Cloud Run directly, each reaches the tool servers by impersonating an invoker service account, a relationship that can be granted and revoked.
+In Steps 2 through 5 every agent got its own SPIFFE principal, proved by a certificate, with its own narrow roles and no service account anywhere. Because that principal can't authenticate to Cloud Run directly, each agent reaches the tool servers by impersonating an invoker service account to mint an audience-bound ID token.
 
-In Step 6 the app got its own identity on the same basis.
+In Step 6 the app got its own identity, as an ordinary Cloud Run service account, since it isn't an engine.
 
-In Step 7 a gateway went into the path, deny-by-default, applying per-tool policy, with destinations that must be registered to be reachable.
+In Step 7 a gateway went into the path on the egress side, deny-by-default, checking the registry, the egress role and a per-tool CEL condition on every call.
 
 At every step we changed what is possible, so the allowlist is the running system.
 
 ---
 
-## 12:30 — Do and don't
+## 24:00 — Do and don't
 
-Give every agent its own identity, because a shared service account destroys attribution.
+Give every agent its own identity, because a shared service account destroys attribution and can be impersonated by anything it's attached to.
 
-Apply the test: if you can violate a policy without editing it, it isn't a control.
+Leave the mTLS and token-sharing flags at their defaults, since an agent identity token is certificate-bound and opting out gives you a frozen token with a sixty-minute fuse.
+
+Don't delete an engine to redeploy it, because the identity dies with it and takes every grant along.
 
 Scope policy per tool rather than per server, since reaching a server and calling one read-only tool on it are very different blast radii.
 
-Don't route around a gateway 403. Fix the policy or the registration.
+Turn on ingress as well as egress if anything outside your own app will call these agents.
 
-Register everything you intend to be reachable, since under deny-by-default the registry is the allowlist.
-
-Give a fresh gateway change five minutes before debugging it.
+Don't route around a gateway 403. Fix the registration, the role, or the CEL condition.
 
 ---
 
-## 13:30 — Where that leaves us
+## 25:30 — Where that leaves us
 
-Governance sits in the traffic path. Every hop is checked, every agent is attributable, and a misconfiguration fails immediately.
+Governance sits in the traffic path on the egress side. Every hop carries two tokens for two different verifiers, every agent is a SPIFFE principal that can be named and revoked on its own, and a misconfiguration fails closed.
 
 One step left, where we use the thing. Four scenarios that each end differently, driven entirely by data. Then three observability views, and teardown.
 

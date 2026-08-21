@@ -48,7 +48,7 @@ Measured narration length, so you can see which scripts have the most headroom:
 | 4 · Vendor Clearance + Legal | ~2,370 | ~17 min |
 | 5 · Orchestrator | ~2,140 | ~15 min |
 | 6 · UI Renderer / A2UI | ~1,910 | ~14 min |
-| 7 · Identity & Gateway | ~1,680 | ~12 min |
+| 7 · Identity & Gateway | ~2,365 | ~17 min |
 | 8 · Run the Flows | ~1,815 | ~13 min |
 
 Steps 3, 6, 7 and 8 are the leanest — if a read-through lands short of the target,
