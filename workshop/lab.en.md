@@ -1934,6 +1934,21 @@ source ./env.sh
 python deploy/deploy_agents_a2a.py        # no arg = all six engines
 ```
 
+> **If that stops with `RESOURCE_EXHAUSTED` or `429`:** your project has a small Agent Engine
+> quota, and six deploys at once do not fit. Nothing is broken and nothing needs undoing —
+> deploy them one at a time instead, which keeps a single build in flight:
+>
+> ```bash
+> cd ~/vibeflix-audit
+> source ./env.sh
+> for A in brand_style deal_pricing legal vendor_clearance ui_renderer orchestrator; do
+>   python deploy/deploy_agents_a2a.py "$A"
+> done
+> ```
+>
+> Re-deploying an engine that already attached is harmless, so it is safe to run this after a
+> partial failure.
+
 This is the one redeploy the workshop still needs. `TASK_STORE_URL` used to force another
 (Step 6) until it turned out to be computable — but a gateway attachment isn't a value you can
 predict: it's part of the engine's deployment spec, and the gateway simply didn't exist when

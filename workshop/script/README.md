@@ -61,39 +61,37 @@ background, the script says so.
 
 ## Voice
 
-**Connected prose, plainly written.** Somebody explaining their own system to a
-colleague, in full sentences, at an unhurried pace.
+**Connected prose, no filler.** Every sentence carries a fact, an instruction, or a
+reason. If a sentence only labels or summarises the sentence next to it, delete it.
 
-**Write in complete sentences and let them vary in length.** Paragraphs are
-paragraphs, not stacks of fragments. "Four kinds of expertise. Four people. Three
-weeks." should be "That's four kinds of expertise, which in practice means four
-people, a shared inbox, and roughly three weeks of back and forth."
+**Cut labelling sentences.** "That's blast radius made concrete." "That's the pattern
+to take away." "Here's the thing." "The thing worth noticing is…" These announce a
+point instead of making one.
 
-**Make the point in the sentence where it arrives.** Do not set something up and then
-drop a one-line reveal underneath it. The rhythm of tension-and-payoff reads as
-performance, and it gets tiring across eight videos.
+**Cut reader management.** No "it's worth noting", "worth pausing on", "I'd like you
+to", "let me be precise", "worth appreciating for a moment", "before we X, let's Y".
+Just do the thing.
 
-**Join ideas with connectives** — because, so, which means, given that, once, after,
-and that's why. Causal explanation carries the weight that dramatic pauses were
-carrying before.
+**Cut hedges.** fairly, genuinely, quite, rather, actually, somewhat, generally,
+usually, essentially, basically. They dilute and add nothing.
 
-**Never define something by what it is not.** No "it's not X, it's Y". No "we don't
-X, we do Y". No trailing "Not a prompt." fragment. State the positive claim and move
-on. If a misconception genuinely needs naming, give it a full sentence of its own.
+**Cut throat-clearing openers.** Sentences starting "Now," "So," "Right," "Well,".
 
-**No `[BEAT]` markers.** Pacing should come from sentence construction. Keep
-`[SCREEN: …]` and `[DO: …]`, which are production notes rather than delivery cues.
+**Say it once.** If two sentences make the same point in different words, keep the
+better one.
 
-**Plain words.** Stop rather than cease, shows rather than demonstrates. Avoid
-"simply" and "just" entirely — if it were simple it wouldn't need a video.
+**Still: complete sentences, joined with connectives.** No fragment stacks, no
+one-line dramatic reveals, no `[BEAT]` markers.
 
-**Name the failure, then the fix.** Every trap in these scripts is one that really
-happened during the build. Describe what it looks like when it goes wrong and what to
-do about it, in ordinary sentences.
+**Never define by negation.** No "it's not X, it's Y". No "we don't X, we do Y". No
+trailing "Not a prompt." State the positive claim.
 
-Bad: "That's not a bug we're tolerating. That's the test passing."
-Good: "That 403 is the test passing, because those services are deployed with no
-public access and nothing has been granted the invoker role yet."
+Bad: "That's blast radius made concrete. A compromised pricing agent can look up
+prices, and it has no route to writing a contract."
+Good: "A compromised pricing agent can look up prices and has no route to writing a
+contract."
+
+Shorter is fine. A tight 15-minute script beats a padded 25-minute one.
 
 ## The through-line
 

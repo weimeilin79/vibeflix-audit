@@ -385,7 +385,17 @@ if want gateway && [ "$SKIP_GATEWAY" = 0 ]; then
        ./deploy/deploy_mesh.sh --from brand"
   run ./deploy/setup_gateway.sh
   # The attach IS a redeploy (rule 4). No argument = all six engines.
-  run python deploy/deploy_agents_a2a.py
+  # One at a time, NOT the no-argument form.
+  #
+  # `deploy_agents_a2a.py` with no argument deploys all six concurrently, which is the fastest
+  # thing to do on a project with headroom and the wrong thing on a small quota: an Agent Engine
+  # deploy is a server-side container build, and the ones that do not fit come back
+  # RESOURCE_EXHAUSTED. That fails the phase on a rate limit rather than on anything being
+  # wrong. Naming each agent keeps exactly one build in flight. It is slower, and this phase is
+  # the last one — nothing is waiting on it.
+  for A in brand_style deal_pricing legal vendor_clearance ui_renderer orchestrator; do
+    run python deploy/deploy_agents_a2a.py "$A"
+  done
   run python deploy/collect_agent_identities.py
   verify step7.sh
   end_phase
