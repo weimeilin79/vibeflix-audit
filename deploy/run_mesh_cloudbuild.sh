@@ -50,19 +50,35 @@ PNUM="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 echo "▶ project      : $PROJECT ($PNUM)"
 echo "▶ mesh args    : ${MESH_ARGS:-<none — full install>}"
 
-# Cloud Build needs to exist before it can run anything.
-gcloud services enable cloudbuild.googleapis.com --project="$PROJECT" >/dev/null 2>&1 || true
+# Cloud Build and IAM have to exist before anything below can use them. Fail loudly: a silenced
+# failure here resurfaces as a confusing "service account not found" two commands later.
+gcloud services enable cloudbuild.googleapis.com iam.googleapis.com \
+  --project="$PROJECT" >/dev/null || {
+    echo "✗ could not enable cloudbuild/iam on $PROJECT — check billing is linked." >&2; exit 1; }
 
-# Which identity will the build run as? Projects created before the 2024 change use the legacy
-# Cloud Build SA; newer ones default to the Compute Engine default SA. Pick whichever exists
-# rather than guessing, and let BUILD_SA override.
-BUILD_SA="${BUILD_SA:-}"
-if [ -z "$BUILD_SA" ]; then
-  for CAND in "$PNUM-compute@developer.gserviceaccount.com" "$PNUM@cloudbuild.gserviceaccount.com"; do
-    gcloud iam service-accounts describe "$CAND" --project="$PROJECT" >/dev/null 2>&1 && { BUILD_SA="$CAND"; break; }
+# Which identity does the build run as?
+#
+# Not a default one. On a BRAND-NEW project there is nothing to find: the Compute Engine default
+# SA only exists once compute.googleapis.com is enabled, and the legacy
+# <number>@cloudbuild.gserviceaccount.com is not created at all for projects made after Google's
+# 2024 change. Probing for either is how this script used to fail on exactly the project it is
+# meant to bootstrap.
+#
+# So create a DEDICATED one instead. It works identically on a fresh or an established project,
+# it is the account the --grant-owner decision applies to (rather than the compute default SA,
+# which other workloads also use), and deleting it revokes this pipeline in one step.
+BUILD_SA="${BUILD_SA:-vibeflix-mesh-builder@$PROJECT.iam.gserviceaccount.com}"
+if ! gcloud iam service-accounts describe "$BUILD_SA" --project="$PROJECT" >/dev/null 2>&1; then
+  SA_ID="${BUILD_SA%%@*}"
+  echo "▶ creating build service account ${SA_ID}…"
+  gcloud iam service-accounts create "$SA_ID" --project="$PROJECT" \
+    --display-name "Vibeflix mesh installer (Cloud Build)" >/dev/null
+  # IAM is eventually consistent; a grant or an actAs immediately after create can 404.
+  for _ in 1 2 3 4 5 6; do
+    gcloud iam service-accounts describe "$BUILD_SA" --project="$PROJECT" >/dev/null 2>&1 && break
+    sleep 5
   done
 fi
-[ -n "$BUILD_SA" ] || { echo "✗ could not find a build service account — set BUILD_SA=…" >&2; exit 1; }
 echo "▶ build runs as: $BUILD_SA"
 
 # Does it already have enough? Only owner is checked, because that is the only answer this
@@ -109,4 +125,5 @@ gcloud builds submit "$ROOT" \
   --config="$HERE/cloudbuild-mesh.yaml" \
   --ignore-file="$ROOT/.gcloudignore-mesh" \
   --substitutions="_MESH_ARGS=$MESH_ARGS" \
+  --service-account="projects/$PROJECT/serviceAccounts/$BUILD_SA" \
   $( [ "$ASYNC" = 1 ] && echo --async )

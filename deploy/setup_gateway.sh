@@ -28,7 +28,7 @@ if [ "$STEP" = all ] || [ "$STEP" = registry ]; then
   for S in licensing market brand-style; do
     URL=$(gcloud run services describe "vibeflix-mcp-$S" --region "$REGION" --format 'value(status.url)')/mcp
     SPEC="$HERE/toolspecs/$S.json"
-    [ -s "$SPEC" ] || { echo "  generating tool spec $SPEC…";
+    [ -s "$SPEC" ] || { echo "  generating tool spec ${SPEC}…";
       "$HERE/../.venv/bin/python" "$HERE/make_toolspec.py" "$URL" > "$SPEC"; }
     ensure_created "registry entry vibeflix-mcp-$S" \
       gcloud alpha agent-registry services create "vibeflix-mcp-$S" \

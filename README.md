@@ -780,11 +780,17 @@ whether a job is running — `tmux` and `nohup` don't survive that. A build does
 
 The catch is identity. In your shell you are the project owner and nothing is denied; a build
 runs as a **service account** that by default cannot create service accounts, edit project IAM,
-or deploy agent engines. On a disposable demo project the practical answer is `roles/owner` on
-the build SA — hence `--grant-owner`, which prints what it is doing and is never implicit. The
-wrapper checks first and refuses to submit an under-permissioned build rather than letting it
-fail forty minutes in. For a project that matters, grant the curated role list in that script's
-header instead.
+or deploy agent engines. The wrapper creates a dedicated one — `vibeflix-mesh-builder@<project>`
+— rather than reaching for a default: on a brand-new project the Compute Engine default SA does
+not exist until `compute.googleapis.com` is enabled, and the legacy
+`<number>@cloudbuild.gserviceaccount.com` is not created at all for projects made after Google's
+2024 change. A dedicated account also keeps the `--grant-owner` decision scoped to this pipeline,
+and deleting it revokes the pipeline in one step.
+
+On a disposable demo project the practical answer is `roles/owner` on that account — hence
+`--grant-owner`, which prints what it is doing and is never implicit. The wrapper checks first
+and refuses to submit an under-permissioned build rather than letting it fail forty minutes in.
+For a project that matters, grant the curated role list in that script's header instead.
 
 The build carries `deploy/.env`, `agent_identities.json` and `.mesh_state` in
 `gs://<project>-artifacts/mesh-state/` between runs — without that, a resumed build would mint
