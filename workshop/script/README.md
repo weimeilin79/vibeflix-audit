@@ -66,6 +66,22 @@ Rotten Mango. Clear and factual, but it pulls you along.
 
 Two halves, and you need both:
 
+**Banned construction — read this first.**
+
+Never write "it's not X, it's Y". Never "X isn't A. It's B". Never "not because…,
+because…". Never a trailing "Not a prompt." / "Not the decision." fragment.
+
+State the positive claim on its own. If the contrast genuinely helps, make it a
+separate sentence that stands up alone — do not lean the whole point on the
+negation.
+
+Bad: "That's not a bug we're tolerating. That's the test passing."
+Good: "That 403 means the test passed."
+
+Bad: "Registration isn't paperwork. It's the enrolment step that makes governance
+possible."
+Good: "Registration is the enrolment step that makes governance possible."
+
 **The news half — clarity.**
 - Lead with the headline. Say the finding first, explain it second.
 - Short sentences. One idea each.

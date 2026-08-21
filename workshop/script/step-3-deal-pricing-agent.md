@@ -24,7 +24,7 @@ This vendor projects 30,000.
 
 So the discount they're claiming doesn't apply to them. The deal is underpriced by a wide margin.
 
-Now look at where the difficulty actually was. **The arithmetic was never in question.** Multiplying a base rate by a modifier is not hard.
+Now look at where the difficulty actually was. **The arithmetic was never in question.** Any spreadsheet multiplies a base rate by a modifier.
 
 The hard part was testing a *claim* against the tier the vendor actually qualifies for.
 
@@ -68,7 +68,7 @@ Three things you get from that. A mega-prompt gives you none of them.
 
 **It terminates.** The max rounds is a number in Python. The model doesn't get a vote.
 
-**The steps always happen, in order.** The model can't skip evaluation and jump to a verdict. The edge is an edge, not a suggestion.
+**The steps always happen, in order.** The model can't skip evaluation and jump to a verdict. The edge decides.
 
 **It's inspectable.** Something breaks, you know which node. Debugging a graph is doable. Debugging "the model didn't follow step four" is not.
 
@@ -94,7 +94,7 @@ Why not put that in the instruction? Three reasons.
 
 [BEAT]
 
-That sentence is in the file. Not implied. Not hoped for. Written down, versioned, reviewable. Someone changes it, it shows up in a diff.
+That sentence is in the file. Written down, versioned, reviewable. Someone changes it, it shows up in a diff.
 
 If you take one practice home from this workshop, this is a strong candidate. The moment your prompt starts containing a *procedure* — pull it out into a file. Treat it like the operational document it already is.
 
@@ -173,7 +173,7 @@ The reply is long. Here are the parts that matter.
 
 [SCREEN: the trimmed JSON.]
 
-**`rate_card` is what the agent fetched. Not what it knew.**
+**`rate_card` is what the agent fetched at run time.**
 
 The licensing tool returned Grogu's card. A-list tier. 0.14 base rate. The modifier tables. None of that is in the prompt or in the model's head.
 
@@ -189,7 +189,7 @@ And that last multiplier is the whole story.
 
 **That's the volume-discount claim being rejected.** The first tier that earns a discount starts at 100,000 units. This deal is 30,000. So the multiplier stays at 1.0.
 
-The arithmetic is the tool's. Not the model's. Defer the exact math to the tool — right there, on screen.
+The arithmetic belongs to the tool. Defer the exact math to the tool — right there, on screen.
 
 **`components` is the line-by-line comparison** against what the vendor agreed. All three are a discrepancy. And `mg` carries `below_floor: true` — 30,000 against a floor of 150,000.
 
@@ -251,7 +251,7 @@ Watch it pull the expected deal. Mark the royalty unresolved. Run the loop. Reje
 
 **Do write the procedure down as a Skill.** Versioned. Reviewable. Can carry reference data.
 
-**Don't let a model do arithmetic you'd put in a contract.** Not because it can't multiply. Because you can't prove it multiplied the same way twice.
+**Don't let a model do arithmetic you'd put in a contract.** You can't prove it multiplied the same way twice.
 
 **Do keep the rate card in data.** Changing a business rule should be a data change.
 

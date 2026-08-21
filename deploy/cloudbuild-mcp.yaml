@@ -3,10 +3,24 @@
 # deploy/deploy_mcp_cloudrun.sh:
 #   gcloud builds submit --config deploy/cloudbuild-mcp.yaml \
 #     --substitutions=_GROUP=mcp_licensing,_IMAGE=<region>-docker.pkg.dev/<proj>/vibeflix/mcp-licensing
+
+# The 10-minute DEFAULT is not enough. `pip install` of the ADK + google-cloud stack on a small
+# machine runs close to it, so a build that is merely slow gets killed and reported as TIMEOUT —
+# which reads like a broken image rather than a machine that was too small.
+timeout: 1800s
+
 steps:
+  # Pull the previous image so the layer cache is usable. Without this every build reinstalls
+  # every dependency from scratch: Cloud Build starts each build on a clean machine, so there is
+  # no local layer cache to hit. `|| true` because the first build has nothing to pull.
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ['-c', 'docker pull ${_IMAGE} || true']
   - name: gcr.io/cloud-builders/docker
     args:
       - build
+      - --cache-from
+      - ${_IMAGE}
       - -f
       - deploy/Dockerfile.mcp
       - --build-arg
@@ -18,3 +32,6 @@ images:
   - ${_IMAGE}
 options:
   logging: CLOUD_LOGGING_ONLY
+  # Nested builds do NOT inherit the parent build's machine type — each is its own build, and
+  # without this line all three MCP images build on the default (smallest) machine.
+  machineType: E2_HIGHCPU_8

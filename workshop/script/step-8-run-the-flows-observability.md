@@ -50,7 +50,7 @@ Three things, every run.
 
 **The tool LEDs.** Each blink is a deterministic check firing. And now, also a gateway decision that came back yes.
 
-**The report.** Painted by the UI Renderer. Not written by the app.
+**The report.** Painted by the UI Renderer.
 
 ---
 
@@ -118,7 +118,7 @@ Legal needed a safety-cert ID. Legal sits behind vendor clearance. Which sits be
 
 That question travelled up three boundaries to reach you. And your answer travelled back down.
 
-Human-in-the-loop across a distributed agent mesh is not a checkbox. It's the hardest plumbing in this system. And it's why the shared task store in Step 5 mattered.
+Human-in-the-loop across a distributed agent mesh is the hardest plumbing in this system. And it's why the shared task store in Step 5 mattered.
 
 ---
 
@@ -136,7 +136,7 @@ Pick either. Both finish with a contract.
 
 Here's what makes this scenario worth including. It's subtle.
 
-**This pause is plain code in the graph. Not an agent asking.**
+**This pause is plain code in the graph.**
 
 Scenario 3's question came from a model that discovered it needed something. This one comes from a deterministic comparison in a node. A number against a cap.
 
@@ -164,7 +164,7 @@ Every request is one distributed trace. Its spans stitch across A2A hops **and**
 
 And look at the shape. The three specialists' spans **overlap.**
 
-That's your proof the fan-out is real. Not three sequential calls with optimistic labelling.
+That's your proof the fan-out is real — three calls genuinely overlapping in time.
 
 **Cloud Logging** answers *what did this component say?*
 
@@ -176,7 +176,7 @@ If you take one operational fact from this step, take that one.
 
 **Cloud Monitoring's topology** answers *what is this system, actually?*
 
-It draws the mesh as a graph, built from aggregated traces. It's the architecture diagram from Step 1 — except drawn from real traffic instead of somebody's intentions.
+It draws the mesh as a graph, built from aggregated traces. It's the architecture diagram from Step 1, drawn from real traffic.
 
 [BEAT]
 
@@ -186,7 +186,7 @@ Architecture diagrams lie. They describe what someone meant.
 
 A topology built from traces cannot lie. It shows the calls that actually happened.
 
-So if there's an edge on it you didn't expect — that's not a diagram error. That's a discovery.
+So if there's an edge on it you didn't expect — that's a discovery.
 
 One caveat: three APIs all have to be on. With one off, the topology comes back empty even though the agents are fine.
 

@@ -4,9 +4,17 @@
 # _DEFAULT_IMAGE=gs://<project>-request-image/vendor_request_refine.png"
 # _DEFAULT_IMAGE bakes the project's default mockup into the frontend bundle (Vite
 # VITE_DEFAULT_IMAGE). Omit it and the app falls back to the pokedemo-test bucket.
+
+# This image runs `npm ci` AND a pip install, so it is the slowest of the four. The 10-minute
+# default timeout is not enough for it on a cold cache.
+timeout: 1800s
+
 steps:
   - name: gcr.io/cloud-builders/docker
-    args: [build, -f, deploy/Dockerfile.app, -t, "${_IMAGE}",
+    entrypoint: bash
+    args: ['-c', 'docker pull ${_IMAGE} || true']
+  - name: gcr.io/cloud-builders/docker
+    args: [build, --cache-from, "${_IMAGE}", -f, deploy/Dockerfile.app, -t, "${_IMAGE}",
            "--build-arg", "VITE_DEFAULT_IMAGE=${_DEFAULT_IMAGE}", "."]
 substitutions:
   _DEFAULT_IMAGE: ""
@@ -14,3 +22,4 @@ images:
   - ${_IMAGE}
 options:
   logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

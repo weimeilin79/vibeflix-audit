@@ -72,11 +72,9 @@ Same inputs, same answer. Every single time. And it has to match what finance ge
 
 [BEAT]
 
-A model is excellent at the first kind. It is the wrong tool for the second. Not because it's bad — because it's probabilistic.
+A model is excellent at the first kind. It is the wrong tool for the second, because it's probabilistic.
 
-Think about what that means. A system that returns a different royalty rate on Tuesday than it returned on Monday isn't an AI system with a bug.
-
-It's a system you cannot put a contract through. At all.
+Think about what that means. A system that returns a different royalty rate on Tuesday than it returned on Monday is a system you cannot put a contract through. At all.
 
 So here's the rule for this entire build:
 
@@ -108,7 +106,7 @@ Three servers in this system. Brand checks. Licensing — vendors, rate cards, e
 
 Now look at what these actually are. Ordinary web services. They have URLs. They run on Cloud Run. They have IAM policies.
 
-The business logic is a service. Not a prompt.
+The business logic lives in a service, with an address.
 
 And that buys you the thing that matters most later. **You can govern them.**
 
@@ -132,11 +130,9 @@ First, discovery. It's how the console lists what tools exist without grepping t
 
 Second — and here's the thing — in Step 7 we put a **gateway** in front of everything. That gateway is deny-by-default. It only routes traffic to destinations that are in the registry.
 
-So anything unregistered isn't just hard to find.
+So anything unregistered becomes unreachable.
 
-It's unreachable.
-
-Registration isn't paperwork. It's the enrolment step that makes governance possible. We do it now for the MCP servers. We do it again in Step 7 for the agents.
+Registration is the enrolment step that makes governance possible. We do it now for the MCP servers. We do it again in Step 7 for the agents.
 
 ---
 
@@ -265,7 +261,7 @@ These are real cloud APIs. Some are in preview. Sometimes they return a transien
 
 So when a red ✗ shows up: read it, then run `./workshop/setup.sh` again. It re-checks all nine steps and redoes only what's missing.
 
-A ✗ is a to-do. Not a broken lab.
+A ✗ is a to-do.
 
 ---
 
@@ -285,9 +281,7 @@ Now look at the last check. It confirms the MCP servers are up **and that they r
 
 [BEAT]
 
-That's not a bug we're tolerating.
-
-That's the test passing.
+That 403 means the test passed.
 
 Those services deploy with no public access at all. A caller needs the invoker role, and right now nothing has it — because no agent exists yet to grant it to.
 
@@ -301,7 +295,7 @@ That 403 is the opening line of the security story we finish in Step 7. The tool
 
 ## 21:00 — Do and don't
 
-**Do put the exact logic in a tool server.** Not the prompt. Not a helper function inside the agent. A URL you can point IAM at is worth a lot later.
+**Do put the exact logic in a tool server.** A URL you can point IAM at is worth a lot later.
 
 **Don't let the model decide anything you'd have to defend.** If someone could sue over it, audit it, or reproduce it in a spreadsheet — that's a tool's job.
 

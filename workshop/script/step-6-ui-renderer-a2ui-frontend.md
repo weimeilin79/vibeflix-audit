@@ -40,7 +40,7 @@ The renderer does **not** emit HTML. Or CSS. Or JavaScript.
 
 It emits **components from a fixed schema.** A card. A table. A badge. A question with options. The frontend knows how to draw each of those, and it draws nothing else.
 
-So the space of possible UIs is bounded by the schema. Not by the model's imagination.
+So the schema bounds the space of possible UIs.
 
 The model picks *which* components, and *what goes in them*. That's a much smaller job than "generate an interface." And a much safer one.
 
@@ -52,7 +52,7 @@ The model picks *which* components, and *what goes in them*. That's a much small
 
 Two things about how it's built.
 
-**It's an independent A2A agent.** Own engine. Called over A2A. The app talks to it exactly like it talks to the orchestrator. Not a library. Not a function. A peer.
+**It's an independent A2A agent.** Own engine. Called over A2A. The app talks to it exactly like it talks to the orchestrator. A peer.
 
 **Its procedure is a Skill** — same pattern as deal pricing. No tools. Its instruction carries the component schema, so it emits the real wire format directly.
 
@@ -64,7 +64,7 @@ Meaning: the renderer emits a panel. The app parses it. If it doesn't validate, 
 
 The user always gets *something*.
 
-That's the right shape — for a presentation layer. A malformed panel should degrade to a plain report. Not to a blank screen with a stack trace behind it.
+That's the right shape — for a presentation layer. A malformed panel should degrade to a plain report.
 
 Now contrast that with pricing. There, a malformed answer must **fail**. Loudly. Never degrade.
 
@@ -214,7 +214,7 @@ Try a second one — **exclusivity block.** Same request, North America, where a
 
 [BEAT]
 
-Give that ten seconds of appreciation. One branch failed. It didn't take down the run. It didn't hide the other results. And it produced a specific reason, not a generic error.
+Give that ten seconds of appreciation. One branch failed. It didn't take down the run. It didn't hide the other results. And it produced a specific reason a vendor can act on.
 
 [DO: Ctrl+C.]
 

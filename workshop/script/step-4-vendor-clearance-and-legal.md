@@ -265,7 +265,7 @@ Apparel is one it doesn't have.
 
 The gate is in the code: legal runs only when the report comes back cleared **and** the reasoner actually called update or create. A quiet, correct no-op looks exactly like a broken handoff. If legal doesn't fire, check the vendor's existing categories first.
 
-**This takes three messages. Not one.**
+**This takes three messages.**
 
 **Turn one.** The request. It comes back asking for approval before it touches the vendor record.
 
@@ -289,7 +289,7 @@ Same agent. Different transport.
 
 The id is arbitrary. **Any string works.** Because no document in the corpus defines a format for it.
 
-That's not sloppiness in the lab. That's the point the documents themselves make. One of them has an open action item to *document the safety cert ID step*. Another has somebody complaining they've asked three times for it to be written down.
+That's the point the documents themselves make. One of them has an open action item to *document the safety cert ID step*. Another has somebody complaining they've asked three times for it to be written down.
 
 **The one field that blocks every contract is the one nobody specified.**
 
@@ -313,7 +313,7 @@ That's not sloppiness in the lab. That's the point the documents themselves make
 
 Two more agents. And the first time work crossed an agent boundary. Legal reconstructs an undocumented process from scattered prose. Vendor clearance calls it over A2A. And a question from deep inside legal travelled all the way up to you.
 
-Next: the **orchestrator**. Not one agent calling one other agent — one agent calling three, at the same time.
+Next: the **orchestrator**. One agent calling three others, at the same time.
 
 And that's where a genuinely brutal bug lives. It doesn't show up on your laptop. It doesn't show up in testing.
 

@@ -30,13 +30,13 @@ Today we close that gap. And the word that matters is **path.**
 
 Most organisations have governance. It's in a spreadsheet. Which system may talk to which. Who approved it. When it was last reviewed.
 
-That spreadsheet is not enforcement. It's a description of what somebody *intended*.
+That spreadsheet describes what somebody *intended*.
 
 And the gap between the spreadsheet and the running system is where every interesting incident lives.
 
 [BEAT]
 
-What we're building instead is governance **in the traffic path.** Not a document describing the rules — a component that traffic physically goes through, that applies the rules, and that says no.
+What we're building instead is governance **in the traffic path.** A component that traffic physically goes through, that applies the rules, and that says no.
 
 Here's the test. **Can you violate the policy without changing the policy?**
 
@@ -48,7 +48,7 @@ If yes, you have a document. If no, you have a guardrail.
 
 Three things here. People mix them up constantly. Let's separate them.
 
-**Agent Identity.** Every agent is its own principal. Not a shared service account. Not the app's identity. Its own.
+**Agent Identity.** Every agent is its own principal, with its own name.
 
 That's what makes an action *attributable*. And it's what makes least privilege possible at all. You've been building this since Step 2.
 
@@ -64,7 +64,7 @@ Identity answers *who is calling.* The registry answers *what may be called.* Th
 
 None of the three is enough alone. Together they're a policy engine.
 
-And notice what happens to registration. An unregistered destination isn't just hard to find. It's **unreachable.**
+And notice what happens to registration. An unregistered destination is **unreachable.**
 
 Enrolment becomes enforcement.
 
@@ -128,13 +128,13 @@ This is the **one redeploy the workshop still needs.** And it's worth knowing wh
 
 The gateway exists **now.** It didn't when you deployed these engines in Steps 2 through 5. Each deploy said so at the time — deploying without governed egress.
 
-An engine's gateway attachment is part of its **deployment spec.** It isn't a value read at runtime that you can point at a future address. It's baked in when the engine is created.
+An engine's gateway attachment is part of its **deployment spec.** It's baked in when the engine is created.
 
 [BEAT]
 
 Compare that to Step 6. The task-store URL turned out to be computable, so no second pass was needed there.
 
-This one isn't a value you can predict. It's a relationship to a thing that didn't exist yet.
+This one is a relationship to a thing that didn't exist yet.
 
 **Until this pass, the agents' egress isn't governed.** So this isn't a formality. This is the step where the guardrail actually goes into the path.
 
@@ -174,7 +174,7 @@ The app calls the **orchestrator engine** over A2A. That fans out to three more 
 
 Watch three things.
 
-**The graph animating** — and note where those events come from. Not your machine. The engines publish them over Pub/Sub, and the console subscribes.
+**The graph animating** — and note where those events come from. The engines publish them over Pub/Sub, and the console subscribes.
 
 **The tool LEDs firing** — which means the gateway **allowed** those calls. Every blink is a policy decision that came back yes.
 
@@ -196,9 +196,9 @@ That means one of two things. The destination isn't registered. Or that agent do
 
 And here's the mindset shift I want you to make.
 
-**That is not a bug. That's the system working.**
+**That's the system working.**
 
-Deny-by-default means the failure mode of a misconfiguration is *refusal.* Not silent success.
+Deny-by-default means a misconfiguration fails closed.
 
 In an ungoverned system, the same mistake produces no error at all. The call goes through. And you find out during an audit. Or a breach.
 
@@ -230,7 +230,7 @@ At no point did we write a document saying what should be allowed.
 
 At every point we changed what is **possible.**
 
-That's what guardrails means here. Not advice. Physics.
+That's what guardrails means here. Physics.
 
 ---
 

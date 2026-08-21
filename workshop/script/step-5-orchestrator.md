@@ -26,9 +26,7 @@ It's invisible in development. It only shows up under real conditions. And you c
 
 One thing straight up front, because it shapes everything.
 
-The orchestrator is **not** a special coordinator sitting above the mesh.
-
-It's an agent. Deployed like the other four. Own identity. Own engine. The app calls it over A2A exactly like anything else.
+The orchestrator is an agent, deployed like the other four. Own identity. Own engine. The app calls it over A2A exactly like anything else.
 
 That's what makes the whole mesh governable later. There's no privileged component with a back door. In Step 7, when the gateway goes in the path, the orchestrator is subject to it like everyone else.
 
@@ -48,7 +46,7 @@ Read the edges out loud and you have the entire business process. Ingest the req
 
 Catch what that means.
 
-**You can read the business process off the code.** Not off a diagram that drifted from the code. The code.
+**You can read the business process straight off the code.**
 
 Somebody asks "what happens during an audit?" — you show them nine lines.
 
@@ -64,7 +62,7 @@ Two edges do the heavy lifting.
 
 An edge to a **tuple** is a fan-out. All three run in parallel.
 
-Then a **join** waits for all of them. Not the fastest. Not the first. All three.
+Then a **join** waits for all three of them. Every one.
 
 Why parallel? Because these checks are genuinely independent. Brand compliance doesn't depend on pricing. Vendor clearance doesn't depend on brand.
 
@@ -92,7 +90,7 @@ Brand style and deal pricing finish well inside Agent Runtime's 180-second ceili
 
 Same class. Same call site. One flag.
 
-**Moving a hop across that ceiling is a boolean, not a different client.** Worth copying.
+**Moving a hop across that ceiling costs you one boolean.** Worth copying.
 
 ---
 
@@ -152,7 +150,7 @@ If the answer is "in the memory of whichever instance answered first", you have 
 
 ## 12:00 — The fix
 
-The fix is not to retry harder. Retrying just plays roulette again.
+Retrying harder just plays roulette again.
 
 The fix is to move the task state somewhere **every replica can see.**
 

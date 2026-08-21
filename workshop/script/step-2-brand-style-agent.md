@@ -30,11 +30,11 @@ The checker applies the rules. Returns a verdict.
 
 Now catch what just happened in that description.
 
-**The checking is already automated.** The rules exist. They already run. That is not the bottleneck.
+**The checking is already automated.** The rules exist. They already run.
 
 The bottleneck is a human *looking*. And a human *typing*.
 
-That's what we're replacing. Not the decision. The eyes and the fingers.
+That's what we're replacing: the eyes and the fingers.
 
 And I'm hammering this because it's the most common mistake in agent projects. People look at a workflow like this and automate the **decision** — because that feels like the impressive part.
 
@@ -72,7 +72,7 @@ Open the brand style MCP server. Look at the tool signature.
 
 Its parameters are — almost exactly — the fields on the form the coordinator used to fill in. Image reference. Text found on it. Product medium. Character. Market.
 
-That's not a coincidence. That's the method.
+That's the method.
 
 **When you're replacing a human step, the form they filled in is your tool signature.**
 
@@ -108,7 +108,7 @@ Today: one agent, one tool, one job.
 
 Three things to point at.
 
-**The model.** Gemini, with vision. It has to actually look at an image. Not a text-only choice.
+**The model.** Gemini, with vision. It has to actually look at an image.
 
 **The instruction.** And here's what matters — notice what it *doesn't* say. It tells the agent to extract what it sees and call the audit tool. It never says what the brand rules are.
 
@@ -289,7 +289,7 @@ The agent decides the medium by looking at the artwork. One run it says "vinyl f
 
 The fuzzy half varies. The rule applied to it never does.
 
-A flagged result here is the system working. Not a failure.
+A flagged result here is the system working.
 
 You might also see a line about A2A not propagating a trace. That's the client saying there's no trace running on your laptop, so the engine starts its own. Expected.
 
