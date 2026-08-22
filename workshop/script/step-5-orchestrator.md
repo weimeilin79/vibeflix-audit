@@ -64,7 +64,7 @@ Every A2A call is two HTTP requests: a POST that starts the task and returns an 
 
 [SCREEN: animate it. POST lands on replica A, task created in memory. GET is load-balanced, lands on replica B.]
 
-The POST creates the task on replica A, in that replica's memory. The GET gets load-balanced and lands on replica B, which has never heard of it, so it returns a 404 for a task running perfectly well a few metres away.
+The POST creates the task on replica A, in that replica's memory. The GET gets load-balanced and lands on replica B, which has never heard of it, so it returns a 404 for a task that is running normally on replica A.
 
 With several replicas in play, most of your polls miss.
 
@@ -76,13 +76,13 @@ On your laptop it never happens, because one process and one task store mean eve
 
 It appears when you scale, which means it appears in production, under load. It also presents as a timeout or a flaky agent, which sends you looking in the wrong place. In the real build of this system it accounted for twenty-six percent of every span in the traces.
 
-The general lesson is older than agents. When you have a stateful handle plus a load balancer, ask where the state lives. If it lives in the memory of whichever instance answered first, you have this bug.
+When you have a stateful handle plus a load balancer, ask where the state lives. If it lives in the memory of whichever instance answered first, you have this bug.
 
 ---
 
 ## 08:00 — The fix
 
-Retrying plays the same game of chance again. The fix is moving task state somewhere every replica can see.
+A retry lands on an arbitrary replica too, so it hits the same odds. The fix is moving task state somewhere every replica can see.
 
 [SCREEN: the task store module.]
 

@@ -36,8 +36,6 @@ The agent proves that name with an **X.509 certificate**. The SPIFFE ID sits in 
 
 ## 03:00 — Can you switch it to something else?
 
-No, and the reason is worth understanding, because it changes how you think about the whole model.
-
 Agent identity **replaces** the service account. In `deploy_agents_a2a.py` the engine is created with `identity_type: AGENT_IDENTITY`, and if you also try to set `service_account` on that config the API returns a 400. You get one or the other.
 
 Without agent identity, an engine runs as a service account — the Reasoning Engine Service Agent, or a custom one you attach. A service account is shared by whatever you attach it to, it can be impersonated, and it outlives the workload. With agent identity there is no service account behind the metadata server at all.
@@ -48,21 +46,47 @@ That last property explains a rule you'll see in the docs: don't delete an engin
 
 ---
 
-## 05:00 — The token is bound to the certificate
+## 05:00 — The certificate, and where it comes from
 
-There's a detail here that caused a hard outage during the build, and it explains three environment flags you'll see on every engine.
+The agent proves its name with a certificate, so the next question is where that certificate comes from.
 
-An agent-identity token is **certificate-bound**. The certificate is the only way to mint a fresh one. Underneath, google-auth reads the agent identity certificate, and if the certificate says a bound token should be requested, it sends the certificate fingerprint along with the token request and gets back a fresh bound token.
+Agent Runtime issues it. When an engine is created with agent identity, the platform provisions a certificate for it carrying that engine's SPIFFE ID. You don't generate it, or store it.
 
-Turn the mTLS flags off and that path is skipped entirely. google-auth asks for an unbound token, and the metadata server hands back the platform's shared, pre-minted token whose expiry is frozen at replica boot. Refreshing re-fetches the identical dead token.
-
-So roughly sixty minutes after a replica boots, every call from that replica starts returning 401. Sessions fail first, because session preparation runs before your agent code, then MCP, then A2A. The measured fuse in this project was between 59 and 63 minutes from each replica's own boot.
-
-The fix is leaving those flags at their defaults rather than explicitly opting out. It's a good example of a security mechanism where turning off something that looks like transport configuration silently breaks credential lifetime.
+The certificate does two jobs. It proves the engine's name during a TLS handshake, which we covered a moment ago. And it makes the engine's tokens unique to that engine, which is the part worth walking through.
 
 ---
 
-## 07:30 — One gateway, on both sides of the agent
+## 06:15 — Why the token isn't shared
+
+An engine gets its access token from the metadata server, the same way any Google Cloud workload does. There are two kinds of token it can ask for.
+
+A plain token is handed out without reference to the certificate. Anyone holding a copy of that token can use it.
+
+A **certificate-bound** token is requested with the certificate's fingerprint attached. What comes back is tied to that certificate, so it only works on a connection where that certificate is presented. Copy the token to another machine and it stops working there, because the copier doesn't hold the certificate's private key.
+
+That binding is what makes it this engine's token rather than a credential that travels.
+
+mTLS is how the certificate gets onto the connection. Mutual TLS means both ends present certificates, so the engine's certificate is on the connection when the token arrives. The receiving service can then check that the token it was handed was issued to the certificate it can see. Without the certificate on the connection there's nothing to check the binding against.
+
+So the mTLS settings on an engine are part of how its credentials work, rather than transport tuning you can switch off for convenience. Leave them at their defaults.
+
+---
+
+## 07:30 — Can you use a different token issuer?
+
+No, and it's worth being clear about which part is fixed.
+
+The principal, the trust domain and the certificate are all issued by Agent Runtime, inside your organization's trust domain. You can't point an agent identity at your own identity provider, your own certificate authority, or a third-party issuer. The platform mints the name and the proof of it.
+
+What the Google auth library does is the client half: it reads the certificate the platform provisioned, asks the metadata server for a bound token, and attaches the credential to outgoing calls. Any client that spoke the same metadata protocol could do that work, so the library isn't the constraint. The issuer is.
+
+There's one consequence of this you'll meet in the code. Because an agent-identity engine has no service account behind the metadata server, the normal call for fetching an ID token can't work. So when the engine needs an audience-bound ID token for Cloud Run, it bootstraps: it mints its own access token, uses that to call the IAM credentials API, impersonates the MCP invoker service account, and gets the ID token back from there.
+
+That's why the grant in Step 2 included the token-creator role on that service account. Without it, a SPIFFE principal has no way to obtain a token Cloud Run accepts.
+
+---
+
+## 09:00 — One gateway, on both sides of the agent
 
 [SCREEN: client → INGRESS → agent → EGRESS → MCP / APIs / peer agents.]
 
@@ -78,7 +102,7 @@ Vibeflix configures egress only. Look at `deploy/agent-gateway.yaml` and you'll 
 
 ---
 
-## 10:00 — Two tokens on every call
+## 11:00 — Two tokens on every call
 
 [SCREEN: the two headers on an outbound MCP call.]
 
@@ -94,7 +118,7 @@ For an A2A hop to a peer agent, the same access token appears in both headers, b
 
 ---
 
-## 12:00 — Why an ID token and not an access token
+## 13:00 — Why an ID token and not an access token
 
 The choice of an **ID** token for the Cloud Run hop looks like a detail and isn't.
 
@@ -106,7 +130,7 @@ There's an implementation wrinkle worth knowing if you hit it. ADK's MCP session
 
 ---
 
-## 13:30 — What checks what
+## 14:30 — What checks what
 
 [SCREEN: the layers, in order.]
 
@@ -124,7 +148,7 @@ Different layers verify different claims, and no single layer is doing all of it
 
 ---
 
-## 16:00 — The policy map
+## 17:00 — The policy map
 
 [SCREEN: `deploy/policies.yaml`.]
 
@@ -136,7 +160,7 @@ A compromised pricing agent can look up prices and has no route to writing a con
 
 ---
 
-## 17:15 — Register, gate and grant
+## 18:15 — Register, gate and grant
 
 ```bash
 cd ~/vibeflix-audit
@@ -154,7 +178,7 @@ The registry matters more than it looks. Under deny-by-default, an unregistered 
 
 ---
 
-## 18:45 — Attaching the engines
+## 19:45 — Attaching the engines
 
 ```bash
 cd ~/vibeflix-audit
@@ -172,7 +196,7 @@ Until this pass runs, the agents' egress is ungoverned.
 
 ---
 
-## 19:45 — Verify and run it for real
+## 20:45 — Verify and run it for real
 
 ```bash
 cd ~/vibeflix-audit
@@ -190,7 +214,7 @@ The tool LEDs firing means the gateway allowed those calls, so every blink is th
 
 ---
 
-## 21:00 — What a failure looks like
+## 22:00 — What a failure looks like
 
 [SCREEN: a branch failing — 403, egress request is not authorized.]
 
@@ -200,11 +224,11 @@ This is the system working. Deny-by-default means a misconfiguration fails close
 
 Re-applying the policies fixes it. IAM and gateway changes take two to five minutes to propagate, so if the first run right after this step fails on egress, wait and run it again.
 
-A 401 rather than a 403 points somewhere else entirely — that's the credential path, not the policy path, and the sixty-minute frozen-token failure from earlier is the one to check for.
+A 401 rather than a 403 points at the credential path instead of the policy path, so check the token rather than the registration.
 
 ---
 
-## 22:30 — The whole security story
+## 23:30 — The whole security story
 
 [SCREEN: build the chain up, one layer at a time.]
 
@@ -220,11 +244,11 @@ At every step we changed what is possible, so the allowlist is the running syste
 
 ---
 
-## 24:00 — Do and don't
+## 25:00 — Do and don't
 
 Give every agent its own identity, because a shared service account destroys attribution and can be impersonated by anything it's attached to.
 
-Leave the mTLS and token-sharing flags at their defaults, since an agent identity token is certificate-bound and opting out gives you a frozen token with a sixty-minute fuse.
+Leave the mTLS settings at their defaults, because a certificate-bound token needs the certificate on the connection.
 
 Don't delete an engine to redeploy it, because the identity dies with it and takes every grant along.
 
@@ -236,7 +260,7 @@ Don't route around a gateway 403. Fix the registration, the role, or the CEL con
 
 ---
 
-## 25:30 — Where that leaves us
+## 26:15 — Where that leaves us
 
 Governance sits in the traffic path on the egress side. Every hop carries two tokens for two different verifiers, every agent is a SPIFFE principal that can be named and revoked on its own, and a misconfiguration fails closed.
 
