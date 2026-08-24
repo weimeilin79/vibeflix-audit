@@ -16,9 +16,9 @@ Everything works. Six agents, three tool servers, a console, and a full audit en
 
 So here's the question this step exists to answer. If one of those agents were compromised tomorrow, through a prompt injection buried in a vendor's document, what stops it calling the licensing server and writing itself a contract?
 
-Hold that thought, because the honest answer needs one thing established first: quite a lot is already stopping it, and it has been since Step 2. We're going to walk through what's already guarding the mesh, find the one place that guard goes blind, and then build for exactly that.
+Hold that thought, because the honest answer needs one thing established first. Quite a lot is already stopping it, and it has been since Step 2. We're going to walk through what's already guarding the mesh, find the one place that guard goes blind, and then build for exactly that.
 
-To follow along, hold one picture: an office building with a security desk at the door. Your agents are workers in it. The tool servers are other buildings across the street.
+One picture will carry you through the whole step. Think of an office building with a security desk at the door. Your agents are the workers inside it, and the tool servers are other buildings across the street.
 
 ---
 
@@ -36,7 +36,7 @@ That's a SPIFFE ID, a standard for naming a running workload with a URI the work
 
 Read it in three parts. `agents.global.org-<ORG>.system.id.goog` is the **trust domain**, scoped to your organization, so a badge issued in somebody else's org means nothing at your desk. Then the path down to `reasoningEngines/<ID>` names one engine.
 
-The badge is a real document: an **X.509 certificate** with the SPIFFE ID in its subject-alternative-name field. The engine presents it during the TLS handshake, the far side verifies it against the trust domain, and the call proceeds as that agent's principal.
+The badge is a real document. It's an **X.509 certificate** with the SPIFFE ID in its subject-alternative-name field. The engine presents it during the TLS handshake, the far side verifies it against the trust domain, and the call proceeds as that agent's principal.
 
 ---
 
@@ -44,7 +44,7 @@ The badge is a real document: an **X.509 certificate** with the SPIFFE ID in its
 
 Before agent identity, workers shared a badge that said STAFF and lived in a drawer. That's a service account. When something goes wrong you can't tell which worker did it, and anyone who can reach the drawer becomes that worker.
 
-In `deploy_agents_a2a.py` the engine is created with `identity_type: AGENT_IDENTITY`. The agent identity already serves as that engine's workload identity, so a config that also names a `service_account` fails with a 400. The drawer is empty — no shared badge sits behind the metadata server.
+In `deploy_agents_a2a.py` the engine is created with `identity_type: AGENT_IDENTITY`. The agent identity already serves as that engine's workload identity, so a config that also names a `service_account` fails with a 400. The drawer is empty. No shared badge sits behind the metadata server.
 
 What you get is one principal per agent that starts with zero permissions, is attributable to one engine, and stops existing when that engine is deleted.
 
@@ -62,7 +62,7 @@ This is the property everything else rests on. An engine can spend its credentia
 
 You also can't bring your own badge printer. The principal, the trust domain and the certificate are all issued by the platform inside your organization's trust domain, so pointing an agent identity at your own identity provider or certificate authority is off the table.
 
-The Google auth library does the client half: it reads the certificate the platform provisioned, asks the metadata server for a token, and attaches the credential to outgoing calls.
+The Google auth library does the client half. It reads the certificate the platform provisioned, asks the metadata server for a token, and attaches the credential to outgoing calls.
 
 ---
 
@@ -78,7 +78,7 @@ Follow `brand_style` asking Gemini to look at a mock-up. The request goes to `ai
 
 Firestore is the same. Pub/Sub is the same. An A2A hop to a peer engine is the same. **The destination does the checking**, using the grants you already made.
 
-And notice where the configuration for that lives: nowhere in Firestore, nowhere in Pub/Sub. You never told those services what an agent identity is. Every `*.googleapis.com` endpoint sits behind the same front end, which authenticates the caller and applies IAM, and a SPIFFE principal is simply another member type in a policy, sitting alongside `user:` and `serviceAccount:`. The whole of your setup was one line per role in `grant_agent_access.sh`:
+And notice where the configuration for that lives. There's none in Firestore and none in Pub/Sub. You never told those services what an agent identity is. Every `*.googleapis.com` endpoint sits behind the same front end, which authenticates the caller and applies IAM, and a SPIFFE principal is simply another member type in a policy, sitting alongside `user:` and `serviceAccount:`. The whole of your setup was one line per role in `grant_agent_access.sh`:
 
 ```bash
 gcloud projects add-iam-policy-binding "$PROJECT" --member="$PRINCIPAL" --role="$R"
@@ -130,7 +130,7 @@ Keep hold of that first header. It's the whole reason the rest of this step is p
 
 A quick detour that saves you a debugging session.
 
-The visiting building's reception can be handed two kinds of pass. One has to be phoned in: reception rings head office to ask whether it's real, and waits. When several workers arrive at once the line gets busy and somebody is turned away for no good reason. That's an access token, which Cloud Run verifies remotely, and under a concurrent fan-out it surfaces as an intermittent 401 saying the token could not be verified.
+The visiting building's reception can be handed two kinds of pass. One has to be phoned in. Reception rings head office to ask whether it's real, and waits. When several workers arrive at once the line gets busy and somebody is turned away for no good reason. That's an access token, which Cloud Run verifies remotely, and under a concurrent fan-out it surfaces as an intermittent 401 saying the token could not be verified.
 
 The other can be read on the spot, because it carries a stamp reception recognises and it names this specific building. That's an ID token, verified locally against Google's public keys with the audience checked against the receiving service's URL. Nothing is called, so nothing can flake.
 
@@ -142,7 +142,7 @@ One implementation note if you hit it. ADK's MCP session manager injects the age
 
 So where does that leave us, with everything working and nothing built yet?
 
-**The tool question has nowhere to be asked.** Every agent reaches the licensing server as the same invoker account. That server also exposes tools that change things — updating a vendor, writing a contract, resetting the store. A compromised pricing agent holds a badge that opens the whole building, and reception has no way to tell it apart from vendor clearance.
+**The tool question has nowhere to be asked.** Every agent reaches the licensing server as the same invoker account. That server also exposes tools that change things. Updating a vendor. Writing a contract. Resetting the store. A compromised pricing agent holds a badge that opens the whole building, and reception has no way to tell it apart from vendor clearance.
 
 **And the open internet has no desk at all.** An agent that decides to POST to `somewhere-else.example.com` meets no policy anywhere, because there's no IAM on the far end of that call to consult.
 
@@ -172,9 +172,9 @@ Vibeflix staffs the outward direction only. `deploy/agent-gateway.yaml` sets `go
 
 The gateway is the desk. **IAP is the guard standing at it.**
 
-You've likely met Identity-Aware Proxy already, sitting in front of a web application and deciding who may come in — the piece that replaced "you're inside the VPN, so you're trusted" with "show me who you are". Same guard here, working the outbound side, with `roles/iap.egressor` as the role that says where a principal may go.
+You've likely met Identity-Aware Proxy already. It's the thing that sits in front of a web application and decides who may come in, the piece that replaced "you're inside the VPN, so you're trusted" with "show me who you are". Same guard here, working the outbound side, and `roles/iap.egressor` is the role that says where a principal may go.
 
-The gateway on its own routes traffic and holds no opinion about your policy. The **authorization extension** you're about to create is what gives it one: it tells the gateway to call IAP for a verdict on every request, and IAP answers by evaluating the IAM conditions you granted.
+The gateway on its own routes traffic and holds no opinion about your policy. The **authorization extension** you're about to create is what gives it one. It tells the gateway to call IAP for a verdict on every request, and IAP answers by evaluating the IAM conditions you granted.
 
 Now the part that makes tool-level rules possible at all. The gateway has already parsed the MCP request by the time IAP is consulted, so IAP can read attributes of the call **in flight**:
 
@@ -196,7 +196,7 @@ Every time a worker walks out, the desk asks three things in order, and each map
 
 **And which room?** The CEL condition on that grant names which tool this agent may call there.
 
-All three read `Proxy-Authorization` to work out who's asking — the pass that Cloud Run never sees.
+All three read `Proxy-Authorization` to work out who's asking. That's the pass Cloud Run never sees.
 
 At the far end the checks continue as they always did. Cloud Run checks the audience and the signature. A peer engine resolves the token back to a principal. A Google API checks that the token was issued to the certificate on this connection.
 
@@ -208,7 +208,7 @@ The desk's list has more on it than addresses, and the difference between the tw
 
 An **MCP server** registers with its tool spec. `setup_gateway.sh` generates that spec from the running server and passes it as `--mcp-server-spec-type=tool-spec`, so the registry entry lists every tool that server exposes. The gateway can name a tool in a policy because the registry already knows the tool exists.
 
-An **agent** registers with `--endpoint-spec-type=no-spec` and an interface URL. That URL matters: it points at the **mTLS** aiplatform host. The gateway authorises the mTLS host and refuses the plain one, which is the same detail that forced this project to build its own agent cards back in Step 4.
+An **agent** registers with `--endpoint-spec-type=no-spec` and an interface URL. That URL matters, because it points at the **mTLS** aiplatform host. The gateway authorises the mTLS host and refuses the plain one, which is the same detail that forced this project to build its own agent cards back in Step 4.
 
 Both kinds carry a protocol binding, JSONRPC, so the gateway knows what it's routing.
 
@@ -218,7 +218,7 @@ Both kinds carry a protocol binding, JSONRPC, so the gateway knows what it's rou
 
 Here's the consequence that catches people, and it's why `grant_agent_iam.sh` registers more endpoints than you'd expect.
 
-Once the gateway is in the path, an agent can only reach registered destinations. **That includes Google's own APIs** — the very ones that have been checking these badges since Step 2. The model call goes to aiplatform. Session writes go to the regional aiplatform mTLS host. The runner's errand goes to iamcredentials.
+Once the gateway is in the path, an agent can only reach registered destinations. **That includes Google's own APIs.** The very ones that have been checking these badges since Step 2. The model call goes to aiplatform. Session writes go to the regional aiplatform mTLS host. The runner's errand goes to iamcredentials.
 
 None of those are your services, and every one of them now needs a registry entry and an egress grant, or the agent can't think, can't save a session, and can't collect the pass it needs to reach an MCP server.
 
@@ -240,7 +240,7 @@ By the end of this step the desk keeps two separate lists, and knowing which is 
 
 **The second is `policies.yaml`.** Each row becomes an `iap.egressor` grant on an **MCP server** entry, carrying one agent principal and a CEL condition listing that agent's tools. This is the layer where the agents differ from each other.
 
-In the console that split is visible. Open an agent and you'll see rows named `GCP agentregistry`, `GCP aiplatform` and so on with the Conditions column empty — that's the first list, behaving exactly as designed. The tool rules live on the three **MCP server** resources, and that's where the conditions are.
+In the console that split is visible. Open an agent and you'll see rows named `GCP agentregistry`, `GCP aiplatform` and so on with the Conditions column empty. That's the first list, behaving exactly as designed. The tool rules live on the three **MCP server** resources, and that's where the conditions are.
 
 Two resources, two lists. Looking at an agent shows you life support; looking at a server shows you policy.
 
@@ -270,7 +270,7 @@ source ./env.sh
 
 Four things in order, and the order is load-bearing. The six agents get registered, since the MCP servers already were in Step 1. The gateway gets created. The authorization extension gets attached, which is what makes the gateway consult policy per request. Then the IAM script adds the egress grants.
 
-Each step supplies what the next one refers to: a policy can only name a destination the registry knows, and the grants need to be in place before the first governed call goes out.
+Each step supplies what the next one refers to. A policy can only name a destination the registry knows, and the grants need to be in place before the first governed call goes out.
 
 Until now, each agent's grants described what it may do. These describe where it may go.
 
@@ -293,8 +293,8 @@ In Step 6 the task-store URL turned out to be computable, so no second pass was 
 Until this pass runs, the agents' egress is ungoverned. Everything from Step 2 still guards them; the desk simply isn't in the path yet.
 
 > On a project with a small Agent Engine quota, six deploys at once can come back
-> `RESOURCE_EXHAUSTED`. Deploy them one at a time and nothing is lost — re-deploying an engine
-> that already attached is harmless.
+> `RESOURCE_EXHAUSTED`. Deploy them one at a time and nothing is lost, because re-deploying an
+> engine that already attached is harmless.
 
 ---
 
@@ -320,7 +320,7 @@ Every tool LED that blinks is three gateway questions that came back yes.
 
 [SCREEN: a branch failing — 403, egress request is not authorized.]
 
-An agent reports a 403 saying egress is not authorized, its branch fails, and the others pass. One of the three answers at the desk was no: the destination isn't registered, the agent isn't named for it, or the CEL condition excludes that tool.
+An agent reports a 403 saying egress is not authorized, its branch fails, and the others pass. One of the three answers at the desk was no. Either the destination isn't registered, or the agent isn't named for it, or the CEL condition excludes that tool.
 
 Being refused is the desk doing its job. Deny-by-default means a misconfiguration fails closed and you find out immediately, where the same mistake in an ungoverned system produces no error at all and surfaces during an audit or a breach.
 
@@ -336,13 +336,13 @@ Tell the two refusals apart. A 403 at your own desk on the way out is a permissi
 
 In Step 1 the tool servers went up with no public access, and a browser still gets a 403 today.
 
-In Steps 2 through 5 every agent got its own badge — a SPIFFE principal proved by a platform-issued certificate — with its own narrow roles and no shared service account. From that moment every Google service it touched was checking that badge against the grants you made.
+In Steps 2 through 5 every agent got its own badge, a SPIFFE principal proved by a platform-issued certificate, with its own narrow roles and no shared service account. From that moment every Google service it touched was checking that badge against the grants you made.
 
 Because that principal has no way to authenticate to Cloud Run directly, each agent sends a runner for an audience-bound ID token, and the agents become indistinguishable at that one door.
 
 In Step 6 the app got its own identity as an ordinary Cloud Run service account, since it isn't an engine.
 
-In Step 7 a desk went in on the outward side, deny-by-default, asking three questions on every call — and the third question is the one that closes the door the runner left open.
+In Step 7 a desk went in on the outward side, deny-by-default, asking three questions on every call. The third question is the one that closes the door the runner left open.
 
 ---
 
