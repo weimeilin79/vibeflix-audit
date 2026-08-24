@@ -14,8 +14,24 @@ for that step needs a pass.
 | 4 | `step-4-vendor-clearance-and-legal.md` | Vendor Clearance + Legal | 24–28 min |
 | 5 | `step-5-orchestrator.md` | The Orchestrator | 22–26 min |
 | 6 | `step-6-ui-renderer-a2ui-frontend.md` | UI Renderer, A2UI, Frontend | 20–24 min |
-| 7 | `step-7-identity-gateway-registry.md` | Identity, Gateway & Registry | 21–25 min |
+| 7 | `step-7-identity-gateway-registry.md` | Identity, Gateway & Registry | 22–26 min |
+| 7b | `step-7-explainer-identity-in-plain-words.md` | *(companion — no lab section)* | 11–13 min |
 | 8 | `step-8-run-the-flows-observability.md` | Run the Flows, Observability | 20–24 min |
+
+## The companion explainer
+
+`step-7-explainer-identity-in-plain-words.md` is optional and has no lab section
+behind it. Step 7 carries the most unfamiliar vocabulary in the workshop — principals,
+SPIFFE, certificates, bound tokens, mTLS, ingress and egress — and this one explains
+all of it through a single sustained picture: an office building with a security desk.
+
+It introduces no commands. Every idea maps to one object in that building, and the
+last two minutes translate every object back to its real name, so it works as a
+primer before the main Step 7 or as a repair afterwards.
+
+Keep the metaphor consistent if you edit it. One building, one desk, badges, day
+passes, a runner, and a list. Mixing in a second metaphor is what makes explainers
+like this fall apart.
 
 ## Conventions
 

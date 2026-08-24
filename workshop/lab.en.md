@@ -1862,51 +1862,146 @@ gcloud run services describe vibeflix-app --region "$REGION" --format 'value(sta
 
 ## Identity, Gateway & Registry
 
-The agent mesh works, and each agent already has its **own identity** with **its own least-privilege IAM** , and the MCP servers are in the **registry** (Step 1). What's still missing is the **governed gateway** in the path. 
+Your mesh works. Six agents are deployed, each running under its own identity, and a full audit
+runs end to end. So this step opens with a fair question: if everything already works, what is
+left to secure?
 
-This step adds that gateway and registers the six agents as destinations too. It's the point where
-the mesh's traffic finally becomes governed end to end, with every hop checked against policy.
+Follow one call and you will see it.
 
-### 💡 Concept — three pieces of the security model
+### 💡 Concept — the checks that are already happening
 
-**1. Agent Identity — every agent is its own principal.**
-We would like to not share the service account in the mesh. Each engine runs *as* `principal://…/reasoningEngines/<id>`, a first-class identity, enabled at deploy time. In Steps 2–5 you granted each one its least-privilege **IAM** with `grant_agent_access.sh` — keyed to that agent's own principal, one agent at a time.
+When `brand_style` asks Gemini to look at a mock-up, the request goes to
+`aiplatform.googleapis.com` carrying a short-lived credential that **Google issued to that
+engine**. The credential names the agent's own principal —
+`principal://…/reasoningEngines/<id>`. Google's API front end resolves it, reads the project's
+IAM policy, finds the `roles/aiplatform.user` binding you made in Step 2 for exactly that
+principal, and lets the call through.
 
-What did those per-agent grants actually give each identity? Just what that one agent needs to do
-its job: permission to call Gemini, to read and write its **own** sessions and memory
-(`agentContextEditor`), to read the Firestore data behind its tools, and to mint the token that lets
-it reach its MCP server. Because every grant is keyed to a specific `principal://`, there's no
-blanket "any agent can do anything" role anywhere in the project — if you listed the IAM on the
-licensing MCP server, you'd see exactly which agents can reach it and no others. This step adds one
-grant on top: permission to egress *through the gateway* (`iap.egressor`), which is what the next
-piece governs.
+Firestore, Pub/Sub, and every agent-to-agent hop work the same way. Each destination
+authenticates the caller and applies its own IAM. That is why the mesh has been enforcing least
+privilege since Step 2 with no gateway anywhere in sight: **the destination does the checking**,
+and your per-agent grants are what it checks against.
+
+The engine can spend that credential and can never forge one, which is what makes the identity
+worth anything. It also explains the warning below.
 
 > ⚠️ The engine id is baked into the principal. **Never delete an engine** and recreate it — the
 > new id means a new principal, and every grant is orphaned onto a dead one. Always *update in
 > place*.
 
-**2. Agent Registry — the list of who can be called.**
-Every MCP server and every agent is registered as a **destination**, and an **unregistered destination is blocked**. You registered the **MCP servers** in Step 1; this step registers the **6 agents**. The gateway's policies and A2A egress grants key off these entries.
+### 💡 Concept — the hop where the name changes
 
-**3. Agent Gateway — one governed front door, deny-by-default.**
-Agents can't reach the open internet or each other freely. A governed gateway sits in the path, and an agent may only reach a destination it's been **explicitly granted**. On top of that, per-tool **IAP authz policies** (CEL conditions on tool attributes, in `deploy/policies.yaml`) decide *which tools* each agent may call, right down to the individual tool on a server.
+Now follow a tool call to an MCP server.
 
-So what *is* the Agent Gateway? It's a governed front door for everything the engines send
-**outbound**. On Agent Runtime, an agent-identity engine can't open arbitrary network connections;
-its egress is routed through the gateway, which is **deny-by-default**. For each outbound call the
-gateway asks three questions: is the destination a **registered** endpoint? has this agent been
-granted **egress** to it (`iap.egressor`)? and — for an MCP tool call — do the **per-tool policies**
-in `policies.yaml` allow this agent to invoke *that specific tool*? The call leaves the engine only
-when all three pass. That's what makes "least privilege" real here: it's checked on the wire, on
-every hop, by the platform.
+The MCP servers are Cloud Run services, closed to unauthenticated traffic. Cloud Run asks for an
+**audience-bound ID token** naming its URL. Minting one of those requires a service account, and
+an agent identity has none behind it — that is the whole point of `AGENT_IDENTITY`, no keys and
+no shared account.
 
-Together: **least privilege, enforced by the platform itself.**
+So the agent does the one thing it can: it uses the access token it *is* able to mint to call
+IAM Credentials, borrows `vibeflix-mcp-invoker`, and knocks on the MCP server's door wearing that
+account's badge. The tool call succeeds. `roles/run.invoker` belongs to the invoker SA, the token
+checks out, the server answers.
+
+Look at who arrives, though. All six agents borrow the same account, so all six look identical at
+that door. Cloud Run can answer *"may this caller reach this service?"*. The questions **which
+agent is asking** and **which tool it wants** never travel with the request.
+
+Meanwhile, consider an agent that decides to POST to `https://somewhere-else.example.com`. It
+meets no policy at all, because there is no IAM on the far end of that call to consult.
+
+Two gaps, and they share a shape: both of them live on the way **out**.
+
+### 💡 Concept — a checkpoint on the way out
+
+That is what you are about to build. A **governed gateway** sits in the agent's outbound path and
+is deny-by-default: a destination gets reached once it is registered, granted, and allowed by
+policy.
+
+The identity that went missing at the MCP door is available here, because every outbound call
+carries two headers:
+
+```
+Authorization        → the destination      "may this caller in?"
+Proxy-Authorization  → the Agent Gateway    "which AGENT is this?"
+```
+
+**IAP does the deciding.** You have probably met Identity-Aware Proxy as the thing sitting in
+front of a web app, checking who may come in. The gateway applies the same guard to traffic
+heading the other way, with `roles/iap.egressor` as the role that says where a principal may go.
+The **authz extension** you are about to create is the wiring: it tells the gateway to call IAP
+for a verdict on every request, and IAP answers by evaluating the IAM conditions you granted.
+
+Here is the part that makes tool-level rules possible at all. The gateway has already parsed the
+MCP request, so IAP can read attributes of the call **in flight** —
+`api.getAttribute('iap.googleapis.com/mcp.toolName', '')`. A CEL condition can therefore say
+"`deal_pricing` may call `get_license_pricing`", which is a sentence IAM has no way to express on
+its own, since `run.invoker` covers a whole service and every tool on it.
+
+### 💡 Concept — two layers of grants
+
+`setup_gateway.sh` writes two kinds of egress grant, and it helps to know which is which when you
+go looking for them.
+
+**Platform egress — life support.** Every agent needs `aiplatform` (Gemini), `iamcredentials`
+(minting that MCP token), `agentregistry`, `telemetry`, `logging`, `pubsub`, and the console app
+(the shared A2A task store). These are registered as endpoints with `GCP …` display names and
+granted to all six agents with **no condition attached**. An agent that cannot reach them cannot
+work at all, so there is nothing per-agent to express.
+
+**Tool egress — the interesting layer.** `deploy/policies.yaml` maps each agent to the exact tools
+it may invoke, and each row becomes an `iap.egressor` grant on that MCP server **with a CEL
+condition** listing the allowed tool names. This is the layer where the agents genuinely differ,
+and the only layer where the difference can be enforced.
+
+**Where to see them afterwards.** In the console, the `GCP …` rows show an empty Conditions
+column — that is the platform layer behaving as designed. The `policies.yaml` rules live on the
+three **MCP server** resources, each carrying the agent principal and its tool allowlist. Two
+different resources, two different lists.
+
+### 💡 Concept — what this does and does not cover
+
+Worth knowing before you trust it:
+
+- **The tool check fails open.** `iap-authz-extension.yaml` sets `failOpen: true` with a 5s
+  timeout, so an IAP blip lets the call through rather than breaking a live audit. Deny-by-default
+  describes the destination rule; the tool rule is best-effort under failure.
+- **Calls with no tool name are allowed.** The CEL begins with `mcp.toolName == '' ||` so that
+  Gemini calls, A2A hops and the MCP handshake keep working. The allowlist governs MCP tool
+  invocations.
+- **Platform egress is a blanket.** `ui_renderer` can reach `agentregistry` whether it needs to or
+  not. Hand-curating that list per agent drifted during development and produced 403s that nobody
+  could trace, so it is granted wholesale and least privilege is expressed at the tool layer.
+
+Together: identity says **who**, your Step 2–5 IAM grants say **what**, and the gateway says
+**where** and **which tool** — with the last one enforced on the wire, on the way out.
 
 ### 📝 The policy map
 
-Open `deploy/policies.yaml` — it maps each agent to the exact tools it's allowed to invoke (e.g.`brand_style` → `run_brand_audit`; `deal_pricing` → `get_license_pricing`). That's the difference between "this agent can reach the licensing server" and "this agent can call *only* `get_license_pricing` on it."
+Open `deploy/policies.yaml`. Each row names an agent, a server, and the tools that agent may
+invoke — `brand_style` → `run_brand_audit`, `deal_pricing` → `get_license_pricing`. Read it as the
+sentence the gateway will enforce on your behalf.
 
-`deploy/setup_gateway.sh` reads this and builds, in order: **registry** (registers the 6 agents; the MCP servers were already registered in Step 1) → **gateway** (the governed front door) → **policies** (the IAP authz extension) → and finally calls **`grant_agent_iam.sh`**, which adds the **gateway egress grants** (`roles/iap.egressor` on each allowed destination) on top of the per-agent access you granted in Steps 2–5.
+`deploy/setup_gateway.sh` turns it into infrastructure in a fixed order, and the order is the
+interesting part:
+
+```
+agents deployed with identities            Steps 2-6, already done
+        ↓  agent_identities.json
+1. registry   register the 6 agents as reachable destinations
+        ↓
+2. gateway    create the governed front door
+        ↓
+3. policies   the IAP authz extension, then grant_agent_iam.sh:
+              platform egress for every agent + the policies.yaml tool allowlists
+        ↓
+4. attach     redeploy the engines so they route through it
+```
+
+Each step supplies what the next one refers to. Registry entries have to exist before a policy can
+name a destination; the gateway has to exist before an engine can attach to it; the grants have to
+be in place before the first governed call, since the moment an engine attaches its egress becomes
+deny-by-default. Running the attach last is what keeps a working mesh working.
 
 ### 💻 Register, gate, and grant
 

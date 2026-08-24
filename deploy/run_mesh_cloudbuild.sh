@@ -160,6 +160,15 @@ submit() {
 # the INSTALL failing — re-running it four times just repeats a doomed 40-minute build and
 # reports it as "IAM propagation", which is both wrong and expensive. The two are easy to tell
 # apart: a rejected submit never gets a build id.
+# How long to keep trying depends on whether we JUST created the identity.
+#
+# A brand-new service account plus a brand-new owner binding is the slow case: the policy reads
+# back immediately, but GCS can take several minutes to enforce it, and the build reads the
+# uploaded tarball as that SA. Measured symptom: the first run fails with a 403 on
+# storage.objects.get and the same command minutes later works — which looks random and is not.
+# When nothing was granted this run, there is nothing to propagate, so a short window is right.
+if [ "$JUST_GRANTED" = 1 ]; then MAX_TRIES=8; else MAX_TRIES=4; fi
+
 OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
 n=1
 while :; do
@@ -172,13 +181,14 @@ while :; do
     grep -oE "https://console\.cloud\.google\.com/cloud-build/builds/[^ ]*" "$OUT" | head -1 >&2
     exit 1
   fi
-  if [ "$n" -ge 4 ]; then
+  if [ "$n" -ge "$MAX_TRIES" ]; then
     echo "✗ could not submit after $n attempts (never reached a build)." >&2
-    echo "  A 403 on storage.objects.get for $BUILD_SA is IAM still propagating — wait a" >&2
-    echo "  couple of minutes and re-run. Nothing needs undoing." >&2
+    echo "  A 403 on storage.objects.get for $BUILD_SA is the owner grant still propagating," >&2
+    echo "  not a missing role. Wait 2-3 minutes and re-run: the service account and the grant" >&2
+    echo "  both persist, so the re-run skips straight to submitting." >&2
     exit 1
   fi
-  echo "! submit rejected before starting a build (attempt $n/4) — retrying in 45s"
+  echo "! submit rejected before starting a build (attempt $n/$MAX_TRIES) — retrying in 45s"
   sleep 45; n=$((n + 1))
 done
 
