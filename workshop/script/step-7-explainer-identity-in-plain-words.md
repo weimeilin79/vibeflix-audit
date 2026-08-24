@@ -1,8 +1,8 @@
 # Step 7 — Companion: Identity and the Gateway, in Plain Words
 
-**Target runtime:** 10–13 min · **Companion to:** `step-7-identity-gateway-registry.md`
+**Target runtime:** 11–14 min · **Companion to:** `step-7-identity-gateway-registry.md`
 
-Optional explainer. Watch this before the main Step 7 if badges, tokens and certificates are new, or after it if any of it didn't land. It uses one picture the whole way through: an office building with a security desk.
+Optional explainer. Watch this before the main Step 7 if badges, tokens and certificates are new, or after it if any of it didn't land. It uses one picture the whole way through, an office building with a security desk.
 
 ---
 
@@ -14,7 +14,7 @@ Everything in this step is a building with a security desk.
 
 Your agents are workers in that building. The tool servers are other buildings across the street. The security desk sits at the door and watches everyone going in and out.
 
-Every idea in Step 7 is one piece of that picture, so let's put them in one at a time.
+Let's put the pieces in one at a time.
 
 ---
 
@@ -24,9 +24,9 @@ Each worker has a badge with their own name on it.
 
 Before agent identity, workers shared a badge. It said STAFF and it lived in a drawer, and whoever needed it took it. That's a service account. It works, and it has two problems. When something goes wrong you can't tell which worker did it, because the badge doesn't say. And anyone who can reach the drawer becomes that worker.
 
-With agent identity, every worker gets their own badge with their own name printed on it. That's the `principal://` string you saw in the file. When a badge appears somewhere, you know exactly which worker was there. Take a worker away and their badge stops existing.
+With agent identity, every worker gets their own badge with their own name printed on it. That's the `principal://` string you saw in the file. When a badge turns up somewhere, you know exactly which worker was there. Take a worker away and their badge stops existing.
 
-One badge each, and you can't have both kinds. A worker with a personal badge has no shared badge to fall back on.
+One badge each, and there's no second kind to fall back on. A worker with a personal badge has no shared badge anywhere.
 
 ---
 
@@ -34,9 +34,9 @@ One badge each, and you can't have both kinds. A worker with a personal badge ha
 
 The building prints it.
 
-Workers don't make their own badges, and neither do you. When you hire a worker — when you deploy an engine with agent identity — building security prints a badge for that worker and hands it over. That badge is the certificate.
+Workers don't make their own badges, and neither do you. Deploy an engine with agent identity, and building security prints a badge for that worker and hands it over. That badge is the certificate.
 
-You can't bring your own badge printer. The building prints badges for this building, and a badge printed somewhere else means nothing at this desk. That's what people mean when they say the identity comes from the platform.
+You can't bring your own badge printer either. The building prints badges for this building, and a badge printed somewhere else means nothing at this desk. That's what people mean when they say the identity comes from the platform.
 
 ---
 
@@ -48,9 +48,9 @@ Workers get day passes from a machine inside the building, and the machine gives
 
 A plain day pass has nothing on it but today's date. If it falls out of your pocket, whoever picks it up can use it.
 
-A **matched** day pass has your badge number printed on it. If that one falls out of your pocket, the person who picks it up can't use it, because the door also asks to see the badge with that number, and they don't have your badge.
+A **matched** day pass has your badge number printed on it. If that one falls out of your pocket, the person who picks it up gets nowhere, because the door also asks to see the badge with that number, and they don't have your badge.
 
-The matched pass is the one you want, and it's called a certificate-bound token.
+The matched pass is the one you want, and its real name is a certificate-bound token.
 
 ---
 
@@ -60,49 +60,67 @@ The matched pass is the one you want, and it's called a certificate-bound token.
 
 A matched pass only helps if somebody checks the match.
 
-So at these doors, both sides show a badge. The worker shows theirs, the door shows its own, and then the door compares the pass in the worker's hand against the badge in the worker's other hand. Both showing badges is what mTLS means.
+So at these doors, both sides show a badge. The worker shows theirs, the door shows its own, and then the door compares the pass in the worker's hand against the badge in their other hand. Both sides showing badges is what mTLS means.
 
-That's why badge settings are part of how the passes work, rather than a detail about doors. The pass has a badge number on it, and the badge has to be visible for anyone to check it.
+That's why badge settings are part of how the passes work. The pass has a badge number on it, and the badge has to be visible for anyone to check it.
 
 ---
 
-## 05:15 — Two passes for one trip
+## 05:15 — Most doors already check badges
+
+[SCREEN: the worker walking into three ordinary buildings across the street, each reading the badge at the door.]
+
+Here's something worth getting straight before we build a desk.
+
+Most of the buildings your workers visit already read badges at their own door. The library, the archive, the records office. A worker walks up, shows the badge with their name on it, and reception looks that name up on their own list of who's allowed in.
+
+Nobody had to install anything for that to happen. It's how those buildings have always worked, and it's been happening since Step 2, before any desk existed in your building.
+
+So workers are already being checked, everywhere they go. Keep that in mind, because the desk we're about to build exists for the trips where that breaks down.
+
+---
+
+## 06:30 — Two passes for one trip
 
 [SCREEN: a worker walking out with two slips of paper.]
 
-When a worker goes to visit another building, they carry two passes, and they are different documents.
+When a worker goes to visit another building, they carry two passes, and they're different documents.
 
 The first is their **own day pass**, from the machine in their own building, with their badge number on it. It says who this worker is.
 
-The second is a **visitor pass made out to one named building**. It says where they are going, and it works at that address and nowhere else.
+The second is a **visitor pass made out to one named building**. It says where they're going, and it works at that address and nowhere else.
 
 Each pass is for a different desk. The security desk in their own building reads the first one and asks whether this worker may leave for that destination. The reception desk at the far building reads the second one and asks whether this visitor may come in. Neither desk can answer the other one's question.
 
 ---
 
-## 06:15 — A pass you can read, and a pass you have to phone about
+## 07:30 — A pass you can read, and a pass you have to phone about
 
 The visiting building's reception desk can be handed two kinds of pass.
 
-One kind has to be phoned in. Reception rings head office and asks whether the pass is real, and waits. When six workers arrive at once, the phone line gets busy and somebody gets turned away for no good reason.
+One kind has to be phoned in. Reception rings head office and asks whether the pass is real, and waits. When six workers arrive at once the phone line gets busy and somebody gets turned away for no good reason.
 
-The other kind can be read on the spot. It has a stamp reception already knows how to recognise, and it names this specific building, so nobody has to ring anyone.
+The other kind can be read on the spot. It carries a stamp reception already knows how to recognise, and it names this specific building, so nobody has to ring anyone.
 
 We use the second kind. That's the difference between an access token and an ID token.
 
 ---
 
-## 07:15 — The worker who can't collect that pass
+## 08:30 — The worker who can't collect that pass
 
 There's a wrinkle. The readable pass is issued to people with a shared STAFF badge, and our workers gave those up when they got personal badges.
 
 So the worker asks a runner to collect it for them. The runner does have that kind of badge, and the worker has written permission to send that runner on errands.
 
-That permission is the token-creator role granted back in Step 2. The runner is the invoker service account.
+That permission is the token-creator role you granted back in Step 2. The runner is the invoker service account.
+
+And now the thing that matters. Every worker sends the same runner. So at that one building across the street, reception sees the runner's badge each time, and it looks the same whoever sent it. Reception can tell that somebody from your building is allowed in, and it can't tell which worker asked, or which room they mean to visit.
+
+That's the trip your own desk has to judge, because it's the only place the worker's own name is still on the paperwork.
 
 ---
 
-## 08:00 — The desk works both ways
+## 09:45 — The desk works both ways
 
 [SCREEN: the security desk, with arrows going in and out through it.]
 
@@ -112,11 +130,11 @@ People coming **in** is ingress. The desk asks which visitors are allowed into t
 
 Workers going **out** is egress. The desk asks where this worker is going and whether what they're carrying is safe to take there.
 
-Vibeflix only staffs the outward direction, because nobody from outside visits these workers — the console is in the same building. If you opened your agents up to outside callers, you'd staff the inward direction too.
+Vibeflix only staffs the outward direction, because nobody from outside visits these workers. The console is in the same building. Opening your agents up to outside callers is when you'd staff the inward direction too.
 
 ---
 
-## 09:00 — Three questions on the way out
+## 10:45 — Three questions on the way out
 
 Every time a worker walks out, the desk asks three things in order.
 
@@ -130,17 +148,17 @@ That third question is the one plain IAM can't ask. It's the difference between 
 
 ---
 
-## 10:15 — When somebody gets turned away
+## 11:45 — When somebody gets turned away
 
 If a worker comes back saying they were refused at the desk, one of those three answers was no. The building wasn't on the list, the worker wasn't named for it, or they tried a room they don't have.
 
 Being refused is the desk doing its job. In a building with no desk, the same mistake means the worker walks in and nobody finds out until much later.
 
-There's a second kind of refusal worth telling apart. Turned away at your own desk on the way out is a permission problem. Turned away at the far building's reception is a pass problem — the pass was missing, expired, or made out to the wrong building.
+There's a second kind of refusal worth telling apart. Turned away at your own desk on the way out is a permission problem. Turned away at the far building's reception is a pass problem, so the pass was missing, expired, or made out to the wrong building.
 
 ---
 
-## 11:15 — The whole picture
+## 12:45 — The whole picture
 
 [SCREEN: the full building diagram, labels appearing one at a time.]
 
@@ -150,15 +168,15 @@ Their day passes have their badge number on them, so a dropped pass is useless t
 
 Doors check badge and pass together, which is why both sides show badges.
 
-Workers carry two passes on a trip, one for their own desk and one for the reception at the far end.
+Most buildings across the street read the badge themselves at their own door.
+
+One of them sees a runner's badge instead, and that's the trip the desk exists for.
 
 The desk watches both directions and asks three questions before letting anyone out.
 
-And every one of those checks happens on the way, not in a document somebody wrote about how the building should work.
-
 ---
 
-## 12:15 — Back to the real names
+## 13:30 — Back to the real names
 
 Badge is the agent identity, written `principal://`, and the certificate that proves it.
 

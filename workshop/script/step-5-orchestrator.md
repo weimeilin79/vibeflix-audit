@@ -8,9 +8,9 @@
 
 [SCREEN: the workflow graph. One node fans out to three, then converges.]
 
-Four agents so far, each doing its job when you talk to it directly. This step makes them a system, where one request arrives, three specialists work on it simultaneously in three engines, and something waits for all three before any decision gets made.
+Four agents so far, each doing its job when you talk to it directly. This step makes them a system. One request arrives, three specialists work on it simultaneously in three engines, and something waits for all three before any decision gets made.
 
-It's also where we hit the most instructive failure in the workshop: a bug that stays invisible during development, appears only under real conditions, and needs an architectural fix.
+We also hit a bug here that stays invisible during development, appears only under real conditions, and needs an architectural fix rather than a patch.
 
 ---
 
@@ -26,7 +26,7 @@ The orchestrator is an agent, deployed like the other four, with its own identit
 
 At the bottom of the file there's a Workflow, which is a directed graph.
 
-Read the edges and you have the business process: ingest the request, dispatch it, run the three guards, merge their reports, self-heal anything malformed, compile the UI, generate the report, finalize the contract. Each name is a node defined above with a decorator.
+Read the edges and you have the business process. Ingest the request, dispatch it, run the three guards, merge their reports, self-heal anything malformed, compile the UI, generate the report, finalize the contract. Each name is a node defined above with a decorator.
 
 You can read the business process straight off the code. When somebody asks what happens during an audit, you show them nine lines. That's what you give up the moment you let a model decide what happens next.
 
@@ -38,7 +38,7 @@ You can read the business process straight off the code. When somebody asks what
 
 An edge pointing at a tuple is a fan-out, so those three nodes run in parallel. A join node waits for all three.
 
-They run in parallel because the checks are independent. Brand compliance has no bearing on pricing, and vendor clearance has no bearing on brand. Running them sequentially only makes the audit slower, and when each is a model-driven agent taking ten to twenty seconds, that's the difference between a demo you'd show and one you wouldn't.
+They run in parallel because the checks are independent. Brand compliance has no bearing on pricing, and vendor clearance has no bearing on brand. Running them one after another only makes the audit slower, and when each one is a model-driven agent taking ten to twenty seconds, that's the difference between a demo you'd show and one you wouldn't.
 
 They join because the decision needs all three verdicts before a contract can be finalized.
 
@@ -48,19 +48,19 @@ They join because the decision needs all three verdicts before a contract can be
 
 [SCREEN: `_AGENTS[...]` and `_remote_agent(...)`.]
 
-Each guard node calls a remote agent, the ADK stand-in for something running in another engine. One orchestrator run fans out into three simultaneous A2A calls to three separate engines.
+Each guard node calls a remote agent, which is ADK's stand-in for something running in another engine. One orchestrator run fans out into three simultaneous A2A calls to three separate engines.
 
 The constructor never branches on transport. All three specialists are built the same way, and one boolean decides pacing.
 
 [SCREEN: the long-running set.]
 
-Brand style and deal pricing finish inside Agent Runtime's blocking ceiling of roughly 180 seconds, so they take the stock path. Vendor clearance can exceed it, because it fans out into legal's question loop, so it sends non-blocking and polls. Same class, same call site, one flag, so moving a hop across that ceiling costs a boolean.
+Brand style and deal pricing finish inside Agent Runtime's blocking ceiling of roughly 180 seconds, so they take the stock path. Vendor clearance can exceed it, because it fans out into legal's question loop, so it sends non-blocking and polls. Same class, same call site, one flag. Moving a hop across that ceiling costs a boolean.
 
 ---
 
 ## 05:30 — The bug
 
-Every A2A call is two HTTP requests: a POST that starts the task and returns an id, then a GET on that id, polled until done. Agent Runtime runs each engine as several replicas with no session affinity.
+Every A2A call is two HTTP requests. A POST that starts the task and returns an id, then a GET on that id, polled until done. Agent Runtime runs each engine as several replicas with no session affinity.
 
 [SCREEN: animate it. POST lands on replica A, task created in memory. GET is load-balanced, lands on replica B.]
 
@@ -82,13 +82,13 @@ When you have a stateful handle plus a load balancer, ask where the state lives.
 
 ## 08:00 — The fix
 
-A retry lands on an arbitrary replica too, so it hits the same odds. The fix is moving task state somewhere every replica can see.
+A retry lands on an arbitrary replica too, so it faces the same odds. The fix is moving task state somewhere every replica can see.
 
 [SCREEN: the task store module.]
 
-The engines are wired to a remote task store reading and writing through the app's Firestore-backed endpoints. The POST writes to Firestore, the GET reads from Firestore on whatever replica receives it, and affinity stops mattering.
+The engines are wired to a remote task store that reads and writes through the app's Firestore-backed endpoints. The POST writes to Firestore, the GET reads from Firestore on whatever replica receives it, and affinity stops mattering.
 
-The engines get that endpoint from a variable pointing at the app, which you deploy in Step 6, so until then a fan-out run falls back to per-replica memory and logs a loud warning. That's fine for a single-replica smoke test.
+The engines get that endpoint from a variable pointing at the app, which you deploy in Step 6. Until then a fan-out run falls back to per-replica memory and logs a loud warning, which is fine for a single-replica smoke test.
 
 ---
 
@@ -137,9 +137,9 @@ Open Web Preview on port 8000, pick the orchestrator, and paste the request as o
 
 ## 12:00 — Why JSON
 
-The ingest node accepts either form, and the natural-language path extracts the image link, the market and the volume, and nothing else.
+The ingest node accepts either form. The natural-language path extracts the image link, the market and the volume, and nothing else.
 
-Describe the vendor, character, category or pricing in prose and those fields go unextracted, so the agents ask you for them. A full audit has eleven fields, and JSON is how the console sends them, so these keys are the ones the console's API uses.
+Describe the vendor, character, category or pricing in prose and those fields go unextracted, so the agents ask you for them. A full audit has eleven fields, JSON is how the console sends them, and these keys are the ones the console's API uses.
 
 ---
 

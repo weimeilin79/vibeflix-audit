@@ -8,15 +8,15 @@ for that step needs a pass.
 
 | # | Script | Lab section | Target |
 |---|---|---|---|
-| 1 | `step-1-setup-and-foundations.md` | Setup & Foundations | 20–24 min |
-| 2 | `step-2-brand-style-agent.md` | The Brand Style Agent | 22–26 min |
-| 3 | `step-3-deal-pricing-agent.md` | The Deal Pricing Agent | 21–25 min |
-| 4 | `step-4-vendor-clearance-and-legal.md` | Vendor Clearance + Legal | 24–28 min |
-| 5 | `step-5-orchestrator.md` | The Orchestrator | 22–26 min |
-| 6 | `step-6-ui-renderer-a2ui-frontend.md` | UI Renderer, A2UI, Frontend | 20–24 min |
-| 7 | `step-7-identity-gateway-registry.md` | Identity, Gateway & Registry | 22–26 min |
-| 7b | `step-7-explainer-identity-in-plain-words.md` | *(companion — no lab section)* | 11–13 min |
-| 8 | `step-8-run-the-flows-observability.md` | Run the Flows, Observability | 20–24 min |
+| 1 | `step-1-setup-and-foundations.md` | Setup & Foundations | 15–18 min |
+| 2 | `step-2-brand-style-agent.md` | The Brand Style Agent | 16–19 min |
+| 3 | `step-3-deal-pricing-agent.md` | The Deal Pricing Agent | 14–17 min |
+| 4 | `step-4-vendor-clearance-and-legal.md` | Vendor Clearance + Legal | 18–21 min |
+| 5 | `step-5-orchestrator.md` | The Orchestrator | 16–19 min |
+| 6 | `step-6-ui-renderer-a2ui-frontend.md` | UI Renderer, A2UI, Frontend | 14–17 min |
+| 7 | `step-7-identity-gateway-registry.md` | Identity, Gateway & Registry | 30–34 min |
+| 7b | `step-7-explainer-identity-in-plain-words.md` | *(companion — no lab section)* | 11–14 min |
+| 8 | `step-8-run-the-flows-observability.md` | Run the Flows, Observability | 14–17 min |
 
 ## The companion explainer
 
@@ -41,8 +41,6 @@ can read past the ones that aren't spoken:
 - **Plain paragraphs** — say these out loud, as written.
 - **`[SCREEN: ...]`** — what should be visible. Not spoken.
 - **`[DO: ...]`** — the action you perform on camera. Not spoken.
-- **`[BEAT]`** — a deliberate pause. Usually after a question, or before a reveal.
-
 Section headers carry a running time so you can pace yourself:
 `## 04:00 — Why the tool decides, not the model`. Those are cumulative targets, not
 hard cuts.
@@ -56,19 +54,22 @@ the Dev UI and the console.
 
 Measured narration length, so you can see which scripts have the most headroom:
 
-| Script | Words | Narration only |
+| Script | Spoken words | Narration only |
 |---|---|---|
-| 1 · Setup & Foundations | ~2,500 | ~18 min |
-| 2 · Brand Style | ~2,380 | ~17 min |
-| 3 · Deal Pricing | ~1,850 | ~13 min |
-| 4 · Vendor Clearance + Legal | ~2,370 | ~17 min |
-| 5 · Orchestrator | ~2,140 | ~15 min |
-| 6 · UI Renderer / A2UI | ~1,910 | ~14 min |
-| 7 · Identity & Gateway | ~2,365 | ~17 min |
-| 8 · Run the Flows | ~1,815 | ~13 min |
+| 1 · Setup & Foundations | ~1,650 | ~12 min |
+| 2 · Brand Style | ~1,415 | ~10 min |
+| 3 · Deal Pricing | ~1,110 | ~8 min |
+| 4 · Vendor Clearance + Legal | ~1,555 | ~11 min |
+| 5 · Orchestrator | ~1,285 | ~9 min |
+| 6 · UI Renderer / A2UI | ~1,105 | ~8 min |
+| 7 · Identity & Gateway | ~3,355 | ~24 min |
+| 7b · Explainer (companion) | ~1,565 | ~11 min |
+| 8 · Run the Flows | ~1,110 | ~8 min |
 
-Steps 3, 6, 7 and 8 are the leanest — if a read-through lands short of the target,
-those are the ones to deepen first.
+Step 7 is the outlier, carrying roughly twice the narration of any other step, because
+it explains what was already enforcing the mesh before the gateway existed and then what
+the gateway adds. Steps 3, 6 and 8 are the leanest, so if a read-through lands short of
+its target, deepen those first.
 
 The runtimes assume you **cut the waiting**. Several steps kick off a cloud deploy
 that takes 3–6 minutes; the scripts are written so you keep talking through a jump
@@ -96,8 +97,18 @@ usually, essentially, basically. They dilute and add nothing.
 **Say it once.** If two sentences make the same point in different words, keep the
 better one.
 
-**Still: complete sentences, joined with connectives.** No fragment stacks, no
-one-line dramatic reveals, no `[BEAT]` markers.
+**No colon-introductions or dash-asides in spoken prose.** "Hold one picture: an office
+building" and "the Conditions column is empty — that's the platform layer" both read as
+written text. Say them as two sentences. Colons inside code spans and literal values are
+fine.
+
+**Explain the mechanism where you name it.** A bare error code or role name dropped into
+a sentence sends the listener looking for the reason. Give the reason in the same breath:
+"a config that also names a `service_account` fails with a 400, because the agent identity
+already serves as that engine's workload identity".
+
+**Complete sentences, joined with connectives.** No fragment stacks and no one-line
+dramatic reveals.
 
 **Never define by negation.** No "it's not X, it's Y". No "we don't X, we do Y". No
 trailing "Not a prompt." State the positive claim.

@@ -10,11 +10,11 @@
 
 This is a licensing audit running end to end. A vendor has applied to manufacture a product, and six agents are deciding whether Vibeflix can approve it. They check the artwork against brand rules, the royalty numbers against a rate card, whether a competitor holds an exclusive contract in that territory, and what the legal process for onboarding involves. In about sixty seconds it finishes with a signed contract or a specific reason it can't happen. The same decision used to take three weeks.
 
-The six agents were each deployed separately with their own identity. They call three tool servers locked down tightly enough that opening one of those URLs in a browser returns a 403, which I'll ask you to try later.
+Each of those six agents was deployed separately with its own identity. They call three tool servers that are locked down tightly enough that opening one of those URLs in a browser returns a 403. You'll try that yourself in a few minutes.
 
 [SCREEN: cut to an empty Cloud Shell.]
 
-This first step builds the layer everything else stands on. Most of the decisions in the next seven steps only make sense once you understand what we set up here.
+Today we start with an empty project and build the layer those agents stand on. Three tool servers, a database, a telemetry topic, an image registry, and a catalogue that ties them together.
 
 ---
 
@@ -26,21 +26,21 @@ Someone checks the artwork against brand rules. Someone checks the royalty rate,
 
 Four kinds of expertise means four people, a shared inbox, and three weeks of back and forth.
 
-The tempting fix is handing all of it to one large language model. Give it the rate card, the contracts and the artwork, and ask it to decide. Don't, and the reason is the most important idea in this workshop.
+The tempting fix is to hand all of it to one large language model. Give it the rate card, the contracts and the artwork, and ask it to decide. Doing that will produce a system you can't sign contracts with, and the next five minutes are about why.
 
 ---
 
-## 03:00 — The idea the build rests on
+## 03:00 — Two kinds of work
 
 Two kinds of work sit inside that decision, and they fail differently.
 
-The first is fuzzy. Looking at artwork and saying it's a vinyl figure with no printed text on it. Reading a messy Slack thread and working out the process. Two people describe it slightly differently, and a model varies the same way across two runs. That variation is inherent to the task.
+The first is fuzzy. Looking at artwork and saying it's a vinyl figure with no printed text on it. Reading a messy Slack thread and working out the process. Two people describe that slightly differently, and a model varies the same way across two runs. The variation comes with the task.
 
-The second is exact. Is a 10% royalty above or below a minimum of 10%? Is this vendor named on the exclusivity contract? Does 30,000 units qualify for a tier starting at 100,000? These have one right answer, it has to be identical every time, and it has to match what finance gets with a spreadsheet.
+The second is exact. Is a 10% royalty above or below a minimum of 10%? Is this vendor named on the exclusivity contract? Does 30,000 units qualify for a tier that starts at 100,000? These have one right answer, it has to be identical every time, and it has to match what finance gets with a spreadsheet.
 
-Language models are good at the first and unsuited to the second, because they're probabilistic. If your system returns one royalty rate on Monday and a different one on Tuesday for the same deal, you can't sign contracts with it.
+Language models are good at the first kind and unsuited to the second, because they're probabilistic. A system that returns one royalty rate on Monday and a different one on Tuesday for the same deal can't be used to sign anything.
 
-So the model does the fuzzy work and code does the deciding. The model looks at the image and reports what it sees. A tool takes those facts, applies the rules, and returns a verdict the model can't argue with or produce itself.
+So the model does the fuzzy work and code does the deciding. The model looks at the image and reports what it sees. A tool takes those facts, applies the rules, and returns a verdict the model can't argue with or produce on its own.
 
 [SCREEN: two columns — MODEL: extract, interpret, converse. TOOLS: compare, calculate, decide.]
 
@@ -50,27 +50,27 @@ So the model does the fuzzy work and code does the deciding. The model looks at 
 
 If the exact work belongs in tools, where do the tools live?
 
-The simplest answer is inside the agent, as Python functions it imports. That works for a prototype. We do something else for three reasons.
+The simplest answer is inside the agent, as Python functions it imports. That works for a prototype, and we do something else for three reasons.
 
-If pricing logic sits inside the pricing agent, that agent becomes the only thing that can price. The orchestrator has to go through it to get a rate card. Finance can't check a number, because the logic is buried in a prompt loop. And auditing which rules applied to a deal means reading model transcripts.
+Pricing logic that sits inside the pricing agent makes that agent the only thing in the company that can price. The orchestrator has to go through it to get a rate card. Finance can't check a number, because the logic is buried in a prompt loop. Auditing which rules applied to a deal means reading model transcripts.
 
-Instead the tools live in their own servers, and the agents call them over MCP, the Model Context Protocol.
+So the tools live in their own servers, and the agents call them over MCP, the Model Context Protocol.
 
 [SCREEN: three boxes — mcp_brand_style, mcp_licensing, mcp_market.]
 
-Three servers. One runs brand compliance checks. One owns licensing data: vendors, rate cards, exclusivity contracts, executed contracts. One handles market data, scanning marketplaces and checking volume caps.
+Three servers. One runs brand compliance checks. One owns licensing data, so vendors, rate cards, exclusivity contracts and executed contracts. One handles market data, scanning marketplaces and checking volume caps.
 
-These are ordinary web services with URLs, deployed to Cloud Run, with IAM policies attached. You can point anything at them, because the business logic is a service with an address. That's also what makes Step 7 possible, since you can attach a policy to an HTTP endpoint.
+These are ordinary web services with URLs, deployed to Cloud Run, with IAM policies attached. You can point anything at them, because the business logic now has an address. Having an address is also what makes Step 7 work, because a policy can be attached to an HTTP endpoint.
 
 ---
 
 ## 07:00 — The registry
 
-The third piece is the Agent Registry, which people skim past.
+The third piece is the Agent Registry, and it's easy to skim past.
 
 It's a catalogue. Every MCP server gets an entry, and later every agent does, recording its name, address and interface.
 
-The first use is discovery, so the console can list every tool without anyone grepping the codebase. The more consequential use arrives in Step 7, when a governed gateway goes in front of this traffic. That gateway is deny-by-default and only routes to destinations in the registry, so anything unregistered becomes unreachable. Registration is the enrolment step that makes governance possible. We do it now for the MCP servers and again in Step 7 for the agents.
+Discovery is the first use, so the console can list every tool in the mesh without anyone grepping the codebase. The second use arrives in Step 7, when a governed gateway goes in front of this traffic. That gateway is deny-by-default and only routes to destinations in the registry, so anything unregistered becomes unreachable. Registering a server today is what lets you govern it later. We do it now for the MCP servers and again in Step 7 for the agents.
 
 ---
 
@@ -78,7 +78,7 @@ The first use is discovery, so the console can list every tool without anyone gr
 
 [DO: Activate Cloud Shell.]
 
-Cloud Shell comes with gcloud, python3 and git. It no longer ships terraform — there's a placeholder on the path that prints installation instructions, which is confusing the first time you hit it. The init script handles it, so don't install anything yourself.
+Cloud Shell comes with gcloud, python3 and git. It no longer ships terraform. There's a placeholder on the path that prints installation instructions when you run it, which is confusing the first time you hit it. The init script handles that, so install nothing yourself.
 
 [DO: run the auth check.]
 
@@ -87,7 +87,7 @@ gcloud auth list
 gcloud config get-value project
 ```
 
-Your account should read ACTIVE and the project should be the one you intend to spend money in. Read that output, because everything we create lands in whatever it names.
+Your account should read ACTIVE, and the project should be the one you intend to spend money in. Read that output, because everything we create lands in whatever it names.
 
 [DO: clone.]
 
@@ -104,7 +104,7 @@ cd vibeflix-audit
 
 `agents` holds the six agents, one folder each. `mcp_servers` holds the three tool servers.
 
-`packages` holds the shared library, split into four subpackages named after who imports them: transport, ADK building blocks, MCP-only helpers, and auth and telemetry which both sides use. When you're wondering whether you can import something, the folder name answers you.
+`packages` holds the shared library, split into four subpackages named after who imports them. Transport, ADK building blocks, MCP-only helpers, and the auth and telemetry that both sides use. When you're wondering whether you can import something, the folder name answers you.
 
 `deploy` holds the deploy and verify scripts, the Terraform and your `.env`. `frontend` is the React console. `resource` holds seed data, including the legal documents that become a knowledge base in Step 4.
 
@@ -121,15 +121,15 @@ cd ~/vibeflix-audit
 
 [DO: run it.]
 
-It checks your environment before creating anything: every CLI the workshop needs, that you're authenticated, and that application-default credentials exist. If something's missing it stops before provisioning starts, which beats building half your infrastructure and dying on a missing binary.
+It checks your environment before creating anything. Every CLI the workshop needs, that you're authenticated, and that application-default credentials exist. If something's missing it stops before provisioning starts, so you find out now instead of halfway through building infrastructure.
 
 Then it points gcloud at your project, creates the virtual environment, installs every dependency, installs a working terraform if the placeholder is in the way, and writes `deploy/.env`, the config file every other script reads. It takes a few minutes, mostly Python packages.
 
-Build one habit while it runs, because skipping it is the most common way people lose twenty minutes here. Every new terminal tab needs `cd ~/vibeflix-audit` then `source ./env.sh`.
+Build one habit while it runs. Every new terminal tab needs `cd ~/vibeflix-audit` and then `source ./env.sh`.
 
-A new tab starts in your home directory with a clean environment, so without those lines you run Cloud Shell's system Python instead of the project's. The failure is an `ImportError` from deep inside a Google library, which gives you very little to work with.
+A new tab starts in your home directory with a clean environment, so without those two lines you run Cloud Shell's system Python instead of the project's. What you get is an `ImportError` from deep inside a Google library, which tells you almost nothing about what went wrong. Skipping those lines is the most common way people lose twenty minutes in this workshop.
 
-Note the `source`. Running `./env.sh` achieves nothing, because a script can't change the environment of the shell that launched it, and it will tell you if you get that backwards. Every command block in this lab starts with those two lines, so you can copy any block into any tab and have it work.
+Say `source`, and not `./env.sh`. A script can't change the environment of the shell that launched it, so running it that way achieves nothing. The file will tell you if you get it backwards. Every command block in this lab starts with those two lines, so you can copy any block into any tab and have it work.
 
 ---
 
@@ -143,19 +143,19 @@ source ./env.sh
 
 [DO: run it. Several minutes — plan a jump cut.]
 
-Nine steps in order: preflight, enable APIs, foundations, buckets, Firestore, Pub/Sub, build and deploy the three MCP servers, register them.
+Nine steps in order. Preflight, enable APIs, foundations, buckets, Firestore, Pub/Sub, build and deploy the three MCP servers, register them.
 
-Three of them matter beyond watching output scroll.
+Three of those are worth watching for.
 
-Firestore holds the registries the MCP servers read, and the vendors collection, which is the one thing agents modify at runtime when they onboard somebody.
+Firestore holds the registries the MCP servers read, along with the vendors collection, which is the one thing agents modify at runtime when they onboard somebody.
 
-The Pub/Sub topic carries telemetry. Agents publish events as they work, and in Step 6 the console subscribes to that stream, which is what animates the graph.
+The Pub/Sub topic carries telemetry. Agents publish events as they work, and in Step 6 the console subscribes to that stream. That's what animates the graph you saw in the cold open.
 
 Artifact Registry stores container images for the MCP servers and the console app.
 
-Every script here is safe to re-run. If one stops with an error, fix what it reports and run the identical command, because completed work is detected and skipped.
+Every script here is safe to re-run. If one stops with an error, fix what it reports and run the identical command. Completed work is detected and skipped.
 
-You'll need that occasionally through no fault of your own. These are real cloud APIs, several in preview, and they sometimes return transient internal errors. The setup scripts retry those and stop with a clear message if retrying doesn't help. When you see a red cross, read it and run `./workshop/setup.sh` again — it re-checks all nine steps and redoes only what's missing.
+You'll need that occasionally through no fault of your own. These are real cloud APIs, several of them in preview, and they sometimes return transient internal errors. The setup scripts retry those and stop with a clear message when retrying doesn't help. When you see a red cross, read it and run `./workshop/setup.sh` again. It re-checks all nine steps and redoes only what's missing.
 
 ---
 
@@ -171,17 +171,17 @@ source ./env.sh
 
 It checks the image registry, the telemetry topic, the Firestore database and all three MCP servers.
 
-The last check confirms the MCP servers are running and return a 403. That 403 is the test passing. Those services deploy with no public access, a caller needs the Cloud Run invoker role, and nothing has it yet because no agent exists to grant it to.
+The last check confirms the MCP servers are running and return a 403. That 403 is the test passing. Those services deploy with no public access, a caller needs the Cloud Run invoker role, and nothing holds it yet because no agent exists to grant it to.
 
 [SCREEN: paste an MCP URL into a browser tab. 403.]
 
-Try it yourself. That 403 is the first line of a security story we finish in Step 7, and the tools making the consequential decisions in this system stay off the open internet throughout.
+Try it yourself. We finish that security story in Step 7, and the tools making the consequential decisions in this system stay off the open internet the whole way through.
 
 ---
 
 ## 15:30 — Do and don't
 
-Put the exact logic in a tool server, where it has a URL IAM can be pointed at.
+Put the exact logic in a tool server, where it has a URL that IAM can be pointed at.
 
 Keep the model away from any decision you'd have to defend. If somebody could sue over it, audit it, or reproduce it in a spreadsheet, it belongs in a tool.
 
@@ -195,7 +195,7 @@ Run `cd` and `source ./env.sh` in every new tab.
 
 [SCREEN: architecture diagram, foundation layer lit.]
 
-You have three deterministic, IAM-gated tool servers registered in the Agent Registry, a seeded database, a telemetry topic and an image registry. There are no agents yet, because the decisions in the next seven steps only become available once this layer exists.
+You have three deterministic, IAM-gated tool servers registered in the Agent Registry, a seeded database, a telemetry topic and an image registry. No agents yet.
 
 Next we build brand style. It looks at a product mock-up, works out what it's looking at, and hands those facts to a tool that produces the verdict.
 

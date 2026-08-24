@@ -12,15 +12,15 @@ A vendor agreed to a 10% royalty and justified it as a high-volume discount.
 
 The rate card's base rate for this character is 14%. There is a volume discount band, and it begins at 100,000 units a year. This vendor projects 30,000, so the discount doesn't apply and the deal is underpriced.
 
-Multiplying a base rate by a modifier is arithmetic any spreadsheet does. The hard part is testing the vendor's claim against the tier they qualify for.
+Multiplying a base rate by a modifier is arithmetic any spreadsheet does. The work is in testing the vendor's claim against the tier they actually qualify for.
 
 ---
 
 ## 01:00 — Why this can't be one model call
 
-The last agent was one shot: look at the image, call a tool, report.
+The last agent was one shot. Look at the image, call a tool, report.
 
-Pricing needs a different shape. The agent pulls the expected deal from the rate card and compares it to what was agreed, component by component. It notices the royalty rate is off, but the vendor attached a reason. It can't accept that reason or reject it without checking whether the claimed factor applies.
+Pricing needs a different shape. The agent pulls the expected deal from the rate card and compares it to what was agreed, component by component. It notices the royalty rate is off, and the vendor has attached a reason. Accepting or rejecting that reason means first checking whether the claimed factor applies.
 
 That's several model calls, in order, with a decision point in the middle.
 
@@ -34,7 +34,7 @@ Keep the model for judgment and move the control flow into code.
 
 [SCREEN: `START ──► evaluate ──► reconcile (LOOP) ──► finalize`]
 
-The agent is a small graph. An evaluate node pulls the rate card and compares. A reconcile node handles unresolved claims and is a bounded loop with a hard maximum. Then finalize.
+The agent is a small graph. An evaluate node pulls the rate card and compares. A reconcile node handles unresolved claims and runs as a bounded loop with a hard maximum. Then finalize.
 
 That gives you three things a large prompt can't.
 
@@ -50,7 +50,7 @@ Same idea as the previous step, one level up. There the model extracted and the 
 
 ## 04:00 — Skills
 
-A Skill is a written procedure: a markdown file describing how to do a job, the steps in order, and which tools to use at each one. You hand it to the agent and the agent follows it.
+A Skill is a written procedure. A markdown file describing how to do a job, the steps in order, and which tools to use at each one. You hand it to the agent and the agent follows it.
 
 [SCREEN: the Skill anatomy — SKILL.md plus a references folder.]
 
@@ -60,7 +60,7 @@ It's versioned, because it's a file that gets reviewed in a pull request, so som
 
 It carries resources, shipping reference files like the full rate-card tier table that the agent loads on demand instead of hauling around in every prompt.
 
-And it's where the rule for pricing lives, written in plain words: defer the exact math to the tool. That sentence is in the file, so changing it shows up in a diff.
+And it's where the pricing rule lives, written in plain words. Defer the exact math to the tool. That sentence is in the file, so changing it shows up in a diff.
 
 When your prompt starts containing a procedure, pull it into a file and treat it as the operational document it already is.
 
@@ -70,9 +70,9 @@ When your prompt starts containing a procedure, pull it into a file and treat it
 
 [SCREEN: `agents/deal_pricing/agent.py` — the nodes, the bounded `for`.]
 
-The reconcile node has a for loop with a fixed bound. Inside it a resolver agent gets asked one question: does the claimed factor apply to this vendor?
+The reconcile node has a for loop with a fixed bound. Inside it a resolver agent gets asked one question. Does the claimed factor apply to this vendor?
 
-The loop is deterministic — how many rounds, what ends them, what happens at the bound — and the judgment inside each round is the model's.
+How many rounds run, what ends them, and what happens at the bound are all decided in code. The judgment inside each round belongs to the model.
 
 ---
 
@@ -127,15 +127,15 @@ adk web --allow_origins="regex:https://.*\.cloudshell\.dev" agents/deal_pricing
 
 [SCREEN: the trimmed JSON.]
 
-`rate_card` is what the agent fetched at run time. The licensing tool returned Grogu's card: A-list tier, 0.14 base rate, the modifier tables. None of it appears in the prompt or the model's knowledge. Update the rate card in Firestore tomorrow and this agent prices differently tomorrow, with no redeploy.
+`rate_card` is what the agent fetched at run time. The licensing tool returned Grogu's card, so an A-list tier, a 0.14 base rate, and the modifier tables. None of it appears in the prompt or in the model's knowledge. Update the rate card in Firestore tomorrow and this agent prices differently tomorrow, with no redeploy.
 
-`expected` is what that card computes to: 0.14 times 1.2 for vinyl figures, times 1.0 for North America, times 1.0 for volume, giving 0.168.
+`expected` is what that card computes to. 0.14 times 1.2 for vinyl figures, times 1.0 for North America, times 1.0 for volume, giving 0.168.
 
 That last multiplier is where the claim gets rejected. The first tier earning a discount begins at 100,000 units and this deal is 30,000, so it stays at 1.0. The arithmetic belongs to the tool.
 
 `components` compares line by line against what was agreed, and all three are discrepancies. The minimum guarantee also carries a below-floor flag, because 30,000 sits under the card's floor of 150,000.
 
-Look at the royalty rate line, which is above the floor. A rate of 0.10 is exactly the minimum, so it's legal while still far under what the card says the deal should have been. Whether something is permitted and whether it's correctly priced are separate questions, and the card answers both. That nuance disappears when a model summarises a deal in prose.
+Look at the royalty rate line, which is above the floor. A rate of 0.10 is exactly the minimum, so it's legal while still sitting far under what the card says the deal should have been. Whether something is permitted and whether it's correctly priced are separate questions, and the card answers both. That nuance disappears when a model summarises a deal in prose.
 
 The verdict and status come from the tool, derived from those components. The model drove the loop and never chose the verdict.
 
@@ -155,7 +155,7 @@ Same graph, same skill, different arithmetic, because the card said so. You chan
 
 [DO: Ctrl+C in the adk web tab and the MCP tab.]
 
-Stop both. The next section starts the whole local mesh, which brings up its own MCP servers on the same ports, and if the old ones hold those ports the new ones exit immediately with an error that looks nothing like a port conflict.
+Stop both. The next section starts the whole local mesh, which brings up its own MCP servers on the same ports. If the old ones still hold those ports, the new ones exit immediately with an error that looks nothing like a port conflict.
 
 ```bash
 cd ~/vibeflix-audit
@@ -185,7 +185,7 @@ Stop the local MCP servers before the next section needs those ports.
 
 ## 14:30 — Where that leaves us
 
-The agent is a small workflow — evaluate, reconcile in a bounded loop, finalize — that reasons about claims and defers every number to a tool.
+The agent is a small workflow. Evaluate, reconcile in a bounded loop, finalize. It reasons about claims and defers every number to a tool.
 
 Every agent so far has been self-contained. Next, vendor clearance hands work to a separate agent called legal, running in its own engine across a network boundary. Legal's problem is that the process it follows was never written down. It reconstructs it from an email thread, somebody's checklist, and a wiki page that stops mid-sentence.
 

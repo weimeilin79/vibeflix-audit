@@ -8,9 +8,9 @@
 
 [SCREEN: the console's scenario picker, four options.]
 
-Everything is built, secured and traced, so this step uses it.
+Everything is built, secured and traced. Now we use it.
 
-Four scenarios, each ending differently: a signed contract, a hard block, a human-in-the-loop question, and a sourcing decision. Test this claim as we go — it's the same graph every time, same nodes, same edges, same agents, with nothing branching on a scenario id, and only the data in the request changes.
+Four scenarios, each ending differently. A signed contract, a hard block, a human-in-the-loop question, and a sourcing decision. Test one claim as we go. It's the same graph every time, with the same nodes, the same edges and the same agents, and nothing branching on a scenario id. Only the data in the request changes.
 
 ---
 
@@ -54,9 +54,9 @@ Four kinds of expertise applied consistently in under a minute, with a record of
 
 Two fields change.
 
-An exclusive partner holds that territory for that character and category, so vendor clearance blocks the deal. Brand style and deal pricing both still pass, and only vendor clearance is red.
+An exclusive partner holds that territory for that character and category, so vendor clearance blocks the deal. Brand style and deal pricing both still pass, and only vendor clearance turns red.
 
-A sequential pipeline stops at the first failure and tells the vendor one thing. Here they learn everything true about their deal in one pass: the artwork is fine, the money is fine, and there's a contract in the way.
+A sequential pipeline stops at the first failure and tells the vendor one thing. Here they learn everything true about their deal in one pass. The artwork is fine, the money is fine, and there's a contract in the way.
 
 The block names a partner, a category and a contract expiry date, all of it from a registry row through a deterministic tool.
 
@@ -84,7 +84,7 @@ Legal needed a safety-cert ID, and legal sits behind vendor clearance, behind th
 
 One field changes.
 
-All three guards pass, then the orchestrator's report step compares the volume against the authorized cap of 25,000 and stops for a sourcing decision: split the excess into an addendum contract, or cap the volume and cancel the rest. Either finishes with a contract.
+All three guards pass, then the orchestrator's report step compares the volume against the authorized cap of 25,000 and stops for a sourcing decision. Split the excess into an addendum contract, or cap the volume and cancel the rest. Either one finishes with a contract.
 
 This pause is plain code in the graph, a number compared against a cap. Scenario three's question came from a model that discovered it needed something. Two mechanisms, and from the user's side they look identical.
 
@@ -104,11 +104,11 @@ Cloud Trace answers where the time went. Every request is one distributed trace 
 
 The three specialists' spans overlap, which is your proof the fan-out is real.
 
-Cloud Logging answers what a component said, and there's a trap here. The engines and the Cloud Run services log under different resource types: the six agents are reasoning engines, and the MCP servers and app are Cloud Run revisions. Filter on the wrong one and an agent looks silent while it's logging normally.
+Cloud Logging answers what a component said, and there's a trap here. The engines and the Cloud Run services log under different resource types. The six agents are reasoning engines, and the MCP servers and app are Cloud Run revisions. Filter on the wrong one and an agent looks silent while it's logging normally.
 
-Cloud Monitoring's topology answers what the system is, drawing the mesh from aggregated traces. Architecture diagrams describe what somebody meant, and a topology built from traces shows the calls that happened, so an unexpected edge on it is a finding.
+Cloud Monitoring's topology answers what the system is, drawing the mesh from aggregated traces. Architecture diagrams describe what somebody meant. A topology built from traces shows the calls that happened, so an unexpected edge on it is a finding.
 
-Three APIs have to be enabled, and with one off the topology comes back empty even though the agents are fine.
+Three APIs have to be enabled. With one of them off the topology comes back empty even though the agents are fine.
 
 ---
 
@@ -120,7 +120,7 @@ source ./env.sh
 ./deploy/verify/step8.sh
 ```
 
-Confirms all six engines have telemetry on, trace propagation on, and the shared task store wired. None of those failing produces an error — you get less signal, or slower runs, with nothing indicating why.
+Confirms all six engines have telemetry on, trace propagation on, and the shared task store wired. None of those failing produces an error. You get less signal, or slower runs, with nothing indicating why.
 
 ---
 
@@ -142,7 +142,7 @@ A pause can come from an agent or from deterministic code, with the user unable 
 
 Three MCP tool servers, deterministic and IAM-gated. Six agents, each with its own identity. One console, a thin client hosting the shared task store. Governed by identity, gateway and registry, observable through trace, live telemetry and topology.
 
-And the ideas underneath: MCP, the split between deterministic and non-deterministic work, Skills, loop engineering, RAG, A2A handoffs, human-in-the-loop, the ADK graph and its fan-out, the shared task store, A2UI, and governance in the traffic path.
+And the ideas underneath. MCP, the split between deterministic and non-deterministic work, Skills, loop engineering, RAG, A2A handoffs, human-in-the-loop, the ADK graph and its fan-out, the shared task store, A2UI, and governance in the traffic path.
 
 Keep one sentence from all eight steps. The model does the fuzzy work, code does the deciding, and governance sits in the traffic path.
 
@@ -174,6 +174,6 @@ Read the design docs in the repository, which go deeper than a workshop can.
 
 And read the operational runbook if you want to run this beyond a workshop day.
 
-Thanks for building this with me. Six agents move real money and sign real contracts here, and the engineering was all in one question asked repeatedly: which decisions are these agents allowed to make?
+Thanks for building this with me. Six agents move real money and sign real contracts here, and the engineering was all in one question asked repeatedly. Which decisions are these agents allowed to make?
 
 [SCREEN: the finished console, one last time.]
