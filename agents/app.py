@@ -225,6 +225,11 @@ print(f"[app] persistence: {memory_summary()}")
 # reports into A2UI panels, which we then assemble into a surface deterministically.
 # If UI_RENDERER_A2A_URL is unset or the service is down, _present returns None and
 # we fall back to a rule-based summary — the UI keeps working.
+# How many times to ask the renderer for panels before giving up and using the deterministic
+# fallback. 2 = one retry; the failure it covers is a wrong-format answer, which a re-ask
+# usually fixes, and each attempt is a single model call.
+_PRESENT_ATTEMPTS = 2
+
 PRESENTER_APP = "a2ui_presenter"
 _UI_RENDERER_URL = os.environ.get("UI_RENDERER_A2A_URL", "").rstrip("/")
 
@@ -387,7 +392,36 @@ async def _present(reports: dict) -> list | None:
     # the run id is known — and report the REAL outcome, including "the agent answered but the
     # A2UI didn't parse", which a fallback would otherwise hide.
     emit_event("ui_renderer", "started", detail="rendering report panels")
-    text = await _run_presenter(reports)
+
+    # Ask again when the answer is the wrong SHAPE.
+    #
+    # The renderer's skill carries two tasks: render A2UI panels, and design an input form
+    # (which deliberately emits plain JSON and no <a2ui-json> block). It intermittently answers
+    # a render request with the FORM format — observed in vibeflix-demo, where a panel request
+    # came back as `{"prompt": "Please provide the necessary details to onboard Acme Toys Ltd",
+    # "fields": [...]}`. The old behaviour dropped straight to the deterministic panels, so a
+    # one-off wrong guess cost the agent-rendered UI for the whole run.
+    #
+    # A re-ask is cheap and usually lands: it is one model call, and the second attempt carries
+    # an explicit reminder of which of the two formats is wanted. Falling back stays the final
+    # answer, so a persistently confused model still cannot break the console.
+    text = None
+    for attempt in range(_PRESENT_ATTEMPTS):
+        payload = dict(reports)
+        if attempt:
+            # A nudge, not a new contract: the skill still owns the format. Only added on a
+            # retry so the normal path sends exactly what it always did.
+            payload["_format_reminder"] = (
+                "Respond ONLY with A2UI <a2ui-json> blocks for these reports. "
+                "Do not return an input form, a plain JSON object, or a code fence."
+            )
+        text = await _run_presenter(payload)
+        if text and "<a2ui-json>" in text:
+            break
+        if attempt < _PRESENT_ATTEMPTS - 1:
+            print(f"[app] presenter answered without an A2UI block "
+                  f"(attempt {attempt + 1}/{_PRESENT_ATTEMPTS}) — re-asking with an explicit "
+                  f"format reminder", flush=True)
     if not text:
         # Log every failure path, not just the parse error. A silent fallback renders a normal
         # report while the renderer box goes red with no explanation anywhere.
@@ -1318,6 +1352,12 @@ async def _stream_audit(request: dict):
         # contract-executed audit is final — re-submitting it makes no sense).
         # `capped_volume` tells the client the sourcing decision changed the
         # effective volume — the form updates itself to the real number.
+        # Record whether this audit showed the credential fault, so the console can suggest
+        # a roll when there is real evidence rather than on a schedule.
+        try:
+            _note_audit_health(aggregate, entry)
+        except Exception as _he:  # noqa: BLE001 — health tracking must never fail an audit
+            print(f"[health] skipped: {type(_he).__name__}: {_he}", flush=True)
         done_evt = {"event": "done", "run_token": token, "passed": entry["passed"],
                     "contract_id": (entry.get("contract") or {}).get("contract_id", "")}
         sourcing = aggregate.get("sourcing") or {}
@@ -1754,6 +1794,457 @@ async def ready():
     print(f"[ready] → {'READY' if critical_ok else 'NOT READY'} in {int((time.monotonic()-t0)*1000)}ms"
           + (f" · blocking: {down}" if down else ""), flush=True)
     return {"ready": critical_ok, "components": components}
+
+
+# ---- demo prep: roll the engine replicas ------------------------------------------
+#
+# The mesh is reliable for the first few audits after a deploy and then starts refusing its
+# own calls — 401 with the IAP body "Error code 1000" on certificate-bound tokens. The
+# per-connection analysis is in eng-report/UPSTREAM-BUG-mtls-handshake-agent-identity.md;
+# what matters here is that rolling the replicas restores it, and before a demo you want
+# that on a button rather than in a terminal.
+#
+# This does NOT rebuild or re-upload anything. It PATCHes each engine's deployment env with
+# a fresh MESH_ROLLOUT stamp, which is enough for Agent Engine to roll out new replicas on
+# the package already deployed. That is minutes rather than the ten-to-twenty a rebuild
+# costs, and it needs aiplatform permissions on the app's service account rather than Cloud
+# Build permissions — a much smaller grant for a console that is reachable from the internet.
+#
+# GATED, and off by default. This app runs --allow-unauthenticated because the browser has
+# to load the console, so an unguarded rollout endpoint would let anyone on the internet
+# recycle the mesh. With MESH_ADMIN_KEY unset the endpoint refuses outright; with it set,
+# every call must carry the key in X-Mesh-Admin-Key.
+_MESH_ADMIN_KEY = os.environ.get("MESH_ADMIN_KEY", "")
+_ENGINE_PREFIX = "vibeflix-"
+_ROLLOUT: dict = {"running": False, "phase": "idle", "started": "", "finished": "",
+                  "engines": [], "error": "", "ready_streak": 0, "waiting_on": [],
+                  "ops_done": 0, "ops_total": 0}
+
+
+def _rollout_mode() -> str:
+    """"off" (no button), "open" (button, no key), or "key" (button, key required).
+
+    HIDDEN unless something opts in explicitly. No environment sniffing — not RUN_LOCAL, not
+    the project id — because a control that recycles the whole mesh should appear only where
+    someone decided it should.
+
+        (unset) / off         off. Workshop, local dev, and any hand-rolled install. The
+                              workshop hands out short-lived projects and its scripts never
+                              run long enough to hit the fault, and a local run has no engines
+                              to roll — in both cases the button is noise at best.
+        MESH_ROLLOUT=open     open. Set by deploy/run_mesh_cloudbuild.sh, so a one-click mesh
+                              install gets it. Single-owner project, so no key.
+        MESH_ADMIN_KEY set    key. A long-lived shared project (vibeflix-demo) whose console
+                              is on the internet, where rolling the mesh mid-demo in front of
+                              an audience is a real risk.
+    """
+    raw = os.environ.get("MESH_ROLLOUT", "").strip().lower()
+    if raw == "off" or not raw:
+        return "off"
+    if _MESH_ADMIN_KEY:
+        return "key"
+    return "open" if raw == "open" else "off"
+
+
+def _admin_auth(key: str | None) -> None:
+    mode = _rollout_mode()
+    if mode == "off":
+        raise HTTPException(
+            status_code=503,
+            detail="Mesh rollout is disabled. Set MESH_ROLLOUT=open (or MESH_ADMIN_KEY) on the app.")
+    if mode == "key" and key != _MESH_ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="bad admin key")
+
+
+# ---- when to SUGGEST a roll -------------------------------------------------------
+#
+# Deliberately not a timer and not a run count. Measured on vibeflix-demo 2026-08-27, the
+# refusals were 43% of calls carrying the SAME valid token with 16-18 minutes of life left —
+# a per-connection failure, not a clock. The run durations say the same thing: 174s, 91s,
+# 104s, 84s, 140s, 453s, 99s, 809s. A healthy 99s run lands BETWEEN two bad ones, so there is
+# no threshold after which the mesh is spent. A "you have run 3 audits" nudge would fire
+# before a perfectly good run and stay silent through a broken one.
+#
+# So the trigger is what the app actually OBSERVED going wrong on the last few audits. The
+# run counter is kept for display only — it is context, never a reason.
+_HEALTH: dict = {"audits": 0, "symptoms": [], "last_rollout": ""}
+_SYMPTOM_CAP = 5
+
+# Force a roll before an audit once the replicas are older than this.
+#
+# A timer is NOT a good PREDICTOR — measured over 3.5 days in vibeflix-demo, 98 of 122 replica
+# lifetimes never produced an unrecovered refusal, and the ones that did ranged from 0 to 568
+# minutes after boot. So this will prompt when nothing is wrong, and it can miss a replica that
+# breaks late. It is here because for a DEMO the trade is worth it anyway: a 3-minute roll is
+# cheap, and an audit failing in front of an audience is not.
+#
+# 45 min is chosen over 60 to sit just under the clearest real boundary in the data — four
+# independent failures landed within half a minute of exactly 60.0 minutes after boot, which is
+# what a 3600s token lifetime looks like when its re-mint fails.
+_ROLLOUT_MAX_AGE_MIN = float(os.environ.get("MESH_ROLLOUT_MAX_AGE_MIN", "45"))
+# A roll is finished when the ENGINES ANSWER AGAIN, not when a clock runs out. The PATCH only
+# means the API accepted the request, so the old code's fixed countdown could expire while an
+# engine was still coming up, or hold you when everything was already back.
+#
+# Right after a PATCH the readiness probe can still pass, because the outgoing replicas keep
+# serving until the new ones take over. So a single pass proves nothing: wait a settle period,
+# then require several CONSECUTIVE passes before calling it done.
+_READY_SETTLE_SEC = float(os.environ.get("MESH_ROLLOUT_SETTLE_SEC", "30"))
+_READY_STREAK = int(os.environ.get("MESH_ROLLOUT_READY_STREAK", "3"))
+_READY_POLL_SEC = 5.0
+_READY_TIMEOUT_SEC = float(os.environ.get("MESH_ROLLOUT_READY_TIMEOUT_SEC", "600"))
+_APP_STARTED = time.time()
+
+
+_OP_POLL_SEC = 5.0
+
+
+async def _await_operation(label: str, op_name: str, timeout_s: float) -> str:
+    """Poll one long-running operation to completion. "" on success, else an error string.
+
+    This is the platform's OWN record of the rollout, which is why it is worth having: a
+    readiness probe can be answered by the outgoing replica and tell us the engine is back
+    when it has not been replaced yet. `done` on the operation means Agent Engine considers
+    this engine rolled.
+    """
+    base, _ = _ap_host_and_parent()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            hdr = await _ap_headers()
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                r = await c.get(f"{base}/{op_name}", headers=hdr)
+            if r.status_code >= 400:
+                return f"{r.status_code}: {r.text[:160]}"
+            body = r.json() or {}
+            if body.get("done"):
+                err = body.get("error") or {}
+                msg = err.get("message", "") if err else ""
+                print(f"[rollout] {label}: operation {'FAILED ' + msg if msg else 'done'}",
+                      flush=True)
+                return msg
+        except Exception as e:  # noqa: BLE001 — a poll error is not a rollout failure
+            print(f"[rollout] {label}: operation poll error {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(_OP_POLL_SEC)
+    return f"rollout operation did not finish within {int(timeout_s / 60)} min"
+
+
+async def _await_rollout_operations(results: list) -> str:
+    """Wait for every engine's rollout operation. "" when all finish (or none is pollable).
+
+    Falls back to readiness-only when the PATCH did not hand back an operation resource —
+    the response shape is not something we have confirmed against a live engine yet, so this
+    logs what it actually received rather than assuming.
+    """
+    pollable, unpollable = [], []
+    for r in results:
+        op = r.get("operation") or ""
+        (pollable if "/operations/" in op else unpollable).append((r["name"], op))
+    for label, op in unpollable:
+        print(f"[rollout] {label}: no pollable operation (got {op!r}) — "
+              f"relying on the readiness check alone", flush=True)
+    if not pollable:
+        return ""
+    _ROLLOUT["ops_total"] = len(pollable)
+    _ROLLOUT["ops_done"] = 0
+
+    async def one(label, op):
+        err = await _await_operation(label, op, _READY_TIMEOUT_SEC)
+        _ROLLOUT["ops_done"] = int(_ROLLOUT.get("ops_done", 0)) + 1
+        return (label, err)
+
+    outcomes = await asyncio.gather(*(one(l, o) for l, o in pollable))
+    bad = [f"{l}: {e}" for l, e in outcomes if e]
+    return "; ".join(bad)
+
+
+async def _await_engines_ready() -> str:
+    """Block until the mesh answers again. Returns "" on success, else an error string."""
+    await asyncio.sleep(_READY_SETTLE_SEC)
+    deadline = time.monotonic() + _READY_TIMEOUT_SEC
+    streak = 0
+    while time.monotonic() < deadline:
+        try:
+            snapshot = await ready()
+            ok = bool(snapshot.get("ready"))
+        except Exception as e:  # noqa: BLE001 — a probe error is just "not ready yet"
+            ok, snapshot = False, {"components": []}
+            print(f"[rollout] readiness probe error: {type(e).__name__}: {e}", flush=True)
+        streak = streak + 1 if ok else 0
+        down = [c["name"] for c in snapshot.get("components", []) if not c.get("ok")]
+        _ROLLOUT["ready_streak"] = streak
+        _ROLLOUT["waiting_on"] = down
+        print(f"[rollout] readiness {'PASS' if ok else 'fail'} "
+              f"streak={streak}/{_READY_STREAK}" + (f" waiting on {down}" if down else ""),
+              flush=True)
+        if streak >= _READY_STREAK:
+            return ""
+        await asyncio.sleep(_READY_POLL_SEC)
+    return (f"engines did not come back within {int(_READY_TIMEOUT_SEC / 60)} min "
+            f"(still down: {_ROLLOUT.get('waiting_on') or 'unknown'})")
+
+
+def _rollout_age_minutes() -> float:
+    """Minutes since the replicas were last rolled.
+
+    With no roll on record the app's own start is the reference — imperfect (the app can outlive
+    an engine and vice versa) but it is the only boot time this process actually knows, and it
+    errs toward prompting rather than staying silent.
+    """
+    stamp = _HEALTH.get("last_rollout") or ""
+    if stamp:
+        try:
+            t = datetime.datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+            return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
+        except ValueError:
+            pass
+    return (time.time() - _APP_STARTED) / 60
+
+
+# The marker is OURS (a2a/engine.py wraps every failed hop with it) and the body it carries is
+# the platform's verbatim error, so neither is model-generated and both are safe to match on.
+_A2A_FAIL_MARKER = "[A2A engine execution FAILED]"
+_CRED_MARKERS = ("Error code 1000", "iap/docs/faq", "Unauthorized", "401")
+
+
+def _strings_in(obj, _depth: int = 0):
+    """Every string value in a nested structure, so detection can be scoped to the fields that
+    actually carry error text rather than a json.dumps() of the whole report."""
+    if _depth > 8:
+        return
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _strings_in(v, _depth + 1)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _strings_in(v, _depth + 1)
+
+
+def _note_audit_health(aggregate: dict, entry: dict) -> None:
+    """Record whether this audit showed the CREDENTIAL fault specifically.
+
+    Detection is deliberately narrow. It fires only on a string that carries our own
+    `[A2A engine execution FAILED]` marker AND an auth indicator inside that same string —
+    so an agent that merely mentions "401" in prose cannot trip it, and neither can a
+    failed hop that failed for some other reason.
+
+    Two signals were considered and rejected:
+
+    * "the audit passed but executed no contract" — looks compelling, and it is exactly what
+      your failing run did. But orchestrator/agent.py records a MEASURED case (2026-08-02)
+      where audits finish with no contract id while legal HAS executed one, because
+      vendor_clearance's reply omitted it. That is a reporting bug, not a credential fault,
+      and rolling the mesh would not touch it. Firing on it would send you to recycle the
+      fleet over an unrelated defect.
+    * a run counter or a time threshold — the fault is per-connection, ~43% on a token with
+      16-18 minutes left, and a healthy run lands between two bad ones. Any threshold would
+      fire before a good run and stay quiet through a bad one.
+    """
+    _HEALTH["audits"] = int(_HEALTH.get("audits", 0)) + 1
+    found: list[str] = []
+    for text in _strings_in(aggregate or {}):
+        if _A2A_FAIL_MARKER not in text:
+            continue
+        if not any(m in text for m in _CRED_MARKERS):
+            continue                       # a hop failed, but not on credentials
+        detail = "the IAP 'Error code 1000' credential error" \
+            if ("Error code 1000" in text or "iap/docs/faq" in text) else "401 Unauthorized"
+        msg = f"an engine-to-engine call was refused with {detail}"
+        if msg not in found:
+            found.append(msg)
+    for f in found:
+        if f not in _HEALTH["symptoms"]:
+            _HEALTH["symptoms"].append(f)
+    del _HEALTH["symptoms"][:-_SYMPTOM_CAP]
+    if found:
+        print(f"[health] credential symptom on this audit: {found}", flush=True)
+
+
+def _ap_host_and_parent() -> tuple[str, str]:
+    """(base URL, parent resource) for the reasoningEngines API.
+
+    The PLAIN aiplatform host on purpose: the app runs as an ordinary service account, so a
+    normal access token is accepted and there is no reason to route this through mTLS.
+    """
+    region = os.environ.get("REGION") or os.environ.get("GOOGLE_CLOUD_REGION") or "us-central1"
+    project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("PROJECT") or "").strip()
+    if not project:
+        raise HTTPException(status_code=500, detail="GOOGLE_CLOUD_PROJECT is not set")
+    return (f"https://{region}-aiplatform.googleapis.com/v1beta1",
+            f"projects/{project}/locations/{region}")
+
+
+async def _ap_headers() -> dict:
+    import google.auth
+    from google.auth.transport.requests import Request as _GRequest
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    if not creds.valid:
+        await asyncio.to_thread(creds.refresh, _GRequest())
+    return {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+
+
+async def _list_engines() -> list[dict]:
+    """Every vibeflix engine in the project — LISTED, not read from *_A2A_URL.
+
+    The app only holds URLs for the agents it calls directly, which leaves out `legal`
+    (reached engine-side from vendor_clearance). A rollout that silently skipped an engine
+    would be worse than no button at all.
+    """
+    base, parent = _ap_host_and_parent()
+    hdr = await _ap_headers()
+    out: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        page = ""
+        while True:
+            r = await c.get(f"{base}/{parent}/reasoningEngines",
+                            params={"pageSize": 100, **({"pageToken": page} if page else {})},
+                            headers=hdr)
+            r.raise_for_status()
+            body = r.json()
+            out += [e for e in (body.get("reasoningEngines") or [])
+                    if (e.get("displayName") or "").startswith(_ENGINE_PREFIX)]
+            page = body.get("nextPageToken") or ""
+            if not page:
+                break
+    return out
+
+
+async def _roll_engine(engine: dict, stamp: str) -> dict:
+    """PATCH one engine's env with the rollout stamp; return its per-engine result.
+
+    The existing env is read back and resent WITH the stamp appended. `updateMask` is
+    scoped to the env field alone, so nothing else in the spec is touched — a broader mask
+    here would rewrite deployment settings from a partial body.
+    """
+    base, _ = _ap_host_and_parent()
+    name = engine["name"]
+    label = engine.get("displayName") or name.rsplit("/", 1)[-1]
+    env = list(((engine.get("spec") or {}).get("deploymentSpec") or {}).get("env") or [])
+    env = [e for e in env if e.get("name") != "MESH_ROLLOUT"]
+    env.append({"name": "MESH_ROLLOUT", "value": stamp})
+    hdr = await _ap_headers()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.patch(f"{base}/{name}",
+                              params={"updateMask": "spec.deploymentSpec.env"},
+                              headers=hdr,
+                              json={"spec": {"deploymentSpec": {"env": env}}})
+        if r.status_code >= 400:
+            return {"name": label, "ok": False, "error": f"{r.status_code}: {r.text[:200]}"}
+        return {"name": label, "ok": True, "operation": (r.json() or {}).get("name", "")}
+    except Exception as e:  # noqa: BLE001 — one engine failing must not abort the rest
+        return {"name": label, "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+async def _run_rollout(stamp: str) -> None:
+    try:
+        engines = await _list_engines()
+        if not engines:
+            _ROLLOUT.update(running=False, phase="failed",
+                            error="no vibeflix-* engines found in this project")
+            return
+        _ROLLOUT["engines"] = [{"name": e.get("displayName") or "?", "ok": None} for e in engines]
+        # One at a time. Agent Engine deploy quota in a fresh project is low, and rolling the
+        # whole mesh at once is how you turn "prepare for the demo" into "no mesh at all".
+        results = []
+        for e in engines:
+            res = await _roll_engine(e, stamp)
+            results.append(res)
+            _ROLLOUT["engines"] = results + [
+                {"name": x.get("displayName") or "?", "ok": None} for x in engines[len(results):]]
+            print(f"[rollout] {res['name']}: "
+                  + ("started" if res["ok"] else f"FAILED {res.get('error')}"), flush=True)
+        bad = [r for r in results if not r["ok"]]
+        if bad:
+            _ROLLOUT.update(running=False, phase="failed",
+                            finished=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                            error=f"{len(bad)} engine(s) failed")
+            return
+        # Every PATCH was accepted. That is NOT the same as the engines being rolled, and not
+        # the same as them serving again — so confirm both, in that order. The operation says
+        # the platform replaced the replica; readiness says it is actually answering.
+        _ROLLOUT.update(phase="rolling", ready_streak=0, waiting_on=[])
+        print("[rollout] all patches accepted — waiting for the rollout operations", flush=True)
+        err = await _await_rollout_operations(results)
+        if not err:
+            _ROLLOUT.update(phase="verifying")
+            print("[rollout] operations finished — waiting for the engines to answer", flush=True)
+            err = await _await_engines_ready()
+        if not err:
+            # Stamped NOW, not with the request stamp: a full roll takes ~4.5 minutes, and
+            # charging that to the fresh replicas would make them start life already aged.
+            # Only a VERIFIED roll resets the clock.
+            _HEALTH["last_rollout"] = datetime.datetime.now(
+                datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        _ROLLOUT.update(running=False, phase="failed" if err else "done",
+                        finished=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                        error=err)
+        print(f"[rollout] {'FAILED: ' + err if err else 'complete — mesh is answering'}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[rollout] aborted: {type(e).__name__}: {e}", flush=True)
+        _ROLLOUT.update(running=False, phase="failed", error=f"{type(e).__name__}: {e}")
+
+
+@app.post("/api/admin/rollout")
+async def start_rollout(x_mesh_admin_key: str | None = Header(default=None)):
+    """Roll every vibeflix engine's replicas. Returns immediately; poll GET for progress."""
+    _admin_auth(x_mesh_admin_key)
+    if _ROLLOUT["running"]:
+        return {"started": False, "reason": "a rollout is already running", **_ROLLOUT}
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    _ROLLOUT.update(running=True, phase="patching", started=stamp, finished="",
+                    engines=[], error="", ready_streak=0, waiting_on=[],
+                    ops_done=0, ops_total=0)
+    # Symptoms belonged to the old replicas. `last_rollout` is stamped on COMPLETION, not
+    # here — a roll that fails must not reset the age clock and hide that nothing was fixed.
+    _HEALTH.update(audits=0, symptoms=[])
+    asyncio.create_task(_run_rollout(stamp))
+    print(f"[rollout] requested stamp={stamp}", flush=True)
+    return {"started": True, "stamp": stamp}
+
+
+@app.get("/api/admin/rollout")
+async def rollout_status(x_mesh_admin_key: str | None = Header(default=None)):
+    """Progress of the current/last rollout, plus whether the button should be shown."""
+    _admin_auth(x_mesh_admin_key)
+    return dict(_ROLLOUT)
+
+
+@app.get("/api/admin/enabled")
+def rollout_enabled():
+    """Unauthenticated on purpose: tells the console whether to render the button at all.
+
+    Leaks whether the button exists, whether it wants a key, and whether the app has seen the
+    credential fault recently — nothing that helps anyone who is not already looking at the
+    console. Without it the console would have to render a button most deployments cannot use.
+    """
+    mode = _rollout_mode()
+    symptoms = list(_HEALTH.get("symptoms") or [])
+    return {
+        "rollout": mode != "off",
+        "mode": mode,                      # "open" → no key prompt, "key" → ask for it
+        "needs_key": mode == "key",
+        "nudge": bool(symptoms),           # symptom-driven, never a timer or a run count
+        "reasons": symptoms,
+        "audits_since_rollout": int(_HEALTH.get("audits", 0)),
+        "last_rollout": _HEALTH.get("last_rollout", ""),
+        # The console REQUIRES a roll before starting an audit once this goes true.
+        "stale": mode != "off" and _rollout_age_minutes() >= _ROLLOUT_MAX_AGE_MIN,
+        "age_minutes": round(_rollout_age_minutes(), 1),
+        "max_age_minutes": _ROLLOUT_MAX_AGE_MIN,
+        # A refresh is in progress — the console blocks audits until the engines answer again.
+        "rolling": bool(_ROLLOUT.get("running")),
+        "roll_phase": _ROLLOUT.get("phase", "idle"),
+        "ready_streak": int(_ROLLOUT.get("ready_streak", 0)),
+        "ready_streak_target": _READY_STREAK,
+        "ops_done": int(_ROLLOUT.get("ops_done", 0)),
+        "ops_total": int(_ROLLOUT.get("ops_total", 0)),
+        "waiting_on": list(_ROLLOUT.get("waiting_on") or []),
+    }
 
 
 @app.on_event("startup")

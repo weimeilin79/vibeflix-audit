@@ -60,9 +60,7 @@ When an engine is created with agent identity, Agent Runtime issues the certific
 
 That's what makes the badge worth anything. An agent can show its badge and it has no way to make one up, or to change what's printed on it. So when `brand_style` turns up at Firestore, Firestore knows it's `brand_style`, and no other agent can walk up claiming to be it.
 
-You can't bring your own printer either. The principal, the trust domain and the certificate all come from the platform, inside your organization's trust domain, so an agent identity can't be pointed at your own identity provider or your own certificate authority.
-
-The Google auth library handles the worker's side. It reads the certificate, asks the metadata server for a token, and puts that token on outgoing calls.
+You can't bring your own printer either. The principal, the trust domain and the certificate all come from the platform, inside your organization's trust domain, so the Google auth library handles the worker's side. It reads the certificate, asks the metadata server for a token, and puts that token on outgoing calls.
 
 ---
 
@@ -82,7 +80,6 @@ And notice where the configuration for that lives. There's none in Firestore and
 gcloud projects add-iam-policy-binding "$PROJECT" --member="$PRINCIPAL" --role="$R"
 ```
 
-So least privilege has been live since Step 2. Six agents, six sets of grants, enforced by whatever they call.
 
 So that's what's already in place. Now let's find the one call it doesn't cover.
 
@@ -130,7 +127,7 @@ The visiting building's reception can be handed two kinds of pass. One has to be
 
 The other can be read on the spot, because it carries a stamp reception recognises and it names this specific building. That's an ID token, verified locally against Google's public keys with the audience checked against the receiving service's URL. Nothing is called, so nothing can flake.
 
-ADK's MCP session manager injects the agent's access token into `Authorization` itself and skips that when the header is already set, so this codebase pre-sets the ID token through a header provider.
+ADK's MCP session manager gets this wrong by default, and the workaround is in this codebase rather than in ADK. It builds an mTLS transport that authenticates with the agent's own access token, and that transport replaces the HTTP client this project configures, so the audience-bound ID token never gets used. You get the phoned-in pass instead of the readable one, and the intermittent 401 that comes with it. `mcp_clients.py` disables that transport so the project's own client runs.
 
 ---
 
@@ -160,7 +157,9 @@ The security desk watches two directions, and it's one desk. The gateway is the 
 
 Model Armor attaches to either direction with a template per direction. On ingress it evaluates the request going in and the response coming back. On egress it intercepts the outbound payload before it reaches an LLM, a third-party agent or an MCP server.
 
-Vibeflix staffs the outward direction only. `deploy/agent-gateway.yaml` sets `governedAccessPath: AGENT_TO_ANYWHERE` and configures no Model Armor template, because the console calls the agents over A2A from its own app, so there's no third-party client to gate. Opening these agents to external callers is when you'd staff the inward direction.
+Vibeflix staffs the outward direction only, because the console calls the agents over A2A from its own app, so there's no third-party client to gate. Opening these agents to external callers is when you'd staff the inward direction.
+
+You can see that choice being made in `setup_gateway.sh`, which writes the gateway definition just before importing it. It sets `governedAccessPath: AGENT_TO_ANYWHERE` and names no Model Armor template. The file lands at `deploy/agent-gateway.yaml`, and it's generated per project and gitignored, so it appears the first time you run the gateway step.
 
 ---
 

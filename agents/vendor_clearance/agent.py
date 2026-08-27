@@ -60,7 +60,17 @@ async def _call_legal_cloud(brief: str) -> str:
     """CLOUD: call the legal engine's A2A endpoint DIRECTLY (LEGAL_A2A_URL is the
     engine resource URL). Registry resolution 403s from an attached engine."""
     from vibeflix_common.a2a.engine import a2a_engine_send
-    return await a2a_engine_send(_LEGAL_URL, brief)
+    # 300s, not the client's 900s default.
+    #
+    # Measured on vibeflix-demo: healthy legal hops complete in 132-178s (median 171s). The
+    # slow ones are not slow, they are STUCK — legal loops on its MCP session (401 → re-mint →
+    # reconnect) without ever reaching a model call, and the hop then burns the full default
+    # before failing. Observed 627s and 2106s.
+    #
+    # 300s is ~1.7x the slowest healthy hop, so it does not threaten a real run, and it turns a
+    # 15-minute hang into a 5-minute failure that the orchestrator's `recovery` node can retry.
+    # It does not fix the MCP loop; it stops that loop from owning the whole audit.
+    return await a2a_engine_send(_LEGAL_URL, brief, timeout=300.0)
 
 
 async def _call_legal(brief: str) -> str:

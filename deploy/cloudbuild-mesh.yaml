@@ -72,6 +72,18 @@ steps:
           gcloud storage cp "$$STATE/tfstate-$$TFDIR" "deploy/terraform/$$TFDIR/terraform.tfstate" 2>/dev/null             && echo "  ✓ terraform state ($$TFDIR)" || true
         done
 
+        # A one-click mesh install gets the console's "Refresh Backend" button, which rolls the
+        # engines' replicas to clear the credential fault the mesh develops as it runs. It is
+        # OFF everywhere else (workshop, local, hand-rolled) — see deploy/.env.example. Set
+        # here rather than in .env.example because init.sh writes that file for every install,
+        # and only this path should switch the button on.
+        if grep -q '^MESH_ROLLOUT=' deploy/.env 2>/dev/null; then
+          sed -i 's|^MESH_ROLLOUT=.*|MESH_ROLLOUT=open|' deploy/.env
+        else
+          echo 'MESH_ROLLOUT=open' >> deploy/.env
+        fi
+        echo "  ✓ Refresh Backend button enabled for this install (MESH_ROLLOUT=open)"
+
         echo "── ./deploy/deploy_mesh.sh ${_MESH_ARGS} ────────────────────────────"
         ./deploy/deploy_mesh.sh ${_MESH_ARGS}
         rc=$$?

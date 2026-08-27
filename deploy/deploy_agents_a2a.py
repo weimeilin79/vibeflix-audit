@@ -220,6 +220,13 @@ COMMON_ENV = {
     # 403'd on every engine. So the regional path is NOT a working substitute here; the
     # global host is what Agent Runtime actually egresses to. Do not "helpfully" pin this
     # to the region.
+    # NOTE: GOOGLE_CLOUD_PROJECT cannot be set here. Agent Engine reserves the name and
+    # rejects the deploy with "Environment variable name 'GOOGLE_CLOUD_PROJECT' is reserved."
+    # The Vertex project therefore resolves from google.auth.default() as captured when the
+    # agent is PICKLED, which means it comes from the DEPLOYING MACHINE. Deploy from a machine
+    # whose `gcloud config project` points elsewhere and the engines call Gemini against that
+    # project, failing with "Agent Platform API has not been used in project <other>" while
+    # every URL and secret in the deploy is correct. Set your gcloud project before deploying.
     "GOOGLE_CLOUD_LOCATION": "global",
     "PUBSUB_TOPIC": _ENV.get("PUBSUB_TOPIC", "vibeflix-mesh-events"),
     # ⚠️ THESE THREE ARE WHAT KEEP THE ENGINE'S CREDENTIAL ALIVE. They used to be

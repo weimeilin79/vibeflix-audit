@@ -139,11 +139,33 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     body = {"message": {"role": "ROLE_USER", "messageId": "vibeflix",
                         "content": [{"text": text}]}}
     url = f"{base}/a2a/v1/message:send"
+    send_auth_retries = 0
     while True:
         with requests.Session() as s:
             r = s.post(url, json=body, headers=hdr, timeout=60, allow_redirects=False)
         if r.status_code in (301, 302, 303, 307, 308):
             url = r.headers["Location"]
+            continue
+        # A 401/403 HERE is usually the CONNECTION, not the credential. This send opens a
+        # fresh mTLS connection, and that handshake fails intermittently; a certificate-bound
+        # token sent over a link that silently fell back to plain is refused by IAP with
+        # "Error code 1000". Measured on vibeflix-demo 2026-08-27: 32 of 75 calls refused on
+        # the SAME valid token (fp c39ac628, 16-18 min of life left) — the variable was the
+        # connection.
+        #
+        # The poll loop below has always retried these. The send did not: it went straight to
+        # raise_for_status(), so a single bad roll failed the whole hop. For a one-shot send
+        # like contract_finalize that made writing the contract a coin flip — the audit passed
+        # and produced no contract, reported as `contract_error`.
+        #
+        # Each attempt leaves the `with`, so the retry gets a NEW connection and a fresh
+        # handshake; _refresh() re-mints the headers in case the credential really was stale.
+        if r.status_code in (401, 403) and send_auth_retries < 5:
+            send_auth_retries += 1
+            print(f"[a2a] message:send {r.status_code} — retrying on a fresh connection "
+                  f"({send_auth_retries}/5)", flush=True)
+            hdr = _refresh()
+            _time.sleep(0.5 * send_auth_retries)
             continue
         break
     if r.status_code >= 400:
@@ -205,59 +227,75 @@ def _send_sync(base: str, text: str, timeout: float) -> str:
     seen_ok = False        # have we EVER successfully read this task?
     auth_retries = 0       # 401/403 → our token expired mid-poll; refresh and carry on
 
-    while tid and state in _RUNNING and deadline > 0:
-        # Manually follow redirects for GET to keep auth headers
-        url = f"{base}/a2a/v1/tasks/{tid}"
-        params = {"history_length": 50}
-        while True:
-            with requests.Session() as s:
-                g = s.get(url, params=params, headers=hdr, timeout=60, allow_redirects=False)
-            if g.status_code in (301, 302, 303, 307, 308):
-                url = g.headers["Location"]
-                params = None  # query parameters are already in the redirect URL
+    # ONE Session for the whole poll loop, deliberately.
+    #
+    # This used to open `requests.Session()` per poll, and at _WORK_PAUSE=1.0 that is a NEW
+    # TLS connection every second, per in-flight hop. Against an agent-identity engine those
+    # connections are mutual-TLS (`*-aiplatform.mtls.googleapis.com`, required for
+    # certificate-bound tokens), and the mTLS handshake fails intermittently — measured in
+    # vibeflix-demo on 2026-08-26: 39 handshake failures in one hour across six engines,
+    # scattered in time within each engine (so not certificate expiry) and clustered when
+    # several hops poll at once. A 200s run was performing several hundred handshakes, so
+    # losing one stopped being bad luck and became arithmetic.
+    #
+    # A connection that is already established cannot fail a handshake. Reusing the Session
+    # keeps keep-alive, so a hop pays ONE handshake instead of one per second. Auth headers
+    # are still passed per request (and re-minted by _refresh() on 401), so nothing about
+    # token freshness changes — only the transport is reused.
+    with requests.Session() as poll_session:
+        while tid and state in _RUNNING and deadline > 0:
+            # Manually follow redirects for GET to keep auth headers
+            url = f"{base}/a2a/v1/tasks/{tid}"
+            params = {"history_length": 50}
+            while True:
+                g = poll_session.get(url, params=params, headers=hdr, timeout=60,
+                                     allow_redirects=False)
+                if g.status_code in (301, 302, 303, 307, 308):
+                    url = g.headers["Location"]
+                    params = None  # query parameters are already in the redirect URL
+                    continue
+                break
+
+            # 401/403 = OUR TOKEN EXPIRED, not a permissions problem. The metadata server hands
+            # out a cached token with only its remaining lifetime, so a long poll (a legal
+            # escalation runs many minutes) outlives it. Mint a new one and keep polling —
+            # letting this raise used to kill the whole audit with a bogus "Unauthorized".
+            if g.status_code in (401, 403) and auth_retries < 5:
+                auth_retries += 1
+                hdr = _refresh()
+                _time.sleep(1); deadline -= 1
                 continue
-            break
 
-        # 401/403 = OUR TOKEN EXPIRED, not a permissions problem. The metadata server hands
-        # out a cached token with only its remaining lifetime, so a long poll (a legal
-        # escalation runs many minutes) outlives it. Mint a new one and keep polling —
-        # letting this raise used to kill the whole audit with a bogus "Unauthorized".
-        if g.status_code in (401, 403) and auth_retries < 5:
-            auth_retries += 1
-            hdr = _refresh()
-            _time.sleep(1); deadline -= 1
-            continue
+            # 400 during a run is the platform surfacing an in-progress execution error;
+            # treat it like a miss and keep polling until the task reaches a terminal state
+            # (FAILED), which we then report — don't silently drop it.
+            if g.status_code in (400, 404):
+                now = _time.monotonic()
+                if miss_since is None:
+                    miss_since, misses = now, 0
+                misses += 1
+                # Give up ONLY if this task has NEVER been read successfully. If we have seen
+                # it even once, it EXISTS and is running on a replica we simply cannot get
+                # routed to — keep polling until the caller's own timeout. Quitting here on a
+                # live task is exactly the bug this replaced: it abandoned healthy runs and,
+                # inside the orchestrator, made `recovery` re-run agents that were still fine.
+                if not seen_ok and now - miss_since > _UNSEEN_GRACE:
+                    return (f"[A2A engine execution FAILED] task {tid} was never readable on any "
+                            f"replica in {_UNSEEN_GRACE:.0f}s ({misses} consecutive "
+                            f"{g.status_code}s) — it was never observed alive, so the replica "
+                            f"that created it is most likely gone (engine redeployed/restarted).")
+                pause = _FAST_PAUSE if misses <= _FAST_PROBES else _SLOW_PAUSE
+                _time.sleep(pause); deadline -= pause
+                continue
 
-        # 400 during a run is the platform surfacing an in-progress execution error;
-        # treat it like a miss and keep polling until the task reaches a terminal state
-        # (FAILED), which we then report — don't silently drop it.
-        if g.status_code in (400, 404):
-            now = _time.monotonic()
-            if miss_since is None:
-                miss_since, misses = now, 0
-            misses += 1
-            # Give up ONLY if this task has NEVER been read successfully. If we have seen
-            # it even once, it EXISTS and is running on a replica we simply cannot get
-            # routed to — keep polling until the caller's own timeout. Quitting here on a
-            # live task is exactly the bug this replaced: it abandoned healthy runs and,
-            # inside the orchestrator, made `recovery` re-run agents that were still fine.
-            if not seen_ok and now - miss_since > _UNSEEN_GRACE:
-                return (f"[A2A engine execution FAILED] task {tid} was never readable on any "
-                        f"replica in {_UNSEEN_GRACE:.0f}s ({misses} consecutive "
-                        f"{g.status_code}s) — it was never observed alive, so the replica "
-                        f"that created it is most likely gone (engine redeployed/restarted).")
-            pause = _FAST_PAUSE if misses <= _FAST_PROBES else _SLOW_PAUSE
-            _time.sleep(pause); deadline -= pause
-            continue
-
-        miss_since, misses = None, 0        # found the owning replica
-        seen_ok = True                      # …and it's alive: never declare it gone again
-        g.raise_for_status()
-        task = g.json()
-        state = (task.get("status") or {}).get("state")
-        if state in _RUNNING:
-            # Genuinely still working — THIS is the only case that deserves a wait.
-            _time.sleep(_WORK_PAUSE); deadline -= _WORK_PAUSE
+            miss_since, misses = None, 0        # found the owning replica
+            seen_ok = True                      # …and it's alive: never declare it gone again
+            g.raise_for_status()
+            task = g.json()
+            state = (task.get("status") or {}).get("state")
+            if state in _RUNNING:
+                # Genuinely still working — THIS is the only case that deserves a wait.
+                _time.sleep(_WORK_PAUSE); deadline -= _WORK_PAUSE
     if state == "TASK_STATE_FAILED":
         return f"[A2A engine execution FAILED] {_status_error(task) or '(no detail)'}"
     return _extract_reply(task)

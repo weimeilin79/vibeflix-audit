@@ -121,6 +121,11 @@ body.dark-mode {
   }
 }
 
+/* Used by the mesh-rollout button while a roll is in flight. */
+.spin {
+  animation: spin 1.1s linear infinite;
+}
+
 /* Visual pulse for executing nodes in graph */
 
 .animated-flow {

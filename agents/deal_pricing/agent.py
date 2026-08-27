@@ -71,6 +71,43 @@ def _parse(text: str) -> dict:
     return {}
 
 
+def _dig_pricing(obj, _depth: int = 0):
+    """Find the get_license_pricing payload inside whatever the MCP layer wrapped it in.
+
+    The tool result arrives as a dict, a list of content parts, or a JSON string depending on
+    the transport, so search rather than assume a shape. A dict carrying `expected` IS the
+    payload."""
+    if _depth > 6:
+        return {}
+    if isinstance(obj, str):
+        return _dig_pricing(_parse(obj), _depth + 1) if "{" in obj else {}
+    if isinstance(obj, dict):
+        if isinstance(obj.get("expected"), dict):
+            return obj
+        for v in obj.values():
+            if found := _dig_pricing(v, _depth + 1):
+                return found
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            if found := _dig_pricing(v, _depth + 1):
+                return found
+    return {}
+
+
+def _capture_pricing(tool, args, tool_context, tool_response):
+    """Stash get_license_pricing's OWN return so the graph can trust it over the model's retyping.
+
+    The tool computes the expected deal deterministically (it is the single source of truth for
+    the arithmetic), but until now the only copy that survived was the one the reasoner typed
+    back out into its JSON report. A model that paraphrases or re-derives a number produces a
+    different price from identical inputs, and nothing downstream could tell. Keeping the raw
+    result lets `evaluate` overwrite the model's numbers with the tool's."""
+    if getattr(tool, "name", "") == "get_license_pricing":
+        if payload := _dig_pricing(tool_response):
+            tool_context.state["pricing_tool_result"] = payload
+    return None   # None = leave the tool response untouched
+
+
 # ---- the pricing reasoner: rate card -> expected -> per-component compare ----
 pricing_reasoner = LlmAgent(
     name="pricing_reasoner",
@@ -91,6 +128,10 @@ pricing_reasoner = LlmAgent(
         "(agent=\"deal_pricing_agent\", components[], expected, agreed, rate_card) — no prose, "
         "no markdown fences."
     ),
+    # An audit must answer the same way twice. Default sampling let the reasoner word — and
+    # occasionally re-derive — the expected deal differently run to run.
+    generate_content_config=types.GenerateContentConfig(temperature=0.0),
+    after_tool_callback=_capture_pricing,
     tools=[
         skill_toolset.SkillToolset(
             skills=[load_skill_from_dir(_SKILL_DIR)],
@@ -111,10 +152,13 @@ resolver = LlmAgent(
         "actually explains it — e.g. a volume-tier discount applies ONLY if the projected "
         "volume meets that tier's `min_units`; a category/territory modifier must match the "
         "rate card. Respond with ONLY one JSON object: "
-        "{\"name\": str, \"resolved\": bool, \"explanation\": str, "
-        "\"corrected_expected\": number|null}. `resolved:true` means the agreed value is "
-        "justified; `false` means the discrepancy stands."
+        "{\"name\": str, \"resolved\": bool, \"explanation\": str}. `resolved:true` means "
+        "the agreed value is justified; `false` means the discrepancy stands. You judge ONLY "
+        "whether the vendor's claim holds — never restate or adjust the expected figure, which "
+        "is already fixed by the rate card."
     ),
+    # Same reason as the reasoner: a pass/fail ruling must not depend on the sampling draw.
+    generate_content_config=types.GenerateContentConfig(temperature=0.0),
 )
 
 
@@ -126,6 +170,14 @@ async def evaluate(ctx: Context, node_input):
     await ctx.run_node(pricing_reasoner, node_input)
     report = _parse(_latest_text(ctx, "pricing_reasoner")) or {"status": "flagged", "components": []}
     report["agent"] = "deal_pricing_agent"
+
+    # The reasoner is TOLD to copy the tool's `expected` block verbatim, but nothing made it.
+    # Take the tool's own result back — it is the deterministic arithmetic — so identical
+    # inputs always price identically no matter how the model phrased its answer.
+    if priced := _dig_pricing(ctx.state.get("pricing_tool_result")):
+        for key in ("expected", "rate_card"):
+            if isinstance(priced.get(key), dict):
+                report[key] = priced[key]
     ctx.state["reconcile_round"] = 0   # fresh reconcile loop; reconcile bumps this each round
     yield Event(output=report)
 
@@ -149,10 +201,16 @@ async def reconcile(ctx: Context, node_input):
     for c in [c for c in report.get("components", []) if c.get("status") == "unresolved"]:
         await ctx.run_node(resolver, json.dumps({"discrepancy": c, "rate_card": card, "deal": deal}))
         r = _parse(_latest_text(ctx, "pricing_resolver"))
+        if not r:
+            # Unparseable ruling. Leave it UNRESOLVED so the next round re-asks, rather than
+            # reading the empty dict as `resolved:false` and manufacturing a discrepancy the
+            # resolver never actually found.
+            continue
         c["status"] = "clear" if r.get("resolved") else "discrepancy"
         c["note"] = r.get("explanation", "")
-        if r.get("corrected_expected") is not None:
-            c["expected"] = r["corrected_expected"]
+        # `c["expected"]` is deliberately NOT written here. The expected figure is the rate-card
+        # arithmetic captured in `evaluate`; letting the resolver hand back its own number is
+        # what made one deal price differently from one run to the next.
 
     still_unresolved = any(c.get("status") == "unresolved" for c in report.get("components", []))
     if still_unresolved and round_n < MAX_ROUNDS:
@@ -161,6 +219,14 @@ async def reconcile(ctx: Context, node_input):
         return
 
     comps = report.get("components", [])
+    # Out of rounds: anything still unresolved was never adjudicated. The checks below only look
+    # for "discrepancy", so leaving it as-is would quietly clear it — fail closed instead.
+    for c in comps:
+        if c.get("status") == "unresolved":
+            c["status"] = "discrepancy"
+            if not c.get("note"):
+                c["note"] = f"still unresolved after {MAX_ROUNDS} reconcile rounds"
+
     if any(c.get("status") == "discrepancy" and c.get("below_floor") for c in comps):
         report["verdict"], report["status"] = "UNDERPRICED", "blocked"
     elif any(c.get("status") == "discrepancy" for c in comps):

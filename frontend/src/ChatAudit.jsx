@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Send, Satellite, RotateCcw, CheckCircle, AlertTriangle, HelpCircle, Lock, Upload, Share2 } from 'lucide-react';
 import { A2UIProvider, A2UIRenderer, useA2UI } from '@a2ui/react';
 import { injectStyles } from '@a2ui/react/styles';
@@ -680,6 +681,12 @@ export default function ChatAudit() {
   const [fields, setFields] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Set when a run is blocked because the engine replicas are past their max age. Cleared
+  // once a roll finishes and the backend stops reporting `stale`.
+  const [rollGate, setRollGate] = useState(null);
+  // Set while a backend refresh is running. Cleared when the server reports the engines are
+  // answering again — not on a timer, because a clock cannot know when a replica is back.
+  const [refreshing, setRefreshing] = useState(null);
   // Live workflow graph (right pane): keyed by node id, driven by `graph` SSE events.
   const [graph, setGraph] = useState(null);
   // The audit this console is showing. The app mints it per run and sends it as the
@@ -1079,11 +1086,42 @@ export default function ChatAudit() {
 
   // run_token threads the prior audit so the orchestrator re-runs only affected
   // workflows. Carried on every submit in a session; cleared by "New".
-  const startAudit = () => {
+  // Block a NEW audit when the replicas are older than the backend's threshold. Only the
+  // start is gated — a resume continues a run that is already in flight, and interrupting
+  // that would strand it. Fails OPEN: if the check itself errors we run rather than block,
+  // because a console that cannot reach its own config must not become unusable.
+  const startAudit = async () => {
+    try {
+      const cfg = await (await fetch('/api/admin/enabled')).json();
+      if (cfg?.rolling) { setRefreshing(cfg); return; }
+      if (cfg?.rollout && cfg?.stale) { setRollGate(cfg); return; }
+    } catch { /* fall through and run */ }
+    beginAudit();
+  };
+
+  const beginAudit = () => {
     push({ role: 'user', text: `Audit ${imageUri}\n${character ? `${character} · ` : ''}${market} · ${Number(volume).toLocaleString()} units${medium ? ` · medium: ${medium}` : ''}${note ? `\n💬 ${note}` : ''}` });
     runStream({ image_uri: imageUri, target_market: market, volume: Number(volume), character, product_category: productCategory, vendor, medium, note, net_unit_price: Number(netUnitPrice) || 0, agreed_royalty_rate: (Number(agreedRate) || 0) / 100, agreed_advance: Number(agreedAdvance) || 0, agreed_mg: Number(agreedMg) || 0, run_token: runTokenRef.current }, 'start');
     setNote('');
   };
+  useEffect(() => {
+    const sync = async () => {
+      try {
+        const cfg = await (await fetch('/api/admin/enabled')).json();
+        if (!cfg?.stale) setRollGate(null);
+        else setRollGate((g) => (g ? cfg : g));
+        setRefreshing(cfg?.rolling ? cfg : null);
+      } catch { /* leave state as-is */ }
+    };
+    sync();
+    window.addEventListener('vibeflix:rollout-finished', sync);
+    const resync = setInterval(sync, refreshing ? 3000 : 15000);
+    return () => {
+      window.removeEventListener('vibeflix:rollout-finished', sync);
+      clearInterval(resync);
+    };
+  }, [!!refreshing]);
+
   const submitFields = (values) => {
     // Streaming resume = re-stream with the collected fields merged into the request.
     // The field `name`s match the request keys, so merge them generically + persist.
@@ -1273,6 +1311,72 @@ export default function ChatAudit() {
 
   return (
     <A2UIProvider>
+    {refreshing && createPortal((
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.62)', zIndex: 1200,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+      }}>
+        <div style={{
+          background: 'var(--bg-secondary, #fff)', color: 'var(--text-main)',
+          border: '1px solid var(--glass-border)', borderRadius: '0.7rem',
+          padding: '1.5rem 2rem', textAlign: 'center', minWidth: 'min(24rem, 100%)',
+          boxShadow: '0 12px 44px rgba(0,0,0,0.4)',
+        }}>
+          <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.4rem' }}>
+            {refreshing.roll_phase === 'verifying'
+              ? 'Waiting for the engines to answer'
+              : refreshing.roll_phase === 'rolling'
+                ? 'Replacing engine replicas'
+                : 'Refreshing the backend'}
+          </div>
+          <div style={{ fontSize: '0.82rem', opacity: 0.8, lineHeight: 1.5 }}>
+            {refreshing.roll_phase === 'verifying'
+              ? `Confirmed ${refreshing.ready_streak}/${refreshing.ready_streak_target} healthy checks`
+              : refreshing.roll_phase === 'rolling' && refreshing.ops_total
+                ? `${refreshing.ops_done || 0}/${refreshing.ops_total} engines finished`
+                : 'Giving every engine fresh replicas…'}
+          </div>
+          {refreshing.waiting_on?.length > 0 && (
+            <div style={{ fontSize: '0.76rem', opacity: 0.7, marginTop: '0.4rem' }}>
+              still down: {refreshing.waiting_on.join(', ')}
+            </div>
+          )}
+          <div style={{ fontSize: '0.76rem', opacity: 0.65, marginTop: '0.6rem' }}>
+            Audits stay blocked until the mesh is answering again.
+          </div>
+        </div>
+      </div>
+    ), document.body)}
+    {rollGate && createPortal((
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+      }}>
+        <div style={{
+          background: 'var(--bg-secondary, #fff)', color: 'var(--text-main)',
+          border: '1px solid #f9ab00', borderRadius: '0.6rem', padding: '1.25rem',
+          width: 'min(29rem, 100%)', boxShadow: '0 10px 40px rgba(0,0,0,0.35)',
+        }}>
+          <h3 style={{ margin: '0 0 0.5rem', fontSize: '1rem', fontWeight: 700 }}>
+            Refresh the backend before running
+          </h3>
+          <p style={{ margin: '0 0 0.9rem', fontSize: '0.82rem', lineHeight: 1.5, opacity: 0.9 }}>
+            The engine replicas have been up for {Math.round(rollGate.age_minutes)} minutes
+            (limit {rollGate.max_age_minutes}). Past that they start refusing their own calls,
+            which fails an audit part-way through. Refreshing takes about 5 minutes and clears it.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <button
+              className="preset-btn primary"
+              onClick={() => window.dispatchEvent(new CustomEvent('vibeflix:open-rollout'))}
+              style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem', borderRadius: '0.35rem', fontWeight: 700 }}
+            >
+              Refresh Backend now
+            </button>
+          </div>
+        </div>
+      </div>
+    ), document.body)}
     <div style={{ display: 'flex', height: '100%', width: '100%', minHeight: 0, gap: '0.6rem' }}>
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, gap: '0.6rem' }}>
       {/* Header */}

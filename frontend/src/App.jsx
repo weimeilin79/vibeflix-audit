@@ -5,6 +5,7 @@ import {
 import ChatAudit from './ChatAudit';
 import AuditHistory from './AuditHistory';
 import DatabaseView from './DatabaseView';
+import MeshRollout from './MeshRollout';
 
 // App is the SHELL: the tab bar, the dark-mode toggle, and the two static explainer
 // tabs. Everything live happens in the children — ChatAudit runs the audit and renders
@@ -75,6 +76,9 @@ export default function App() {
               <BarChart2 size={14} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} /> Stakeholder Matrix & Theory
             </button>
           </div>
+
+          {/* Renders itself only when the backend has an admin key configured. */}
+          <MeshRollout />
 
           <button 
             className="preset-btn"

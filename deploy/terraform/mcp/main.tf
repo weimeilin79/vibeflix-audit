@@ -117,7 +117,18 @@ resource "google_cloud_run_v2_service" "mcp" {
 
   template {
     service_account = each.value.sa
-    timeout         = "300s"
+    # 1800s, not Cloud Run's 300s default.
+    #
+    # MCP streamable-http holds a LONG-LIVED SSE GET stream open for the whole session. An
+    # agent that reasons for minutes between tool calls — legal does RAG plus several model
+    # calls — keeps that stream open past 300s, at which point Cloud Run severs it. The client
+    # then reconnects ("GET stream disconnected, reconnecting in 1000ms..."), re-handshakes,
+    # re-mints its token, and can 401 on the way back in. Observed on vibeflix-demo: legal
+    # looping on exactly that for 10+ minutes without ever reaching a model call, which read as
+    # a hung onboarding workflow.
+    #
+    # The tool CALLS are fast; it is the idle session that outlives the default.
+    timeout         = "1800s"
 
     scaling {
       min_instance_count = 0

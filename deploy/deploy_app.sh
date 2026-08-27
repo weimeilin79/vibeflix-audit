@@ -8,6 +8,13 @@
 # ORDER: deploy the app AFTER the agents (it needs their engine ids) and BEFORE
 # grant_agent_iam.sh + engine pass-2 (they read the app's URL as TASK_STORE_URL).
 #
+# ⚠️ --timeout 1800 is also LOAD-BEARING. Cloud Run's DEFAULT is 300s, and /api/audit/stream is
+# an SSE stream held open for the whole audit. A run longer than five minutes gets its stream
+# severed mid-flight: the console stops updating and shows no error, while the agents carry on
+# working for a browser that is no longer listening. Measured on vibeflix-demo: ordinary audits
+# finish in 80-165s and pass, while VENDOR ONBOARDING — which adds the legal handoff, RAG
+# retrieval and a human-in-the-loop question — reliably crossed 300s and was cut every time,
+# looking exactly like a hung mesh. The engines logged 300+ more lines after each cut.
 # ⚠️ --min/--max-instances=1 is LOAD-BEARING: the app hosts the shared task store and the single
 #    Pub/Sub consumer; a 2nd instance split-brains both. Config from deploy/.env.
 set -euo pipefail
@@ -46,12 +53,43 @@ BRAND=$(eng vibeflix-brand-style); VC=$(eng vibeflix-vendor-clearance); DP=$(eng
 UIR=$(eng vibeflix-ui-renderer);   ORCH=$(eng vibeflix-orchestrator)
 MLIC="$(run vibeflix-mcp-licensing)/mcp"; MMKT="$(run vibeflix-mcp-market)/mcp"; MBS="$(run vibeflix-mcp-brand-style)/mcp"
 
+# The console's "Refresh Backend" button rolls every engine's replicas, which clears the credential
+# fault the mesh develops as it runs (eng-report/UPSTREAM-BUG-mtls-handshake-agent-identity.md).
+#
+#   MESH_ROLLOUT=off (or unset)  button hidden — the default for a hand-rolled install
+#   MESH_ROLLOUT=open            button shown, no key. deploy/.env.example ships this, so
+#                                workshop and one-click installs get it; those projects are
+#                                short-lived and single-owner.
+#   + MESH_ADMIN_KEY set         button shown, key required. For a long-lived shared project
+#                                whose console is on the internet.
+#
+# This app is deployed --allow-unauthenticated because the browser has to load the console,
+# so the rollout endpoints refuse every call unless one of the enabling modes is in force.
+MESH_ADMIN_ENV=",MESH_ROLLOUT=${MESH_ROLLOUT:-off}"
+# How old the replicas may get before the console forces a refresh. Optional; default 45 min.
+[ -n "${MESH_ROLLOUT_MAX_AGE_MIN:-}" ] && \
+  MESH_ADMIN_ENV="$MESH_ADMIN_ENV,MESH_ROLLOUT_MAX_AGE_MIN=${MESH_ROLLOUT_MAX_AGE_MIN}"
+# A refresh finishes when the engines ANSWER again, not on a clock — these tune that check.
+for V in MESH_ROLLOUT_SETTLE_SEC MESH_ROLLOUT_READY_STREAK MESH_ROLLOUT_READY_TIMEOUT_SEC; do
+  eval "VAL=\${$V:-}"
+  [ -n "$VAL" ] && MESH_ADMIN_ENV="$MESH_ADMIN_ENV,$V=$VAL"
+done
+if [ -n "${MESH_ADMIN_KEY:-}" ]; then
+  MESH_ADMIN_ENV="$MESH_ADMIN_ENV,MESH_ADMIN_KEY=${MESH_ADMIN_KEY}"
+fi
+case "${MESH_ROLLOUT:-off}:${MESH_ADMIN_KEY:+key}" in
+  off:*)    echo "[deploy_app] Refresh Backend button: HIDDEN (set MESH_ROLLOUT=open in deploy/.env)" ;;
+  *:key)    echo "[deploy_app] Refresh Backend button: SHOWN, key required (MESH_ADMIN_KEY is set)" ;;
+  *)        echo "[deploy_app] Refresh Backend button: SHOWN, no key (short-lived project)" ;;
+esac
+
 echo "[deploy_app] deploying vibeflix-app (pinned 1/1 — load-bearing)…"
 gcloud run deploy vibeflix-app --image "$IMG" \
   --region "$REGION" --project "$PROJECT" \
   --service-account "vibeflix-app@$PROJECT.iam.gserviceaccount.com" \
   --memory 1Gi --min-instances 1 --max-instances 1 --allow-unauthenticated \
-  --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=${FIRESTORE_DATABASE:-vibeflix-registry},PUBSUB_TOPIC=${PUBSUB_TOPIC:-vibeflix-mesh-events},PUBSUB_SUBSCRIPTION=${PUBSUB_SUBSCRIPTION:-vibeflix-mesh-events-app-cloud},REQUEST_IMAGE_BUCKET=${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image},TASK_STORE_KEY=${TASK_STORE_KEY:?set TASK_STORE_KEY in deploy/.env},BRAND_STYLE_A2A_URL=$A2A/$BRAND,VENDOR_CLEARANCE_A2A_URL=$A2A/$VC,DEAL_PRICING_A2A_URL=$A2A/$DP,UI_RENDERER_A2A_URL=$A2A/$UIR,ORCHESTRATOR_A2A_URL=$A2A/$ORCH,MCP_LICENSING_URL=$MLIC,MCP_MARKET_URL=$MMKT,MCP_BRAND_STYLE_URL=$MBS"
+  --timeout 1800 \
+  --set-env-vars "RUN_LOCAL=false,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,FIRESTORE_DATABASE=${FIRESTORE_DATABASE:-vibeflix-registry},PUBSUB_TOPIC=${PUBSUB_TOPIC:-vibeflix-mesh-events},PUBSUB_SUBSCRIPTION=${PUBSUB_SUBSCRIPTION:-vibeflix-mesh-events-app-cloud},REQUEST_IMAGE_BUCKET=${REQUEST_IMAGE_BUCKET:-$PROJECT-request-image},TASK_STORE_KEY=${TASK_STORE_KEY:?set TASK_STORE_KEY in deploy/.env},BRAND_STYLE_A2A_URL=$A2A/$BRAND,VENDOR_CLEARANCE_A2A_URL=$A2A/$VC,DEAL_PRICING_A2A_URL=$A2A/$DP,UI_RENDERER_A2A_URL=$A2A/$UIR,ORCHESTRATOR_A2A_URL=$A2A/$ORCH,MCP_LICENSING_URL=$MLIC,MCP_MARKET_URL=$MMKT,MCP_BRAND_STYLE_URL=$MBS$MESH_ADMIN_ENV"
 
 echo "[deploy_app] done → $(run vibeflix-app)"
 echo "[deploy_app] NEXT: ./deploy/setup_gateway.sh (Step 7) registers this URL, then redeploy the"
