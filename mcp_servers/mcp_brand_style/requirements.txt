@@ -1,4 +1,18 @@
-mcp>=0.1.0
+# mcp<2 is LOAD-BEARING, not hygiene. All three servers do
+# `from mcp.server.fastmcp import FastMCP`, and mcp 2.x (stable since 2026-07-28)
+# replaced that module with a stub that raises ModuleNotFoundError — FastMCP was
+# renamed to mcp.server.mcpserver.MCPServer. The import runs at module scope, so the
+# container dies before it binds $PORT and Cloud Run reports only
+# "failed to start and listen on the port" (Error code 9).
+#
+# vibeflix-common/pyproject.toml already caps mcp<2, but deploy/Dockerfile.mcp installs
+# it with --no-deps, so that cap never applies here. THIS pin is the only one in force.
+#
+# It used to pass by luck: fastmcp 0.x required mcp<2.0.0, which capped it transitively.
+# fastmcp 4.x dropped its mcp dependency and that accidental ceiling disappeared.
+mcp>=1.0,<2
+# Not imported anywhere in this repo — left unpinned deliberately. Capping it to <1 would
+# drag back a 2024-era release just to restore the transitive mcp cap above.
 fastmcp>=0.1.0
 # Deterministic typo audit.
 pyspellchecker>=0.8.0
